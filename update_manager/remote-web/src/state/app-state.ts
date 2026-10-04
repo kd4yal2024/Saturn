@@ -107,6 +107,8 @@ export interface AppState {
   txMonitorSupported: boolean;
   txMonitorEnabled: boolean;
   txMonitorLevelDb: number;
+  rxHeadphonesSupported: boolean;
+  rxHeadphonesEnabled: boolean;
   txMeterMode: string;
   micStream: MediaStream | null;
   micNode: { ctx: AudioContext; source: MediaStreamAudioSourceNode; proc: AudioNode; silentGain: GainNode } | null;
@@ -493,6 +495,8 @@ export function createAppState(): AppState {
     txMonitorSupported: false,
     txMonitorEnabled: false,
     txMonitorLevelDb: -30,
+    rxHeadphonesSupported: false,
+    rxHeadphonesEnabled: false,
     txMeterMode: 'peak',
     micStream: null,
     micNode: null,

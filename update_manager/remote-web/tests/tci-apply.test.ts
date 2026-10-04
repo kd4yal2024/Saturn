@@ -151,6 +151,14 @@ describe('applyTciText', () => {
     expect(applyTciText('tx_monitor_level:0,NaN;', state).state.txMonitorLevelDb).toBe(-24);
     expect(applyTciText('tx_monitor_supported:0,false;', state).state.txMonitorEnabled).toBe(false);
   });
+  it('acknowledges rear RX headphones only when the Bridge advertises support', () => {
+    const initial = createState();
+    const { state } = applyTciText('rx_headphones_supported:0,true;rx_headphones:0,true;', initial);
+    expect(state.rxHeadphonesSupported).toBe(true);
+    expect(state.rxHeadphonesEnabled).toBe(true);
+    expect(state.txEnabled).toBe(initial.txEnabled);
+    expect(applyTciText('rx_headphones_supported:0,false;', state).state.rxHeadphonesEnabled).toBe(false);
+  });
   it('marks ready and updates vfo/dds', () => {
     const result = applyTciText('ready;vfo:0,0,7100000;vfo:0,1,7200000;dds:0,7150000;', createState());
     expect(result.ready).toBe(true);

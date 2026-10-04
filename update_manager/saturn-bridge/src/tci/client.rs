@@ -423,7 +423,14 @@ pub(crate) fn handle_client(
 
             let disconnect = unregister_client(clients, operator_client_id, client_id);
             if disconnect.was_operator {
-                radio_model.lock_unpoisoned().satp.revoke_owner(client_id);
+                {
+                    let mut model = radio_model.lock_unpoisoned();
+                    model.satp.revoke_owner(client_id);
+                    // Local analog audio belongs to the operator's session,
+                    // not to any viewer promoted after it disconnects.
+                    model.desired.tx_monitor_enabled = false;
+                    model.desired.rx_headphones_enabled = false;
+                }
                 *operator_control_at.lock_unpoisoned() = None;
                 let _ = command_tx.send(TciCommand::SetTxEnabled(false));
             }
@@ -669,6 +676,10 @@ pub(crate) fn initial_snapshot_messages(
             model.desired.tx_monitor_available,
             model.desired.tx_monitor_enabled,
             model.desired.tx_monitor_level_db
+        ),
+        format!(
+            "rx_headphones_supported:0,{};rx_headphones:0,{};",
+            model.desired.rx_headphones_available, model.desired.rx_headphones_enabled
         ),
         format!("tx_frequency:{};", model.desired.tx_frequency_hz),
         format!("tx_state:0,{};", model.desired.tx_phase),

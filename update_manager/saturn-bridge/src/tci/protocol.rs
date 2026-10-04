@@ -100,6 +100,7 @@ pub enum TciCommand {
     SetTxDrive(u8),
     SetTxMicGain(f64),
     SetTxMonitor(bool),
+    SetRxHeadphones(bool),
     SetTxMonitorLevel(f64),
     SetTxFilterBand {
         low_hz: i32,
@@ -869,6 +870,13 @@ pub(crate) fn parse_tci_command_with_roles(
             if args.len() == 2 && args[0].trim() == "0" {
                 if let Some(enabled) = parse_tci_bool(args[1]) {
                     let _ = command_tx.send(TciCommand::SetTxMonitor(enabled));
+                }
+            }
+        }
+        "rx_headphones" => {
+            if args.len() == 2 && args[0].trim() == "0" {
+                if let Some(enabled) = parse_tci_bool(args[1]) {
+                    let _ = command_tx.send(TciCommand::SetRxHeadphones(enabled));
                 }
             }
         }

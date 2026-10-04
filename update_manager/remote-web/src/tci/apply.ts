@@ -283,6 +283,13 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_monitor_level') {
     const value = numericArg(argAt(args, 1));
     if (value != null && Number.isFinite(value)) next.txMonitorLevelDb = Math.max(-60, Math.min(-6, value));
+  } else if (command.name === 'rx_headphones_supported') {
+    const value = booleanArg(argAt(args, 1));
+    if (value != null) next.rxHeadphonesSupported = value;
+    if (value === false) next.rxHeadphonesEnabled = false;
+  } else if (command.name === 'rx_headphones') {
+    const value = booleanArg(argAt(args, 1));
+    if (value != null) next.rxHeadphonesEnabled = value;
   } else if (command.name === 'tx_drive') {
     const value = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (value != null) next.txDrive = clampTxDriveWatts(value);

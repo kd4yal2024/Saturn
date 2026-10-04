@@ -718,6 +718,10 @@ impl TciFrontend {
             model.desired.tx_monitor_enabled,
             model.desired.tx_monitor_level_db
         ));
+        self.send_text(format!(
+            "rx_headphones_supported:0,{};rx_headphones:0,{};",
+            model.desired.rx_headphones_available, model.desired.rx_headphones_enabled
+        ));
         self.send_text(format!("tx_frequency:{};", model.desired.tx_frequency_hz));
         self.send_text(format!("tx_state:0,{};", model.desired.tx_phase));
         self.send_text(format!(

@@ -911,6 +911,10 @@ impl DirectXdmaTxRadio {
             .rf_tx_qualified
     }
 
+    pub(crate) fn push_rx_headphone_audio(&self, audio: &[f32], volume_db: f64) {
+        self.monitor.push_rx(audio, volume_db);
+    }
+
     fn with_state<T>(
         &self,
         operation: impl FnOnce(&mut DirectTxState) -> Result<T, XdmaError>,

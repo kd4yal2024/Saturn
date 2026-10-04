@@ -929,6 +929,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                     model.desired.tx_monitor_enabled =
                         enabled && model.desired.tx_monitor_available;
                 }
+                TciCommand::SetRxHeadphones(enabled) => {
+                    model.desired.rx_headphones_enabled =
+                        enabled && model.desired.rx_headphones_available;
+                }
                 TciCommand::SetTxMonitorLevel(level) => {
                     model.desired.tx_monitor_level_db = crate::tx_monitor::clamp_level(level);
                 }

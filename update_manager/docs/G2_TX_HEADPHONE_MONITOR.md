@@ -1,4 +1,22 @@
-# G2 TX headphone monitor
+# G2 local headphone output
+
+The waterfall now has an operator-only **G2 Headphones** checkbox. On a
+supported direct-XDMA PCB2 G2, it plays the Bridge's decoded 48 kHz RX audio
+through the rear headphone jack. It uses the current RX volume and follows
+mode, filter and DSP settings, but does not affect browser audio. It starts
+off, is not persisted, and is disabled on operator disconnect. The Bridge
+advertises `rx_headphones_supported:0,true|false;`, accepts
+`rx_headphones:0,true|false;`, and echoes actual state back to the UI.
+
+RX and TX MON share one codec/DMA worker. Local RX audio mutes during any TX
+arm/key phase; processed voice TX plays only if MON is independently enabled.
+No second codec writer, RF keying, mic loopback or transmit setting is added.
+Codec errors disable both local headphone modes. Headphone and line outputs
+share the AIC23B DAC, so external speakers should be off during first test.
+Start with the G2 volume low and headphones off-ear; verify RX audio on both
+channels, TX mute, checkbox off and disconnect before relying on the feature.
+
+## TX MON background
 
 Implementation status (September 20, 2026): the operator deployed the hardware
 audio-mute correction and confirmed audible TX MON at G2's headphone jack.
@@ -26,8 +44,9 @@ or PCB3/AIC3204. Unsupported bridges leave the browser control disabled.
 - `tx_monitor_supported:0,true|false;` advertises capability/fault availability.
 - All commands require the existing operator role. Neither command arms or keys RF.
 - MON plays only actual keyed TX IQ. RX, two-tone, CW, unsupported modes and
-  RF-inhibited TX produce no monitor audio. Unkey invalidates queued audio;
-  operator disconnect clears MON. MON faults disable only MON and are published.
+  RF-inhibited TX produce no *TX monitor* audio. Unkey invalidates queued
+  audio; operator disconnect clears MON. A codec fault now disables both
+  local audio modes and is published.
 
 The processed WDSP output is copied **after** successful DUC delivery into a
 bounded best-effort queue. A separate worker demodulates SSB/digital sideband,

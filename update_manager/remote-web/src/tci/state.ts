@@ -108,6 +108,8 @@ export type TciRadioState = {
   txMonitorSupported?: boolean;
   txMonitorEnabled?: boolean;
   txMonitorLevelDb?: number;
+  rxHeadphonesSupported?: boolean;
+  rxHeadphonesEnabled?: boolean;
   remoteTxRfEnabled: boolean | null;
   txEnabled: boolean;
   moxRequested: boolean;

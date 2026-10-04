@@ -24,3 +24,18 @@ describe('G2 TX headphone MON', () => {
     expect(handlers).not.toMatch(/trx:|tx_drive:|tx_mic_gain:|localStorage|setItem|startMic/);
   });
 });
+
+describe('G2 rear RX headphones', () => {
+  it('starts off and exposes an accessible waterfall checkbox', () => {
+    const state = createAppState();
+    expect(state.rxHeadphonesSupported).toBe(false);
+    expect(state.rxHeadphonesEnabled).toBe(false);
+    expect(html).toMatch(/id="waterfall-shell"[^>]*>[\s\S]*?id="rx-headphones-checkbox" type="checkbox" disabled aria-label="G2 rear headphone RX audio"/);
+  });
+  it('requires operator acknowledgement and does not key TX', () => {
+    const handlers = html.slice(html.indexOf('$("rx-headphones-checkbox").addEventListener("change"'), html.indexOf('$("tx-mon-level").addEventListener("input"'));
+    expect(handlers).toContain('state.remoteClientRole !== "operator"');
+    expect(handlers).toContain('rx_headphones:0,');
+    expect(handlers).not.toMatch(/trx:|tx_drive:|localStorage|setItem|startMic/);
+  });
+});

@@ -1,7 +1,7 @@
-//! G2 PCB2 local TX monitor. A bounded, best-effort branch of processed TX IQ;
-//! never part of RF pacing, key qualification, microphone ingress or RX audio.
+//! G2 PCB2 local headphone output. Bounded, best-effort RX audio and processed
+//! TX IQ branches; never part of RF pacing, key qualification or mic ingress.
 //! Codec DMA and SPI run only on this worker. No RF-enable writes exist here.
-use crate::radio_model::{DemodMode, RadioModel};
+use crate::radio_model::{DemodMode, RadioModel, TxPhase};
 use crate::sync_ext::MutexExt;
 use crate::xdma::{ensure_p2app_inactive, XdmaError, XdmaRegisterDevice};
 use crate::xdma_rx::AlignedBuffer;
@@ -145,15 +145,81 @@ struct Frame {
     mode: DemodMode,
 }
 
+struct RxFrame {
+    audio: Vec<f32>,
+    at: Instant,
+    generation: u64,
+    volume_db: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlaybackSource {
+    Off,
+    Rx,
+    Tx,
+}
+
+fn playback_source(model: &RadioModel, tx_active: bool) -> PlaybackSource {
+    if model.desired.tx_enabled || model.desired.tx_phase != TxPhase::Rx {
+        if model.desired.tx_monitor_enabled
+            && model.desired.tx_monitor_available
+            && monitor_keyed_voice(model)
+            && tx_active
+        {
+            PlaybackSource::Tx
+        } else {
+            PlaybackSource::Off
+        }
+    } else if model.desired.rx_headphones_enabled && model.desired.rx_headphones_available {
+        PlaybackSource::Rx
+    } else {
+        PlaybackSource::Off
+    }
+}
+
+fn rx_gain(volume_db: f64) -> f32 {
+    if !volume_db.is_finite() {
+        return 0.0;
+    }
+    let volume_db = volume_db.clamp(-40.0, 12.0);
+    if volume_db <= -39.5 {
+        0.0
+    } else {
+        10.0_f32.powf(0.05 * volume_db as f32)
+    }
+}
+
+fn scaled_rx_sample(sample: f32, gain: f32) -> f32 {
+    if sample.is_finite() {
+        (sample * gain).clamp(-0.5, 0.5)
+    } else {
+        0.0
+    }
+}
+
 fn fresh_frame(gate: bool, generation: u64, frame: &Frame) -> bool {
     gate && frame.generation == generation
         && frame.at.elapsed() <= MAX_AGE
         && voice_mode(frame.mode)
 }
 
+fn source_is_current(
+    model: &Mutex<RadioModel>,
+    source: PlaybackSource,
+    active: &AtomicBool,
+    generation: &AtomicU64,
+    expected_generation: u64,
+) -> bool {
+    generation.load(Ordering::Acquire) == expected_generation
+        && source != PlaybackSource::Off
+        && playback_source(&model.lock_unpoisoned(), active.load(Ordering::Acquire)) == source
+}
+
 pub(crate) struct TxMonitor {
     sender: mpsc::SyncSender<Frame>,
+    rx_sender: mpsc::SyncSender<RxFrame>,
     enabled: Arc<AtomicBool>,
+    rx_enabled: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     shutdown: Arc<AtomicBool>,
@@ -162,14 +228,21 @@ pub(crate) struct TxMonitor {
 
 impl TxMonitor {
     pub(crate) fn spawn(model: Arc<Mutex<RadioModel>>) -> Result<Self, XdmaError> {
-        model.lock_unpoisoned().desired.tx_monitor_available = true;
+        {
+            let mut m = model.lock_unpoisoned();
+            m.desired.tx_monitor_available = true;
+            m.desired.rx_headphones_available = true;
+        }
         let (sender, receiver) = mpsc::sync_channel::<Frame>(8);
+        let (rx_sender, rx_receiver) = mpsc::sync_channel::<RxFrame>(2);
         let enabled = Arc::new(AtomicBool::new(false));
+        let rx_enabled = Arc::new(AtomicBool::new(false));
         let active = Arc::new(AtomicBool::new(false));
         let generation = Arc::new(AtomicU64::new(0));
         let shutdown = Arc::new(AtomicBool::new(false));
-        let (en, act, gen, end) = (
+        let (en, rx_en, act, gen, end) = (
             enabled.clone(),
+            rx_enabled.clone(),
             active.clone(),
             generation.clone(),
             shutdown.clone(),
@@ -180,92 +253,135 @@ impl TxMonitor {
                 let mut codec: Option<CodecOutput> = None;
                 let mut dsp = MonitorDsp::new();
                 let mut pending = VecDeque::new();
+                let mut tx_pending = VecDeque::new();
                 let mut playing = false;
                 let mut last_mode = DemodMode::Unknown;
                 let mut last_frame = Instant::now();
                 let mut last_generation = gen.load(Ordering::Acquire);
+                let mut last_source = PlaybackSource::Off;
                 while !end.load(Ordering::Acquire) {
-                    let (requested, level, keyed, available) = {
+                    let (requested, rx_requested, level, source) = {
                         let m = model.lock_unpoisoned();
                         (
-                            m.desired.tx_monitor_enabled,
+                            m.desired.tx_monitor_enabled && m.desired.tx_monitor_available,
+                            m.desired.rx_headphones_enabled && m.desired.rx_headphones_available,
                             m.desired.tx_monitor_level_db,
-                            monitor_keyed_voice(&m),
-                            m.desired.tx_monitor_available,
+                            playback_source(&m, act.load(Ordering::Acquire)),
                         )
                     };
-                    // Initialize while RX when MON is selected, not in the RF thread.
-                    if requested && available && codec.is_none() {
+                    // One codec/DMA owner for both RX and TX. Initialize on this
+                    // worker, before playback, never on a radio pacing thread.
+                    if (requested || rx_requested) && codec.is_none() {
                         match CodecOutput::open() {
                             Ok(c) => codec = Some(c),
                             Err(e) => {
-                                fail_monitor(&model, &en, e);
+                                fail_monitor(&model, &en, &rx_en, e);
                                 continue;
                             }
                         }
                     }
-                    let wanted = requested && available;
-                    if en.swap(wanted, Ordering::AcqRel) && !wanted {
+                    if en.swap(requested, Ordering::AcqRel) && !requested {
+                        gen.fetch_add(1, Ordering::AcqRel);
+                    }
+                    if rx_en.swap(rx_requested, Ordering::AcqRel) && !rx_requested {
+                        gen.fetch_add(1, Ordering::AcqRel);
+                    }
+                    if source != last_source {
+                        // A quick RX/TX/RX transition must not replay audio
+                        // queued before the transition, even if <30 ms old.
                         gen.fetch_add(1, Ordering::AcqRel);
                     }
                     let current_generation = gen.load(Ordering::Acquire);
-                    let mut gate = wanted && keyed && act.load(Ordering::Acquire);
-                    if ((!gate || last_frame.elapsed() > MAX_AGE)
+                    if ((source == PlaybackSource::Off || last_frame.elapsed() > MAX_AGE)
                         && (playing || !pending.is_empty()))
                         || current_generation != last_generation
+                        || source != last_source
                     {
-                        if playing {
+                        if playing || source != last_source {
                             if let Some(c) = codec.as_mut() {
                                 if let Err(e) = c.silence() {
-                                    fail_monitor(&model, &en, e);
-                                    gate = false;
+                                    fail_monitor(&model, &en, &rx_en, e);
                                 }
                             }
                         }
                         playing = false;
                         pending.clear();
+                        tx_pending.clear();
                         dsp = MonitorDsp::new();
                         last_generation = current_generation;
+                        last_source = source;
                     }
-                    match receiver.recv_timeout(Duration::from_millis(5)) {
-                        Ok(frame) if fresh_frame(gate, current_generation, &frame) => {
-                            if frame.mode != last_mode {
-                                dsp = MonitorDsp::new();
-                                pending.clear();
-                                last_mode = frame.mode;
-                            }
-                            last_frame = Instant::now();
-                            dsp.process(&frame.iq, frame.mode, level, &mut pending);
-                            if pending.len() > 2048 {
-                                pending.clear(); // bound latency; never replay a backlog
-                            }
-                            if let Some(c) = codec.as_mut() {
-                                // Bounded writes, no spin/pacing wait. A large RF batch
-                                // contains multiple codec blocks and must drain fully.
-                                for _ in 0..8 {
-                                    if pending.len() < DMA_BYTES / 4
-                                        || !act.load(Ordering::Acquire)
-                                        || gen.load(Ordering::Acquire) != current_generation
-                                    {
-                                        break;
+                    match source {
+                        PlaybackSource::Tx => {
+                            match receiver.recv_timeout(Duration::from_millis(3)) {
+                                Ok(frame) if fresh_frame(true, current_generation, &frame) => {
+                                    if frame.mode != last_mode {
+                                        dsp = MonitorDsp::new();
+                                        pending.clear();
+                                        tx_pending.clear();
+                                        last_mode = frame.mode;
                                     }
-                                    match c.write(&mut pending, || {
-                                        act.load(Ordering::Acquire)
-                                            && gen.load(Ordering::Acquire) == current_generation
-                                    }) {
-                                        Ok(true) => playing = true,
-                                        Ok(false) => break,
-                                        Err(e) => {
-                                            let _ = c.silence();
-                                            fail_monitor(&model, &en, e);
-                                            break;
-                                        }
-                                    }
+                                    last_frame = Instant::now();
+                                    dsp.process(&frame.iq, frame.mode, level, &mut tx_pending);
+                                    pending.extend(
+                                        tx_pending.drain(..).map(|sample| [sample, sample]),
+                                    );
+                                }
+                                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                            }
+                        }
+                        PlaybackSource::Rx => {
+                            match rx_receiver.recv_timeout(Duration::from_millis(3)) {
+                                Ok(frame)
+                                    if frame.generation == current_generation
+                                        && frame.at.elapsed() <= MAX_AGE =>
+                                {
+                                    last_frame = Instant::now();
+                                    let gain = rx_gain(frame.volume_db);
+                                    pending.extend(frame.audio.chunks_exact(2).map(|pair| {
+                                        [
+                                            scaled_rx_sample(pair[0], gain),
+                                            scaled_rx_sample(pair[1], gain),
+                                        ]
+                                    }));
+                                }
+                                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+                                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                            }
+                        }
+                        PlaybackSource::Off => thread::sleep(Duration::from_millis(3)),
+                    }
+                    if pending.len() > 2048 {
+                        pending.clear(); // bound latency; never replay a backlog
+                    }
+                    if let Some(c) = codec.as_mut() {
+                        // Bounded best-effort writes; TX and RX share this one
+                        // codec writer and every write rechecks the live gate.
+                        for _ in 0..8 {
+                            if pending.len() < DMA_BYTES / 4
+                                || !source_is_current(
+                                    &model,
+                                    source,
+                                    &act,
+                                    &gen,
+                                    current_generation,
+                                )
+                            {
+                                break;
+                            }
+                            match c.write(&mut pending, || {
+                                source_is_current(&model, source, &act, &gen, current_generation)
+                            }) {
+                                Ok(true) => playing = true,
+                                Ok(false) => break,
+                                Err(e) => {
+                                    let _ = c.silence();
+                                    fail_monitor(&model, &en, &rx_en, e);
+                                    break;
                                 }
                             }
                         }
-                        Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
                 }
                 // Drop mutes both DAC and headphones and resets only the audio FIFO.
@@ -277,7 +393,9 @@ impl TxMonitor {
         model_available_note();
         Ok(Self {
             sender,
+            rx_sender,
             enabled,
+            rx_enabled,
             active,
             generation,
             shutdown,
@@ -300,6 +418,18 @@ impl TxMonitor {
         let _ = self.sender.try_send(frame);
     }
 
+    pub(crate) fn push_rx(&self, audio: &[f32], volume_db: f64) {
+        if !self.rx_enabled.load(Ordering::Acquire) || audio.len() % 2 != 0 {
+            return;
+        }
+        let _ = self.rx_sender.try_send(RxFrame {
+            audio: audio.to_vec(),
+            at: Instant::now(),
+            generation: self.generation.load(Ordering::Acquire),
+            volume_db,
+        });
+    }
+
     pub(crate) fn stop(&self) {
         self.active.store(false, Ordering::Release);
         self.generation.fetch_add(1, Ordering::AcqRel);
@@ -307,7 +437,7 @@ impl TxMonitor {
 }
 
 fn model_available_note() {
-    eprintln!("saturn-bridge: G2 PCB2 TX headphone MON worker ready (default off)");
+    eprintln!("saturn-bridge: G2 PCB2 RX headphone / TX MON worker ready (default off)");
 }
 
 impl Drop for TxMonitor {
@@ -320,12 +450,20 @@ impl Drop for TxMonitor {
     }
 }
 
-fn fail_monitor(model: &Mutex<RadioModel>, enabled: &AtomicBool, error: XdmaError) {
+fn fail_monitor(
+    model: &Mutex<RadioModel>,
+    enabled: &AtomicBool,
+    rx_enabled: &AtomicBool,
+    error: XdmaError,
+) {
     enabled.store(false, Ordering::Release);
+    rx_enabled.store(false, Ordering::Release);
     let mut m = model.lock_unpoisoned();
     m.desired.tx_monitor_enabled = false;
     m.desired.tx_monitor_available = false;
-    eprintln!("saturn-bridge: MON disabled after headphone output fault: {error}");
+    m.desired.rx_headphones_enabled = false;
+    m.desired.rx_headphones_available = false;
+    eprintln!("saturn-bridge: headphone output disabled after codec fault: {error}");
 }
 
 struct CodecOutput {
@@ -426,7 +564,7 @@ impl CodecOutput {
 
     fn write(
         &mut self,
-        samples: &mut VecDeque<f32>,
+        samples: &mut VecDeque<[f32; 2]>,
         still_active: impl Fn() -> bool,
     ) -> Result<bool, XdmaError> {
         if !still_active() {
@@ -445,16 +583,16 @@ impl CodecOutput {
         let network_order = self.registers.read_register(RF_GPIO_REGISTER)? & (1 << 26) != 0;
         let bytes = self.buffer.as_mut_slice(DMA_BYTES);
         for frame in bytes.as_chunks_mut::<4>().0 {
-            let sample = samples.pop_front().unwrap_or(0.0);
-            let pcm = pcm16(sample);
-            self.pcm_peak = self.pcm_peak.max(pcm.unsigned_abs());
-            let packed = if network_order {
-                pcm.to_be_bytes()
-            } else {
-                pcm.to_le_bytes()
-            };
-            frame[..2].copy_from_slice(&packed);
-            frame[2..].copy_from_slice(&packed);
+            let [left, right] = samples.pop_front().unwrap_or([0.0; 2]);
+            for (channel, sample) in frame.chunks_exact_mut(2).zip([left, right]) {
+                let pcm = pcm16(sample);
+                self.pcm_peak = self.pcm_peak.max(pcm.unsigned_abs());
+                channel.copy_from_slice(&if network_order {
+                    pcm.to_be_bytes()
+                } else {
+                    pcm.to_le_bytes()
+                });
+            }
         }
         let written = self
             .dma
@@ -597,7 +735,7 @@ mod tests {
             c.registers.read_register(RF_GPIO_REGISTER).unwrap(),
             unrelated | AUDIO_MUTE_BIT
         );
-        let mut samples = VecDeque::from(vec![0.1; DMA_BYTES / 4]);
+        let mut samples = VecDeque::from(vec![[0.1, 0.1]; DMA_BYTES / 4]);
         assert!(c.write(&mut samples, || true).unwrap());
         assert!(c.unmuted);
         assert_eq!(
@@ -638,13 +776,73 @@ mod tests {
     }
 
     #[test]
+    fn rx_headphones_yield_to_all_tx_states_and_tx_monitor_only_plays_voice() {
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        model.desired.rx_headphones_available = true;
+        model.desired.rx_headphones_enabled = true;
+        assert_eq!(playback_source(&model, false), PlaybackSource::Rx);
+        model.desired.tx_enabled = true;
+        assert_eq!(playback_source(&model, false), PlaybackSource::Off);
+        model.desired.tx_monitor_available = true;
+        model.desired.tx_monitor_enabled = true;
+        model.desired.mode = DemodMode::Usb;
+        assert_eq!(playback_source(&model, true), PlaybackSource::Tx);
+        model.desired.mode = DemodMode::Cwu;
+        assert_eq!(playback_source(&model, true), PlaybackSource::Off);
+        model.desired.tx_enabled = false;
+        model.desired.tx_phase = TxPhase::Armed;
+        assert_eq!(playback_source(&model, false), PlaybackSource::Off);
+        model.desired.tx_phase = TxPhase::Rx;
+        assert_eq!(playback_source(&model, false), PlaybackSource::Rx);
+    }
+
+    #[test]
+    fn rx_dma_gate_closes_on_tx_arm_checkbox_off_and_generation_change() {
+        let mut state = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        state.desired.rx_headphones_available = true;
+        state.desired.rx_headphones_enabled = true;
+        let model = Mutex::new(state);
+        let active = AtomicBool::new(false);
+        let generation = AtomicU64::new(4);
+        let gate = || source_is_current(&model, PlaybackSource::Rx, &active, &generation, 4);
+        assert!(gate());
+        model.lock_unpoisoned().desired.tx_phase = TxPhase::Armed;
+        assert!(!gate());
+        model.lock_unpoisoned().desired.tx_phase = TxPhase::Rx;
+        model.lock_unpoisoned().desired.rx_headphones_enabled = false;
+        assert!(!gate());
+        model.lock_unpoisoned().desired.rx_headphones_enabled = true;
+        generation.fetch_add(1, Ordering::AcqRel);
+        assert!(!gate());
+    }
+
+    #[test]
+    fn rx_gain_tracks_browser_volume_and_mute() {
+        assert_eq!(rx_gain(-40.0), 0.0);
+        assert_eq!(rx_gain(f64::NAN), 0.0);
+        assert!((rx_gain(-20.0) - 0.1).abs() < 1e-6);
+        assert!((rx_gain(0.0) - 1.0).abs() < 1e-6);
+    }
+    #[test]
+    fn codec_writes_distinct_stereo_rx_channels_without_changing_rf_bits() {
+        let mut fixture = MockCodec::new();
+        let c = &mut fixture.codec;
+        c.silence().unwrap();
+        let mut samples = VecDeque::from(vec![[0.1, -0.1]; DMA_BYTES / 4]);
+        assert!(c.write(&mut samples, || true).unwrap());
+        let mut bytes = [0; 4];
+        c.dma.read_at(&mut bytes, 0x40000).unwrap();
+        assert_eq!(bytes, [0xcd, 0x0c, 0x33, 0xf3]);
+    }
+
+    #[test]
     fn stop_before_dma_after_dma_or_during_unmute_leaves_hardware_muted() {
         for stop_at_check in 0..3 {
             let mut fixture = MockCodec::new();
             let c = &mut fixture.codec;
             c.silence().unwrap();
             let checks = std::cell::Cell::new(0);
-            let mut samples = VecDeque::from(vec![0.1; DMA_BYTES / 4]);
+            let mut samples = VecDeque::from(vec![[0.1, 0.1]; DMA_BYTES / 4]);
             assert!(!c
                 .write(&mut samples, || {
                     let check = checks.get();
@@ -730,9 +928,12 @@ mod tests {
     #[test]
     fn saturated_monitor_queue_does_not_wait_and_stop_invalidates_frames() {
         let (sender, receiver) = mpsc::sync_channel(1);
+        let (rx_sender, _rx_receiver) = mpsc::sync_channel(1);
         let monitor = TxMonitor {
             sender,
+            rx_sender,
             enabled: Arc::new(AtomicBool::new(true)),
+            rx_enabled: Arc::new(AtomicBool::new(false)),
             active: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU64::new(0)),
             shutdown: Arc::new(AtomicBool::new(false)),

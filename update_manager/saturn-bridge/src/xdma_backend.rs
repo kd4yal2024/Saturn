@@ -177,8 +177,12 @@ struct WdspResumePerformance {
     max_us: u64,
 }
 
-fn rx_processing_mode(demand: TciMediaDemand, meter_due: bool) -> RxProcessingMode {
-    if demand.audio_stream_enabled {
+fn rx_processing_mode(
+    demand: TciMediaDemand,
+    local_headphones: bool,
+    meter_due: bool,
+) -> RxProcessingMode {
+    if demand.audio_stream_enabled || local_headphones {
         RxProcessingMode::Audio
     } else if demand.iq_stream_enabled {
         RxProcessingMode::IqOnly
@@ -398,7 +402,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         tx_cmd_tx.clone(),
     )?;
     let mut tx_control = DirectTxControl::default();
-    let mut last_monitor_state = (false, false, -30.0);
+    let mut last_monitor_state = (false, false, -30.0, false, false);
     let mut wdsp = {
         let model = radio_model.lock_unpoisoned();
         WdspRxEngine::new(&model)?
@@ -497,9 +501,16 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
             // Consume a bounded slice of the host ring before client control
             // work. The dedicated reader continues servicing the hardware FIFO
             // during every DSP, publication, command, and filesystem operation.
+            let local_headphones = {
+                let model = radio_model.lock_unpoisoned();
+                model.desired.rx_headphones_enabled
+                    && !model.desired.tx_enabled
+                    && model.desired.tx_phase == TxPhase::Rx
+            };
             for _ in 0..RUNTIME_HOST_DRAIN_MAX_READS {
                 let mode = rx_processing_mode(
                     media_demand,
+                    local_headphones,
                     last_idle_meter.elapsed() >= IDLE_METER_PERIOD,
                 );
                 current_processing_mode = mode;
@@ -568,9 +579,14 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                         let rx_volume_db = wdsp.rx_volume_db();
                         let dsp_started = Instant::now();
                         wdsp.process_iq(&iq_samples, |audio| {
-                            rx_performance.audio_frames_published += 1;
-                            rx_performance.audio_samples_published += audio.len() as u64;
-                            tci.publish_audio_frame(audio_sample_rate_hz, audio, rx_volume_db);
+                            if media_demand.audio_stream_enabled {
+                                rx_performance.audio_frames_published += 1;
+                                rx_performance.audio_samples_published += audio.len() as u64;
+                                tci.publish_audio_frame(audio_sample_rate_hz, audio, rx_volume_db);
+                            }
+                            if audio_sample_rate_hz == 48_000 {
+                                tx_radio.push_rx_headphone_audio(audio, rx_volume_db);
+                            }
                         });
                         rx_performance
                             .dsp_audio_latency
@@ -754,6 +770,8 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     model.desired.tx_monitor_available,
                     model.desired.tx_monitor_enabled,
                     model.desired.tx_monitor_level_db,
+                    model.desired.rx_headphones_available,
+                    model.desired.rx_headphones_enabled,
                 );
                 if monitor_state != last_monitor_state {
                     // Includes worker-side faults, which otherwise have no TCI
@@ -1185,6 +1203,7 @@ fn handle_command(
         TciCommand::ClientConnected => model.desired.running = true,
         TciCommand::ClientDisconnected => {
             model.desired.tx_monitor_enabled = false;
+            model.desired.rx_headphones_enabled = false;
             tx_control.requested = false;
             tx_control.last_mic_at = None;
             let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -1270,6 +1289,9 @@ fn handle_command(
         }
         TciCommand::SetTxMonitor(enabled) => {
             model.desired.tx_monitor_enabled = enabled && model.desired.tx_monitor_available;
+        }
+        TciCommand::SetRxHeadphones(enabled) => {
+            model.desired.rx_headphones_enabled = enabled && model.desired.rx_headphones_available;
         }
         TciCommand::SetTxMonitorLevel(level) => {
             model.desired.tx_monitor_level_db = crate::tx_monitor::clamp_level(level);
@@ -2244,20 +2266,24 @@ mod tests {
     #[test]
     fn rx_processing_only_runs_wdsp_for_audio_consumers() {
         assert_eq!(
-            rx_processing_mode(demand(true, true), false),
+            rx_processing_mode(demand(true, true), false, false),
             RxProcessingMode::Audio
         );
         assert_eq!(
-            rx_processing_mode(demand(true, false), false),
+            rx_processing_mode(demand(true, false), false, false),
             RxProcessingMode::IqOnly
         );
         assert_eq!(
-            rx_processing_mode(TciMediaDemand::default(), true),
+            rx_processing_mode(TciMediaDemand::default(), false, true),
             RxProcessingMode::MeterOnly
         );
         assert_eq!(
-            rx_processing_mode(TciMediaDemand::default(), false),
+            rx_processing_mode(TciMediaDemand::default(), false, false),
             RxProcessingMode::DrainOnly
+        );
+        assert_eq!(
+            rx_processing_mode(TciMediaDemand::default(), true, false),
+            RxProcessingMode::Audio
         );
     }
 
