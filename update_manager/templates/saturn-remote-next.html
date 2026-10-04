@@ -425,23 +425,26 @@
     }
     .waterfall-headphones {
       position: absolute;
-      top: 9px;
-      right: 10px;
-      z-index: 25;
+      top: 12px;
+      right: 12px;
+      z-index: 40;
       display: inline-flex;
       align-items: center;
-      gap: 7px;
-      padding: 7px 10px;
-      border: 1px solid var(--border-strong);
+      gap: 9px;
+      min-height: 40px;
+      padding: 9px 13px;
+      border: 1px solid var(--accent);
       border-radius: 8px;
-      background: color-mix(in srgb, var(--bg-display) 88%, transparent);
-      color: var(--display-foreground);
-      font-size: var(--fs-caption);
+      background: var(--bg-panel);
+      color: var(--text-primary);
+      box-shadow: 0 4px 16px #0008;
+      font-size: var(--fs-body);
+      font-weight: 700;
       cursor: pointer;
       touch-action: manipulation;
     }
-    .waterfall-headphones:has(input:disabled) { opacity: .65; cursor: not-allowed; }
-    .waterfall-headphones input { margin: 0; accent-color: var(--accent); }
+    .waterfall-headphones:has(input:disabled) { opacity: .88; cursor: not-allowed; }
+    .waterfall-headphones input { width: 17px; height: 17px; margin: 0; accent-color: var(--accent); }
     .waterfall-headphones:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 
     .waterfall-toggle-btn {
