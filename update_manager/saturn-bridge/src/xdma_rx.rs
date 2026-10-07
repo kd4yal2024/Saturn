@@ -4,6 +4,7 @@
 //! validates its hardware rate headers and packed 24-bit I/Q framing.  It does
 //! not expose an operational client backend and contains no TX DMA path.
 
+use crate::rx_counter_v31;
 use crate::xdma::{
     alex_receive_state_word, alex_rx_filter_word, ensure_p2app_inactive, SaturnIdentity, XdmaError,
     XdmaRegisterDevice, ALEX_RX_FILTER_REGISTER, ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
@@ -25,7 +26,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_DDC_DEVICE: &str = "/dev/xdma0_c2h_0";
 const DEFAULT_FREQUENCY_HZ: u32 = 14_200_000;
@@ -41,7 +42,10 @@ const DDC_RATE_REGISTER: u64 = 0x100C;
 const DDC_INPUT_SELECT_REGISTER: u64 = 0x1010;
 const DDC6_FREQUENCY_REGISTER: u64 = 0x0018;
 const FIFO_RESET_REGISTER: u64 = 0x7000;
+const DDC_ALMOST_FULL_REGISTER: u64 = 0x6000;
 const DDC_FIFO_MONITOR_REGISTER: u64 = 0x9000;
+const DDC_FIFO_MONITOR_THRESHOLD_REGISTER: u64 = 0x9010;
+const DDC_FIFO_MONITOR_THRESHOLD_WORDS: u32 = 16_384;
 const ADC_ATTENUATION_REGISTER: u64 = 0x2018;
 const ADC1_RX_ATTENUATION_MASK: u32 = 0x1f;
 const ADC_OVERFLOW_REGISTER: u64 = 0x5000;
@@ -71,9 +75,17 @@ const FIFO_V29_SNAPSHOT_POLL_INTERVAL: Duration = Duration::from_micros(100);
 const EXTENDED_SNAPSHOT_VALID: u32 = 1 << 31;
 const EXTENDED_FIFO_CHANNELS: usize = 4;
 const EXTENDED_ADC_CHANNELS: usize = 2;
+pub(crate) const DDC_ALMOST_FULL_CHANNELS: usize = 10;
 const DDC_FIFO_RESET_BIT: u32 = 1 << 2;
 const DDC_STREAM_ENABLE_BIT: u32 = 1 << 30;
 const DDC6_ADC_MASK: u32 = 0x3 << (DIRECT_DDC_INDEX * 2);
+
+fn epoch_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
 
 const DMA_ALIGNMENT: usize = 4096;
 const DMA_MIN_READ_BYTES: usize = 4096;
@@ -160,6 +172,91 @@ impl FpgaAdcV30Telemetry {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PerDdcAlmostFullStatus {
+    #[default]
+    NotSampled,
+    Ok,
+    ReadError,
+}
+
+impl PerDdcAlmostFullStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::NotSampled => "not_sampled",
+            Self::Ok => "ok",
+            Self::ReadError => "read_error",
+        }
+    }
+}
+
+/// The 0x6000 latch is read-to-clear. Each bit records activity at least once
+/// since the previous successful read, not an exact number of FPGA pulses.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PerDdcAlmostFullTelemetry {
+    pub(crate) status: PerDdcAlmostFullStatus,
+    pub(crate) last_mask: Option<u32>,
+    pub(crate) startup_status: PerDdcAlmostFullStatus,
+    pub(crate) startup_mask: Option<u32>,
+    pub(crate) startup_sampled_at_ms: Option<u64>,
+    pub(crate) startup_fifo_reset_completed_at_ms: Option<u64>,
+    pub(crate) startup_after_fifo_reset_us: Option<u64>,
+    pub(crate) startup_after_enable_us: Option<u64>,
+    pub(crate) successful_reads: u64,
+    pub(crate) read_failures: u64,
+    pub(crate) observations: [u64; DDC_ALMOST_FULL_CHANNELS],
+}
+
+impl PerDdcAlmostFullTelemetry {
+    fn observe_startup_read(
+        &mut self,
+        result: Result<u32, XdmaError>,
+        sampled_at_ms: u64,
+        fifo_reset_completed_at_ms: u64,
+        after_fifo_reset_us: u64,
+        after_enable_us: u64,
+    ) -> Result<(), XdmaError> {
+        self.startup_sampled_at_ms = Some(sampled_at_ms);
+        self.startup_fifo_reset_completed_at_ms = Some(fifo_reset_completed_at_ms);
+        self.startup_after_fifo_reset_us = Some(after_fifo_reset_us);
+        self.startup_after_enable_us = Some(after_enable_us);
+        match result {
+            Ok(mask) => {
+                self.startup_status = PerDdcAlmostFullStatus::Ok;
+                self.startup_mask = Some(mask);
+                Ok(())
+            }
+            Err(error) => {
+                self.startup_status = PerDdcAlmostFullStatus::ReadError;
+                self.startup_mask = None;
+                self.read_failures = self.read_failures.saturating_add(1);
+                Err(error)
+            }
+        }
+    }
+
+    fn observe_read(&mut self, result: Result<u32, XdmaError>) -> Result<(), XdmaError> {
+        match result {
+            Ok(mask) => {
+                self.status = PerDdcAlmostFullStatus::Ok;
+                self.last_mask = Some(mask);
+                self.successful_reads = self.successful_reads.saturating_add(1);
+                for (ddc, observations) in self.observations.iter_mut().enumerate() {
+                    *observations =
+                        observations.saturating_add(u64::from(mask & (1u32 << ddc) != 0));
+                }
+                Ok(())
+            }
+            Err(error) => {
+                self.status = PerDdcAlmostFullStatus::ReadError;
+                self.last_mask = None;
+                self.read_failures = self.read_failures.saturating_add(1);
+                Err(error)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct RxProbeConfig {
     frequency_hz: u32,
@@ -198,7 +295,7 @@ struct FifoSnapshot {
     depth_words: usize,
     overflow: bool,
     over_threshold: bool,
-    underflow: bool,
+    seen_empty: bool,
 }
 
 impl FifoSnapshot {
@@ -207,7 +304,7 @@ impl FifoSnapshot {
             depth_words: (value & 0xffff) as usize,
             overflow: (value & (1 << 31)) != 0,
             over_threshold: (value & (1 << 30)) != 0,
-            underflow: (value & (1 << 29)) != 0,
+            seen_empty: (value & (1 << 29)) != 0,
         }
     }
 }
@@ -254,9 +351,29 @@ fn startup_high_water_separately_accounted(
 
 fn fifo_has_hard_fault(snapshot: FifoSnapshot, policy: FifoStatusPolicy) -> bool {
     match policy {
-        FifoStatusPolicy::Legacy => snapshot.overflow || snapshot.underflow,
-        FifoStatusPolicy::V29 => snapshot.underflow && snapshot.depth_words != 0,
+        // Bit 29 is a latched "seen empty" state, not a DMA underflow.
+        // On V30/V31 the FIFO overflow input is tied low by the FPGA design;
+        // retain the legacy bit-31 guard for older images that drive it.
+        FifoStatusPolicy::Legacy => snapshot.overflow,
+        FifoStatusPolicy::V29 => false,
     }
+}
+
+fn configure_fifo_monitor_threshold(device: &XdmaRegisterDevice) -> Result<u32, XdmaError> {
+    // P2 also programs the DDC channel to its 16,384-word depth. Leaving the
+    // reset value (zero) makes threshold sticky and suppresses seen-empty in
+    // the monitor's threshold-first RTL branch.
+    device.write_register(
+        DDC_FIFO_MONITOR_THRESHOLD_REGISTER,
+        DDC_FIFO_MONITOR_THRESHOLD_WORDS,
+    )?;
+    let readback = device.read_register(DDC_FIFO_MONITOR_THRESHOLD_REGISTER)?;
+    if readback & 0xffff != DDC_FIFO_MONITOR_THRESHOLD_WORDS {
+        return Err(XdmaError::Incompatible(format!(
+            "direct XDMA RX FIFO monitor threshold readback was {readback:#010x}, expected {DDC_FIFO_MONITOR_THRESHOLD_WORDS} words"
+        )));
+    }
+    Ok(readback & 0xffff)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -270,12 +387,14 @@ pub(crate) struct RxCaptureStats {
     pub(crate) fifo_depth_hwm: usize,
     /// V29 bit-31/almost-full observations recovered by draining C2H.
     pub(crate) fifo_almost_full: u64,
-    /// V29 bit-29 observations whose coherent current depth was zero.
+    /// Bit-29 "seen empty" latch observations, including startup. The
+    /// current depth can have recovered by the time this latch is read.
     pub(crate) fifo_empty_observations: u64,
     pub(crate) fifo_overflows: u64,
     pub(crate) fifo_over_threshold: u64,
     pub(crate) fifo_underflows: u64,
     pub(crate) fifo_startup_underflow: bool,
+    pub(crate) fifo_startup_empty_observations: u64,
     pub(crate) fifo_startup_over_threshold: u64,
     /// Raw C2H buffers discarded to keep the FPGA drained when the downstream
     /// parser/DSP/publication stage falls behind.
@@ -300,31 +419,27 @@ pub(crate) struct RxCaptureStats {
 impl RxCaptureStats {
     fn observe_fifo(&mut self, snapshot: FifoSnapshot, policy: FifoStatusPolicy) {
         self.fifo_depth_hwm = self.fifo_depth_hwm.max(snapshot.depth_words);
+        self.fifo_empty_observations = self
+            .fifo_empty_observations
+            .saturating_add(u64::from(snapshot.seen_empty));
         if policy == FifoStatusPolicy::V29 {
             self.fifo_almost_full += u64::from(snapshot.overflow);
-            self.fifo_empty_observations +=
-                u64::from(snapshot.underflow && snapshot.depth_words == 0);
         } else {
             self.fifo_overflows += u64::from(snapshot.overflow);
         }
         self.fifo_over_threshold += u64::from(snapshot.over_threshold);
-        self.fifo_underflows += u64::from(
-            snapshot.underflow && !(policy == FifoStatusPolicy::V29 && snapshot.depth_words == 0),
-        );
     }
 
     fn observe_startup_fifo(&mut self, snapshot: FifoSnapshot, policy: FifoStatusPolicy) {
         self.fifo_depth_hwm = self.fifo_depth_hwm.max(snapshot.depth_words);
         self.fifo_startup_over_threshold += u64::from(snapshot.over_threshold);
+        self.fifo_startup_empty_observations += u64::from(snapshot.seen_empty);
+        self.fifo_empty_observations += u64::from(snapshot.seen_empty);
         if policy == FifoStatusPolicy::V29 {
             self.fifo_almost_full += u64::from(snapshot.overflow);
-            self.fifo_empty_observations +=
-                u64::from(snapshot.underflow && snapshot.depth_words == 0);
         } else {
             self.fifo_overflows += u64::from(snapshot.overflow);
         }
-        self.fifo_startup_underflow |=
-            snapshot.underflow && !(policy == FifoStatusPolicy::V29 && snapshot.depth_words == 0);
     }
 
     fn rms_dbfs(&self) -> f32 {
@@ -658,11 +773,11 @@ fn run_operational_reader(
         }
         if fifo_has_hard_fault(fifo, fifo_policy) {
             return Err(XdmaError::Incompatible(format!(
-                "operational XDMA RX FIFO fault: depth={} overflow={} threshold={} underflow={}",
+                "operational XDMA RX FIFO fault: depth={} overflow={} threshold={} seen_empty={}",
                 fifo.depth_words,
                 u8::from(fifo.overflow),
                 u8::from(fifo.over_threshold),
-                u8::from(fifo.underflow)
+                u8::from(fifo.seen_empty)
             )));
         }
         let read_bytes = dma_read_size_for_min(fifo.depth_words, min_read_bytes);
@@ -842,9 +957,8 @@ impl<'a> RxDdcSession<'a> {
         // and decoding those local-order 24-bit samples as network order
         // produces near-full-scale noise with no recoverable stations.
         self.registers.enable_network_byte_order()?;
-        // Reading the monitor clears its sticky condition flags.  Do this
-        // while the stream is disabled so telemetry covers this capture only,
-        // rather than an underflow left behind by the previous owner.
+        configure_fifo_monitor_threshold(self.registers)?;
+        // Clear prior-owner sticky monitor observations before this probe.
         self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?;
         self.registers
             .write_register(DDC_RATE_REGISTER, direct_ddc_rate_word())?;
@@ -864,10 +978,8 @@ impl<'a> RxDdcSession<'a> {
         let mut aligned = AlignedBuffer::new(DMA_MAX_READ_BYTES)?;
         let mut parser = DdcStreamParser::new(direct_ddc_rate_word());
         let mut discarded_iq = Vec::with_capacity(DMA_MAX_READ_BYTES / FIFO_WORD_BYTES * 2);
-        // The FPGA can latch one benign underflow while a newly enabled,
-        // empty read FIFO starts filling.  P2 likewise excludes startup FIFO
-        // conditions from runtime telemetry.  Clear that boundary here so
-        // the counters below describe DMA activity during this capture.
+        // Preserve startup's "seen empty" observation separately from
+        // runtime polls. It is not evidence of a failed DMA read.
         thread::sleep(Duration::from_millis(1));
         let startup_fifo =
             FifoSnapshot::decode(self.registers.read_register(DDC_FIFO_MONITOR_REGISTER)?);
@@ -1098,6 +1210,9 @@ pub(crate) struct OperationalRxSession {
     identity: SaturnIdentity,
     fifo_v29_telemetry: FpgaFifoV29Telemetry,
     adc_v30_telemetry: FpgaAdcV30Telemetry,
+    per_ddc_almost_full_telemetry: PerDdcAlmostFullTelemetry,
+    rx_counter_v31: rx_counter_v31::Owner,
+    fifo_monitor_threshold_words: u32,
     fifo_policy: FifoStatusPolicy,
     last_dma_sequence: Option<u64>,
     frequency_hz: u32,
@@ -1175,6 +1290,9 @@ impl OperationalRxSession {
             identity,
             fifo_v29_telemetry,
             adc_v30_telemetry,
+            per_ddc_almost_full_telemetry: PerDdcAlmostFullTelemetry::default(),
+            rx_counter_v31: rx_counter_v31::Owner::default(),
+            fifo_monitor_threshold_words: 0,
             fifo_policy,
             last_dma_sequence: None,
             frequency_hz,
@@ -1311,6 +1429,35 @@ impl OperationalRxSession {
         sample_adc_v30_telemetry(&registers, &mut self.adc_v30_telemetry)
     }
 
+    pub(crate) fn sample_per_ddc_almost_full_telemetry(&mut self) -> Result<(), XdmaError> {
+        let result = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .read_register(DDC_ALMOST_FULL_REGISTER);
+        self.per_ddc_almost_full_telemetry.observe_read(result)
+    }
+
+    pub(crate) fn per_ddc_almost_full_telemetry(&self) -> &PerDdcAlmostFullTelemetry {
+        &self.per_ddc_almost_full_telemetry
+    }
+
+    pub(crate) fn sample_rx_counter_v31(&mut self) {
+        let registers = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.rx_counter_v31.maybe_sample(&*registers);
+    }
+
+    pub(crate) fn rx_counter_v31_json(&self) -> String {
+        self.rx_counter_v31.json()
+    }
+
+    pub(crate) fn fifo_monitor_threshold_words(&self) -> u32 {
+        self.fifo_monitor_threshold_words
+    }
+
     pub(crate) fn fifo_v29_telemetry(&self) -> &FpgaFifoV29Telemetry {
         &self.fifo_v29_telemetry
     }
@@ -1418,14 +1565,20 @@ impl OperationalRxSession {
         self.disable_stream()?;
         thread::sleep(Duration::from_millis(1));
         self.reset_fifo()?;
+        let fifo_reset_completed_at = Instant::now();
+        let fifo_reset_completed_at_ms = epoch_millis();
         self.registers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .enable_network_byte_order()?;
-        self.registers
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .read_register(DDC_FIFO_MONITOR_REGISTER)?;
+        {
+            let device = self
+                .registers
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            self.fifo_monitor_threshold_words = configure_fifo_monitor_threshold(&device)?;
+            device.read_register(DDC_FIFO_MONITOR_REGISTER)?;
+        }
         self.registers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1445,7 +1598,32 @@ impl OperationalRxSession {
                 |value| (value & !DDC6_ADC_MASK) | DDC_STREAM_ENABLE_BIT,
                 "could not route ADC1 and enable operational direct DDC stream",
             )?;
+        let enabled_at = Instant::now();
         thread::sleep(Duration::from_millis(1));
+        // The disabled DDC mux does not drain its small per-DDC FIFOs, so a
+        // pre-enable read would immediately re-latch all ten almost-full bits.
+        // Preserve the post-enable/reset observation as ambiguous startup
+        // evidence; it is not counted as a steady-state observation window.
+        let startup_6000 = self
+            .registers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .read_register(DDC_ALMOST_FULL_REGISTER);
+        let sampled_at_ms = epoch_millis();
+        let after_fifo_reset_us = fifo_reset_completed_at
+            .elapsed()
+            .as_micros()
+            .min(u64::MAX as u128) as u64;
+        let after_enable_us = enabled_at.elapsed().as_micros().min(u64::MAX as u128) as u64;
+        if let Err(error) = self.per_ddc_almost_full_telemetry.observe_startup_read(
+            startup_6000,
+            sampled_at_ms,
+            fifo_reset_completed_at_ms,
+            after_fifo_reset_us,
+            after_enable_us,
+        ) {
+            eprintln!("saturn-bridge: per-DDC almost-full startup read failed: {error}");
+        }
         let startup = FifoSnapshot::decode(
             self.registers
                 .lock()
@@ -1805,6 +1983,56 @@ mod tests {
     }
 
     #[test]
+    fn per_ddc_almost_full_tracks_read_windows_and_invalidates_failed_reads() {
+        let mut telemetry = PerDdcAlmostFullTelemetry::default();
+        assert_eq!(telemetry.status, PerDdcAlmostFullStatus::NotSampled);
+        assert_eq!(telemetry.last_mask, None);
+
+        // Preserve the ambiguous post-enable/reset interval separately from
+        // steady-state observation windows.
+        telemetry
+            .observe_startup_read(Ok(1 << 6), 1_000, 900, 1_400, 1_200)
+            .unwrap();
+        assert_eq!(telemetry.startup_status, PerDdcAlmostFullStatus::Ok);
+        assert_eq!(telemetry.startup_mask, Some(1 << 6));
+        assert_eq!(telemetry.startup_sampled_at_ms, Some(1_000));
+        assert_eq!(telemetry.startup_fifo_reset_completed_at_ms, Some(900));
+        assert_eq!(telemetry.startup_after_fifo_reset_us, Some(1_400));
+        assert_eq!(telemetry.startup_after_enable_us, Some(1_200));
+        assert_eq!(telemetry.successful_reads, 0);
+        assert_eq!(telemetry.observations[6], 0);
+
+        telemetry.observe_read(Ok(0)).unwrap();
+        assert_eq!(telemetry.status, PerDdcAlmostFullStatus::Ok);
+        assert_eq!(telemetry.last_mask, Some(0));
+        assert_eq!(telemetry.successful_reads, 1);
+        assert_eq!(telemetry.observations, [0; DDC_ALMOST_FULL_CHANNELS]);
+
+        telemetry
+            .observe_read(Ok((1 << 0) | (1 << 6) | (1 << 9)))
+            .unwrap();
+        telemetry.observe_read(Ok(1 << 6)).unwrap();
+        assert_eq!(telemetry.observations[0], 1);
+        assert_eq!(telemetry.observations[6], 2);
+        assert_eq!(telemetry.observations[9], 1);
+        assert_eq!(telemetry.observations[5], 0);
+
+        assert!(telemetry
+            .observe_read(Err(XdmaError::Incompatible("test read failure".into())))
+            .is_err());
+        assert_eq!(telemetry.status, PerDdcAlmostFullStatus::ReadError);
+        assert_eq!(telemetry.last_mask, None);
+        assert_eq!(telemetry.read_failures, 1);
+        assert_eq!(telemetry.successful_reads, 3);
+        assert_eq!(telemetry.observations[6], 2);
+
+        telemetry.observe_read(Ok(0)).unwrap();
+        assert_eq!(telemetry.status, PerDdcAlmostFullStatus::Ok);
+        assert_eq!(telemetry.last_mask, Some(0));
+        assert_eq!(telemetry.read_failures, 1);
+    }
+
+    #[test]
     fn direct_rate_word_selects_only_ddc6_at_384khz() {
         let counts = analyse_rate_word(direct_ddc_rate_word()).unwrap();
         assert_eq!(counts[DIRECT_DDC_INDEX], 8);
@@ -2024,7 +2252,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_fifo_threshold_is_a_watermark_while_fault_bits_are_fatal() {
+    fn legacy_fifo_threshold_is_a_watermark_and_seen_empty_is_not_a_fault() {
         let threshold = FifoSnapshot {
             over_threshold: true,
             ..FifoSnapshot::default()
@@ -2051,11 +2279,11 @@ mod tests {
             FifoStatusPolicy::Legacy
         ));
         let underflow = FifoSnapshot {
-            underflow: true,
+            seen_empty: true,
             ..threshold
         };
-        assert!(fifo_has_hard_fault(underflow, FifoStatusPolicy::Legacy));
-        assert!(!startup_high_water_separately_accounted(
+        assert!(!fifo_has_hard_fault(underflow, FifoStatusPolicy::Legacy));
+        assert!(startup_high_water_separately_accounted(
             underflow,
             true,
             FifoStatusPolicy::Legacy
@@ -2110,10 +2338,10 @@ mod tests {
     }
 
     #[test]
-    fn v29_zero_depth_bit29_is_an_empty_observation() {
+    fn bit29_is_a_seen_empty_observation_even_after_depth_recovers() {
         let empty = FifoSnapshot {
             depth_words: 0,
-            underflow: true,
+            seen_empty: true,
             ..FifoSnapshot::default()
         };
         assert!(!fifo_has_hard_fault(empty, FifoStatusPolicy::V29));
@@ -2121,7 +2349,13 @@ mod tests {
             depth_words: 1,
             ..empty
         };
-        assert!(fifo_has_hard_fault(nonempty, FifoStatusPolicy::V29));
+        assert!(!fifo_has_hard_fault(nonempty, FifoStatusPolicy::V29));
+        assert!(!fifo_has_hard_fault(nonempty, FifoStatusPolicy::Legacy));
+        let mut stats = RxCaptureStats::default();
+        stats.observe_startup_fifo(nonempty, FifoStatusPolicy::Legacy);
+        assert_eq!(stats.fifo_empty_observations, 1);
+        assert_eq!(stats.fifo_startup_empty_observations, 1);
+        assert!(!stats.fifo_startup_underflow);
     }
 
     #[test]
@@ -2131,7 +2365,7 @@ mod tests {
             FifoSnapshot {
                 depth_words: 0,
                 overflow: true,
-                underflow: true,
+                seen_empty: true,
                 ..FifoSnapshot::default()
             },
             FifoStatusPolicy::V29,

@@ -78,6 +78,7 @@ typedef struct
   float DieTempC;
   TFPGAFifoV29Snapshot FPGAFifoV29;
   TFPGAADCV30Snapshot FPGAADCV30;
+  TRXC1Snapshot RXCounterV31;
 } TP23PerfState;
 
 static const char *g_port_names[P23_PERF_MAX_PORTS] =
@@ -384,7 +385,65 @@ void P23PerfTelemetryWriteFPGAFifoV29JSON(FILE *File, const TFPGAFifoV29Snapshot
     }
     fprintf(File, "      }%s\n", (Group == 3U) ? "" : ",");
   }
-  fprintf(File, "    }\n");
+  fprintf(File, "    },\n");
+}
+
+const char *RXC1StatusName(ERXC1Status Status)
+{
+  static const char *Names[] = {
+    "unavailable", "valid", "unsupported", "read_error", "write_error",
+    "reset_active", "reset_changed", "generation_exhausted", "stale_snapshot",
+    "stale_serial", "snapshot_unavailable", "receiver_mismatch",
+    "configuration_mismatch", "token_mismatch", "overflow_mismatch",
+    "snapshot_changed", "ack_failed"
+  };
+  if ((unsigned int)Status >= sizeof(Names) / sizeof(Names[0]))
+    return "unavailable";
+  return Names[Status];
+}
+
+void RXC1WriteJSON(FILE *File, const TRXC1Snapshot *Snapshot)
+{
+  static const char *Fields[RXC1_COUNTER_COUNT] = {
+    "accepted_pre_fir_pairs", "refused_pre_fir_pair_candidates",
+    "accepted_clamped_iq_components", "partial_ready_anomalies",
+    "one_sided_valid_anomalies"
+  };
+  unsigned int Receiver, Counter, Valid = 0;
+  const char *Overall;
+  for (Receiver = 0; Receiver < RXC1_DDC_COUNT; Receiver++)
+    Valid += Snapshot->DDC[Receiver].Status == eRXC1Valid;
+  Overall = Valid == RXC1_DDC_COUNT ? "valid" :
+            Valid != 0 ? "partial" : RXC1StatusName(Snapshot->DDC[0].Status);
+  fprintf(File, "    \"rx_counter_v31\": {\"schema\":\"rxc1-v1\",\"source_backend\":\"p2\","
+                "\"status\":\"%s\",\"sampled_at_ms\":%" PRIu64 ","
+                "\"host_acquisition_failures\":%" PRIu64 ",\"ddc\":[",
+          Overall, Snapshot->SampledAtMs, Snapshot->HostAcquisitionFailures);
+  for (Receiver = 0; Receiver < RXC1_DDC_COUNT; Receiver++)
+  {
+    const TRXC1DDC *DDC = &Snapshot->DDC[Receiver];
+    if (Receiver != 0) fputc(',', File);
+    fprintf(File, "{\"receiver\":%u,\"status\":\"%s\",\"exact\":%s",
+            Receiver, RXC1StatusName(DDC->Status),
+            DDC->Status == eRXC1Valid && !DDC->Overflow ? "true" : "false");
+    if (DDC->Status == eRXC1Valid)
+      fprintf(File, ",\"snapshot_serial\":%" PRIu32 ",\"host_token\":%" PRIu32
+                    ",\"session_generation\":%" PRIu32 ",\"configuration_generation\":%" PRIu32
+                    ",\"observed_configuration_word\":\"0x%010" PRIx64 "\",\"rate_code\":%" PRIu32
+                    ",\"overflow\":%s",
+              DDC->SnapshotSerial, DDC->HostToken, DDC->SessionGeneration,
+              DDC->ConfigurationGeneration, DDC->ObservedConfigurationWord,
+              DDC->RateCode, DDC->Overflow ? "true" : "false");
+    for (Counter = 0; Counter < RXC1_COUNTER_COUNT; Counter++)
+    {
+      if (DDC->Status == eRXC1Valid)
+        fprintf(File, ",\"%s\":\"%" PRIu64 "\"", Fields[Counter], DDC->Counters[Counter]);
+      else
+        fprintf(File, ",\"%s\":null", Fields[Counter]);
+    }
+    fputc('}', File);
+  }
+  fputs("]}\n", File);
 }
 
 static void AppendCounterJSON(FILE *File)
@@ -558,6 +617,15 @@ void P23PerfTelemetrySetFPGAADCV30(const TFPGAADCV30Snapshot *Snapshot)
 
   pthread_mutex_lock(&g_perf_mutex);
   g_perf_state.FPGAADCV30 = *Snapshot;
+  pthread_mutex_unlock(&g_perf_mutex);
+}
+
+void P23PerfTelemetrySetRXCounterV31(const TRXC1Snapshot *Snapshot)
+{
+  if (Snapshot == NULL)
+    return;
+  pthread_mutex_lock(&g_perf_mutex);
+  g_perf_state.RXCounterV31 = *Snapshot;
   pthread_mutex_unlock(&g_perf_mutex);
 }
 
@@ -973,6 +1041,7 @@ void P23PerfTelemetryMaybeWrite(void)
   P23PerfTelemetryWriteSpeakerPacingJSON(File, &SpeakerPacingSnapshot);
   P23PerfTelemetryWriteFPGAADCV30JSON(File, &Snapshot.FPGAADCV30);
   P23PerfTelemetryWriteFPGAFifoV29JSON(File, &Snapshot.FPGAFifoV29);
+  RXC1WriteJSON(File, &Snapshot.RXCounterV31);
   fprintf(File, "  },\n");
 
   AppendCounterJSON(File);

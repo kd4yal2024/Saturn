@@ -665,6 +665,12 @@
         <div id="p23-fpga-fifo-v29-summary" class="summary" style="margin-top:14px;" aria-live="polite">
           V29 FPGA FIFO telemetry: waiting for a live P2 sample.
         </div>
+        <div id="p23-per-ddc-almost-full-summary" class="summary" style="margin-top:8px;" aria-live="polite">
+          Direct-XDMA per-DDC almost-full telemetry: waiting for a live Bridge sample.
+        </div>
+        <div id="p23-rx-counter-v31-summary" class="summary" style="margin-top:8px;" aria-live="polite">
+          Receiver counter snapshots: unavailable until an RXC1-capable image and acquisition owner are installed.
+        </div>
         <div id="p23-fpga-adc-v30-summary" class="summary" style="margin-top:8px;" aria-live="polite">
           V30 FPGA ADC episode telemetry: waiting for a live P2 sample.
         </div>
@@ -1458,6 +1464,110 @@ function updateFpgaFifoV29Summary(perf){
   if (element) element.textContent = `V29 FPGA FIFO telemetry: ${presentation.summary}. ${presentation.detail}`;
   return presentation;
 }
+/* PER_DDC_ALMOST_FULL_PRESENTATION_BEGIN */
+function perDdcAlmostFullPresentation(value, monitor){
+  const integer = (input)=>input === null || input === undefined || !Number.isFinite(Number(input))
+    ? 'n/a' : String(Math.round(Number(input)));
+  const mask = (input)=>input === null || input === undefined || !Number.isFinite(Number(input))
+    ? 'unavailable' : `0x${(Number(input) >>> 0).toString(16).toUpperCase().padStart(3, '0')}`;
+  if (!value || value.status === 'unavailable'){
+    return { state:'unavailable', summary:'unavailable', detail:'Requires a telemetry-enabled Direct-XDMA Bridge.' };
+  }
+  const startup = value.startup || {};
+  const startupMask = startup.status === 'ok' ? mask(startup.mask) : 'unavailable';
+  const observations = Array.from({ length:10 }, (_, ddc)=>`DDC${ddc} ${integer(value.observations?.[`ddc${ddc}`])}`).join(' · ');
+  const current = value.status === 'ok' ? `last window ${mask(value.last_mask)}`
+    : (value.status === 'read_error' ? 'latest read failed; last mask unknown' : 'no steady-state read yet');
+  const threshold = integer(monitor?.threshold_words);
+  return {
+    state:value.status,
+    summary:`${current} · successful reads ${integer(value.successful_reads)} · failures ${integer(value.read_failures)}`,
+    detail:`0x6000 read-to-clear; counts are observed windows, not exact pulses or lost samples | startup/reset mask ${startupMask} (${startup.status || 'unavailable'}, ${integer(startup.after_fifo_reset_us)} µs after FIFO reset, ${integer(startup.after_enable_us)} µs after enable, before DMA reader; ambiguous, excluded from steady counts) | ${observations} | 0x9000 threshold ${threshold} words (Bridge session); seen-empty ${integer(monitor?.seen_empty_observations)} including ${integer(monitor?.startup_seen_empty_observations)} startup; bit 29 is not a DMA underflow | Bridge-session polled HWM ${integer(monitor?.poll_high_water_words)} words; V29 extrema are FPGA boot-lifetime`,
+  };
+}
+/* PER_DDC_ALMOST_FULL_PRESENTATION_END */
+function updatePerDdcAlmostFullSummary(perf){
+  const gauges = perf?.app_telemetry?.current?.gauges || {};
+  const presentation = perDdcAlmostFullPresentation(gauges.per_ddc_almost_full, gauges.direct_xdma_fifo_monitor);
+  const element = $('p23-per-ddc-almost-full-summary');
+  if (element) element.textContent = `Direct-XDMA per-DDC almost-full telemetry: ${presentation.summary}. ${presentation.detail}`;
+  return presentation;
+}
+/* RX_COUNTER_V31_PRESENTATION_BEGIN */
+function rxCounterV31Presentation(value, activeBackend){
+  if (!value || value.schema !== 'rxc1-v1'){
+    return { state:'unavailable', summary:'unavailable', detail:'No RXC1-capable image/acquisition owner; no loss count is inferred.' };
+  }
+  const backend = value.source_backend === 'p2' || value.source_backend === 'xdma'
+    ? value.source_backend : 'unknown';
+  if ((activeBackend === 'p2' || activeBackend === 'xdma') && backend !== activeBackend){
+    return { state:'unavailable', summary:'unavailable', detail:`Stale ${backend} reading does not belong to active ${activeBackend} backend; no loss count is inferred.` };
+  }
+  if (backend === 'unknown' || !['valid', 'partial'].includes(value.status)){
+    return { state:'unavailable', summary:'unavailable', detail:`Acquisition ${String(value.status || 'missing')} from ${backend}; no loss count is inferred.` };
+  }
+  const sampledAt = Number(value.sampled_at_ms);
+  const ageMs = Date.now() - sampledAt;
+  if (!Number.isFinite(sampledAt) || sampledAt <= 0 || ageMs < 0 || ageMs > 30000){
+    return { state:'unavailable', summary:'unavailable', detail:'RXC1 sample timestamp is missing or more than 30 s old; no current loss count is inferred.' };
+  }
+  const decimal = (input)=>typeof input === 'string' && /^\d+$/.test(input)
+    && BigInt(input) <= 18446744073709551615n ? input : 'unavailable';
+  const items = Array.isArray(value.ddc) ? value.ddc : [];
+  const counterFields = ['accepted_pre_fir_pairs', 'refused_pre_fir_pair_candidates',
+    'accepted_clamped_iq_components', 'partial_ready_anomalies', 'one_sided_valid_anomalies'];
+  const complete = (item)=>item?.status === 'valid'
+    && counterFields.every((field)=>decimal(item[field]) !== 'unavailable')
+    && Number.isInteger(item.receiver) && item.receiver >= 0 && item.receiver < 10
+    && Number.isInteger(item.snapshot_serial) && item.snapshot_serial > 0
+    && Number.isInteger(item.host_token) && item.host_token > 0
+    && Number.isInteger(item.session_generation) && item.session_generation >= 0
+    && Number.isInteger(item.configuration_generation) && item.configuration_generation > 0
+    && Number.isInteger(item.rate_code) && item.rate_code >= 0 && item.rate_code <= 7
+    && typeof item.observed_configuration_word === 'string'
+    && /^0x[0-9a-f]+$/i.test(item.observed_configuration_word)
+    && typeof item.overflow === 'boolean'
+    && item.exact === !item.overflow;
+  const completeItems = items.filter(complete).sort((a,b)=>a.receiver-b.receiver);
+  const anchor = completeItems[0];
+  const coherent = completeItems.every((item, index)=>item.host_token === anchor?.host_token
+    && item.session_generation === anchor?.session_generation
+    && (index === 0 || item.receiver > completeItems[index-1].receiver
+      && item.snapshot_serial > completeItems[index-1].snapshot_serial));
+  const validReceivers = new Set(coherent ? completeItems.map((item)=>item.receiver) : []);
+  const detail = items.map((item)=>{
+    const id = Number.isInteger(item?.receiver) && item.receiver >= 0 && item.receiver < 10
+      ? `DDC${item.receiver}` : 'DDC?';
+    if (!complete(item) || !coherent) return `${id} unavailable (${String(item?.status === 'valid' ? 'malformed or mixed-session snapshot' : item?.status || 'no reading')})`;
+    return `${id} pre-FIR pairs not accepted ${decimal(item.refused_pre_fir_pair_candidates)}`
+      + ` · accepted pairs ${decimal(item.accepted_pre_fir_pairs)}`
+      + ` · accepted clamped I/Q components ${decimal(item.accepted_clamped_iq_components)}`
+      + ` · partial-ready ${decimal(item.partial_ready_anomalies)}`
+      + ` · one-sided-valid ${decimal(item.one_sided_valid_anomalies)}`
+      + ` · session ${item.session_generation ?? 'unavailable'}`
+      + ` · config ${item.configuration_generation ?? 'unavailable'} (${item.observed_configuration_word || 'unavailable'})`
+      + ` · rate code ${item.rate_code ?? 'unavailable'}`
+      + ` · snapshot ${item.snapshot_serial ?? 'unavailable'}`
+      + ` · ${item.overflow ? 'saturated; inexact' : 'exact'}`;
+  }).join(' | ');
+  const status = validReceivers.size === 10 ? 'valid'
+    : validReceivers.size > 0 ? 'partial' : 'unavailable';
+  const age = `${Math.round(ageMs / 1000)} s old`;
+  return {
+    state:status,
+    summary:`${backend} acquisition · ${validReceivers.size}/10 DDC snapshots valid · ${age} · read failures ${value.host_acquisition_failures ?? 'unavailable'}`,
+    detail:detail || 'No DDC snapshots; an absent reading is not zero loss.',
+  };
+}
+/* RX_COUNTER_V31_PRESENTATION_END */
+function updateRxCounterV31Summary(perf){
+  const presentation = rxCounterV31Presentation(
+    perf?.app_telemetry?.current?.gauges?.rx_counter_v31,
+    perf?.workload?.selected_app);
+  const element = $('p23-rx-counter-v31-summary');
+  if (element) element.textContent = `Receiver counter snapshots: ${presentation.summary}. ${presentation.detail}`;
+  return presentation;
+}
 /* FPGA_ADC_V30_PRESENTATION_BEGIN */
 function fpgaAdcV30Presentation(value, firmwareVersion){
   const firmware = Number(firmwareVersion);
@@ -1670,6 +1780,9 @@ function buildPerfSnapshot(){
     current_sample: jsonSafe(latestDerivedPerf),
     fpga_image_identity: jsonSafe(latestP23Perf?.app_telemetry?.current?.fpga || null),
     fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
+    per_ddc_almost_full: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.per_ddc_almost_full || null),
+    rx_counter_v31: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.rx_counter_v31 || null),
+    direct_xdma_fifo_monitor: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.direct_xdma_fifo_monitor || null),
     fpga_adc_v30: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_adc_v30 || null),
     direct_xdma_duc: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.direct_xdma_duc || null),
     speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
@@ -1709,6 +1822,9 @@ function buildBaselineSnapshot(){
     } : null),
     latest_fpga_image_identity: jsonSafe(latestP23Perf?.app_telemetry?.current?.fpga || null),
     latest_fpga_fifo_v29: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_fifo_v29 || null),
+    latest_per_ddc_almost_full: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.per_ddc_almost_full || null),
+    latest_rx_counter_v31: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.rx_counter_v31 || null),
+    latest_direct_xdma_fifo_monitor: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.direct_xdma_fifo_monitor || null),
     latest_fpga_adc_v30: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.fpga_adc_v30 || null),
     latest_direct_xdma_duc: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.direct_xdma_duc || null),
     latest_speaker_pacing_diagnostics: jsonSafe(latestP23Perf?.app_telemetry?.current?.gauges?.speaker_pacing_diagnostics || null),
@@ -2978,6 +3094,8 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const ducQueue = app?.gauges?.duc_queue || {};
   const speakerQueue = app?.gauges?.speaker_underrun || {};
   const fifoV29 = fpgaFifoV29Presentation(app?.gauges?.fpga_fifo_v29, fpga?.firmware_version);
+  const perDdc = perDdcAlmostFullPresentation(app?.gauges?.per_ddc_almost_full, app?.gauges?.direct_xdma_fifo_monitor);
+  const rxCounters = rxCounterV31Presentation(app?.gauges?.rx_counter_v31, d.selectedApp);
   const adcV30 = fpgaAdcV30Presentation(app?.gauges?.fpga_adc_v30, fpga?.firmware_version);
   const directDuc = directXdmaDucPresentation(app?.gauges?.direct_xdma_duc);
   const speakerPacing = speakerPacingPresentation(app?.gauges?.speaker_pacing_diagnostics);
@@ -3081,6 +3199,8 @@ function renderPerfDashboard(d, perf, alertState, baseline){
     ducRuntimeRow,
     runtimeRow('Speaker pacing', speakerPacing.summary, speakerPacing.detail),
     runtimeRow('V29 FPGA FIFO monitor', fifoV29.summary, fifoV29.detail),
+    ...(d.selectedApp === 'xdma' ? [runtimeRow('Per-DDC almost-full · 0x6000', perDdc.summary, perDdc.detail)] : []),
+    runtimeRow('Receiver counter snapshots · RXC1', rxCounters.summary, rxCounters.detail),
     runtimeRow('Routing', `${enabledCount} DDC enabled · ${wbState}`, `${interleavedCount} interleaved · features ${featureBits} · ${formatAudioRtSummary(serviceRuntime)}`),
   ];
   const systemRows = [
@@ -3092,7 +3212,7 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   ];
   const reliabilityRows = [
     runtimeRow('Overall health', alertState.alerts.length ? alertState.alerts[0] : (activity.active ? 'Healthy · active' : 'Healthy · waiting'), alertState.alerts.slice(1).join(' · ') || (activity.active ? 'All monitored values are within current thresholds.' : 'Idle is a normal operating state and is excluded from XDMA drop alerts.')),
-    ...(d.selectedApp === 'xdma' ? [runtimeRow('Direct-XDMA integrity', directIntegrityValues.length ? `${fmtInt(directIntegrityTotal)} event(s) this interval` : 'Collecting…', `Δ header resync ${fmtInt(d.directHeaderResyncDelta)} · buffer drops ${fmtInt(d.directHostBufferDropDelta)} (${fmtBytes(d.directHostBufferDropBytesDelta)}) · discontinuities ${fmtInt(d.directHostDiscontinuityDelta)} · pool starvation ${fmtInt(d.directHostPoolStarvationDelta)} · RX FIFO thresholds ${fmtInt(d.directFifoThresholdDelta)} · almost-full ${fmtInt(d.directFifoAlmostFullDelta)} · empty observations ${fmtInt(d.directFifoEmptyObservationDelta)} · RX/TX faults ${fmtInt(d.directFifoFaultDelta)} / ${fmtInt(d.directTxFifoFaultDelta)} · WDSP resumes ${fmtInt(d.directWdspResumeDelta)} / failures ${fmtInt(d.directWdspResumeFlushFailureDelta)} | lifetime ring HWM ${fmtInt(bridge?.rx_host_ring_hwm)} / 256 · drops ${fmtInt(bridge?.host_buffer_drops)} · discontinuities ${fmtInt(bridge?.host_discontinuities)} · WDSP resume last/max ${fmtInt(bridge?.wdsp_resume_last_us)} / ${fmtInt(bridge?.wdsp_resume_max_us)} µs`)] : []),
+    ...(d.selectedApp === 'xdma' ? [runtimeRow('Direct-XDMA integrity', directIntegrityValues.length ? `${fmtInt(directIntegrityTotal)} event(s) this interval` : 'Collecting…', `Δ header resync ${fmtInt(d.directHeaderResyncDelta)} · buffer drops ${fmtInt(d.directHostBufferDropDelta)} (${fmtBytes(d.directHostBufferDropBytesDelta)}) · discontinuities ${fmtInt(d.directHostDiscontinuityDelta)} · pool starvation ${fmtInt(d.directHostPoolStarvationDelta)} · RX FIFO thresholds ${fmtInt(d.directFifoThresholdDelta)} · V29 almost-full ${fmtInt(d.directFifoAlmostFullDelta)} · seen-empty ${fmtInt(d.directFifoEmptyObservationDelta)} (not DMA underflow) · RX/TX faults ${fmtInt(d.directFifoFaultDelta)} / ${fmtInt(d.directTxFifoFaultDelta)} · WDSP resumes ${fmtInt(d.directWdspResumeDelta)} / failures ${fmtInt(d.directWdspResumeFlushFailureDelta)} | Bridge-session ring HWM ${fmtInt(bridge?.rx_host_ring_hwm)} / 256 · drops ${fmtInt(bridge?.host_buffer_drops)} · discontinuities ${fmtInt(bridge?.host_discontinuities)} · WDSP resume last/max ${fmtInt(bridge?.wdsp_resume_last_us)} / ${fmtInt(bridge?.wdsp_resume_max_us)} µs`)] : []),
     runtimeRow('Application events', appErrorValues.length ? `${fmtInt(appErrorTotal)} error event(s)` : 'Collecting…', errorBurst),
     runtimeRow('FIFO events', fifoValues.length ? `${fmtInt(fifoTotal)} event(s)` : 'Collecting…', fifoBurst),
     runtimeRow('Network integrity', Number.isFinite(networkFaults) ? `${fmtInt(networkFaults)} error/drop event(s)` : 'Collecting…', `RX errors ${fmtInt(d.ethRxErrDelta)} · RX drops ${fmtInt(d.ethRxDropDelta)} · TX errors ${fmtInt(d.ethTxErrDelta)} · TX drops ${fmtInt(d.ethTxDropDelta)}`),
@@ -3126,6 +3246,8 @@ async function loadP23Perf(){
       setPrimaryKpisHtml(kpiCard('Service', 'Offline', 'No performance samples are available.', true));
       setPerfDashboardHtml(runtimeSection('Service', 'No active process', [runtimeRow('Radio backend', 'Not running', 'Start or deploy P2app or the Saturn Bridge to resume monitoring.')], true));
       updateFpgaFifoV29Summary(perf);
+      updatePerDdcAlmostFullSummary(perf);
+      updateRxCounterV31Summary(perf);
       updateFpgaAdcV30Summary(perf);
       updateSpeakerPacingSummary(perf);
       updateAdcTelemetryOverview();
@@ -3151,6 +3273,8 @@ async function loadP23Perf(){
     benchmarkConsumeSample(perf, d);
     setTelemetryHealth(perf);
     updateFpgaFifoV29Summary(perf);
+    updatePerDdcAlmostFullSummary(perf);
+    updateRxCounterV31Summary(perf);
     updateFpgaAdcV30Summary(perf);
     updateSpeakerPacingSummary(perf);
     updateAdcTelemetryOverview();
@@ -3185,6 +3309,10 @@ async function loadP23Perf(){
     setPerfDashboardHtml(runtimeSection('Performance', 'Load failed', [runtimeRow('Telemetry endpoint', 'Unavailable', e.message)], true));
     const fifoSummary = $('p23-fpga-fifo-v29-summary');
     if (fifoSummary) fifoSummary.textContent = `V29 FPGA FIFO telemetry: unavailable. ${e.message}`;
+    const perDdcSummary = $('p23-per-ddc-almost-full-summary');
+    if (perDdcSummary) perDdcSummary.textContent = `Direct-XDMA per-DDC almost-full telemetry: unavailable. ${e.message}`;
+    const rxCounterSummary = $('p23-rx-counter-v31-summary');
+    if (rxCounterSummary) rxCounterSummary.textContent = `Receiver counter snapshots: unavailable. ${e.message}`;
     const adcV30Summary = $('p23-fpga-adc-v30-summary');
     if (adcV30Summary) adcV30Summary.textContent = `V30 FPGA ADC episode telemetry: unavailable. ${e.message}`;
     const speakerPacingSummary = $('p23-speaker-pacing-summary');

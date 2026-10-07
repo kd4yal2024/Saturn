@@ -1276,6 +1276,7 @@ int main(int argc, char *argv[])
   FPGAFifoV29GetSnapshot(&FifoV29Snapshot);
   P23PerfTelemetrySetFPGAFifoV29(&FifoV29Snapshot);
   FPGAADCV30Init(VersionInfo.FirmwareVersion);
+  RXC1Init();
   FPGAADCV30GetSnapshot(&ADCV30Snapshot);
   P23PerfTelemetrySetFPGAADCV30(&ADCV30Snapshot);
   PrintVersionInfo();

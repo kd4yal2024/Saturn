@@ -19,8 +19,8 @@ use crate::wdsp::{
 use crate::xdma::{SaturnIdentity, XdmaError};
 use crate::xdma_rx::{
     FpgaAdcV30Telemetry, FpgaFifoV29Telemetry, OperationalRxSession, RxCaptureStats,
-    DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ, OPERATIONAL_RX_BUFFER_BYTES,
-    OPERATIONAL_RX_BUFFER_COUNT, RUNTIME_HOST_DRAIN_MAX_READS,
+    DDC_ALMOST_FULL_CHANNELS, DIRECT_DDC_INDEX, DIRECT_DDC_SAMPLE_RATE_KHZ,
+    OPERATIONAL_RX_BUFFER_BYTES, OPERATIONAL_RX_BUFFER_COUNT, RUNTIME_HOST_DRAIN_MAX_READS,
 };
 use crate::xdma_telemetry::{
     record_runtime_performance, record_runtime_readiness, LatencyHistogram, TelemetryValue,
@@ -44,6 +44,18 @@ const IDLE_POLL: Duration = Duration::from_micros(250);
 const READINESS_PERIOD: Duration = Duration::from_secs(1);
 const STATUS_PERIOD: Duration = Duration::from_secs(5);
 const PERF_PERIOD: Duration = Duration::from_secs(1);
+const PER_DDC_ALMOST_FULL_FIELDS: [&str; DDC_ALMOST_FULL_CHANNELS] = [
+    "ddc0_almost_full_observations",
+    "ddc1_almost_full_observations",
+    "ddc2_almost_full_observations",
+    "ddc3_almost_full_observations",
+    "ddc4_almost_full_observations",
+    "ddc5_almost_full_observations",
+    "ddc6_almost_full_observations",
+    "ddc7_almost_full_observations",
+    "ddc8_almost_full_observations",
+    "ddc9_almost_full_observations",
+];
 const DIAG_PERIOD: Duration = Duration::from_secs(5);
 const MEDIA_DEMAND_REFRESH: Duration = Duration::from_millis(10);
 const IDLE_METER_PERIOD: Duration = Duration::from_millis(100);
@@ -789,6 +801,12 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 let client = tci.client_snapshot();
                 media_demand = tci.media_demand();
                 let snapshot_started = Instant::now();
+                if let Err(error) = rx.sample_per_ddc_almost_full_telemetry() {
+                    eprintln!(
+                        "saturn-bridge: per-DDC almost-full telemetry read failed without interrupting RX: {error}"
+                    );
+                }
+                rx.sample_rx_counter_v31();
                 if let Err(error) = rx.sample_extended_telemetry() {
                     eprintln!(
                         "saturn-bridge: extended FPGA telemetry read failed without interrupting RX: {error}"
@@ -1442,6 +1460,7 @@ fn write_performance(
     let dma_reads_per_sec = stats.dma_reads.saturating_sub(previous.dma_reads) as f64 / elapsed;
     let dma_bytes_per_sec = stats.dma_bytes.saturating_sub(previous.dma_bytes) as f64 / elapsed;
     let iq_pairs_per_sec = stats.samples.saturating_sub(previous.samples) as f64 / elapsed;
+    let per_ddc_almost_full = rx.per_ddc_almost_full_telemetry();
     let build_dirty = env!("SATURN_BRIDGE_GIT_DIRTY") == "true";
     let timing_metrics = [
         stats.dma_read_latency.fields("rx_dma_read_session"),
@@ -1498,6 +1517,10 @@ fn write_performance(
         status,
         &[
             ("pid", TelemetryValue::number(std::process::id())),
+            (
+                "rx_counter_v31",
+                TelemetryValue::raw_json(rx.rx_counter_v31_json()),
+            ),
             (
                 "build_git_sha",
                 TelemetryValue::text(env!("SATURN_BRIDGE_GIT_SHA")),
@@ -1772,6 +1795,11 @@ fn write_performance(
             ),
             ("header_errors", TelemetryValue::number(stats.header_errors)),
             ("rx_fifo_hwm", TelemetryValue::number(stats.fifo_depth_hwm)),
+            ("rx_fifo_hwm_scope", TelemetryValue::text("bridge_session")),
+            (
+                "rx_fifo_monitor_threshold_words",
+                TelemetryValue::number(rx.fifo_monitor_threshold_words()),
+            ),
             (
                 "rx_fifo_thresholds",
                 TelemetryValue::number(stats.fifo_over_threshold),
@@ -1785,8 +1813,54 @@ fn write_performance(
                 TelemetryValue::number(stats.fifo_empty_observations),
             ),
             (
+                "rx_fifo_startup_empty_observations",
+                TelemetryValue::number(stats.fifo_startup_empty_observations),
+            ),
+            (
                 "rx_fifo_faults",
                 TelemetryValue::number(stats.fifo_overflows.saturating_add(stats.fifo_underflows)),
+            ),
+            (
+                "per_ddc_almost_full_status",
+                TelemetryValue::text(per_ddc_almost_full.status.label()),
+            ),
+            (
+                "per_ddc_almost_full_last_mask",
+                TelemetryValue::optional_number(per_ddc_almost_full.last_mask),
+            ),
+            (
+                "per_ddc_almost_full_startup_status",
+                TelemetryValue::text(per_ddc_almost_full.startup_status.label()),
+            ),
+            (
+                "per_ddc_almost_full_startup_mask",
+                TelemetryValue::optional_number(per_ddc_almost_full.startup_mask),
+            ),
+            (
+                "per_ddc_almost_full_startup_sampled_at_ms",
+                TelemetryValue::optional_number(per_ddc_almost_full.startup_sampled_at_ms),
+            ),
+            (
+                "per_ddc_almost_full_startup_fifo_reset_completed_at_ms",
+                TelemetryValue::optional_number(
+                    per_ddc_almost_full.startup_fifo_reset_completed_at_ms,
+                ),
+            ),
+            (
+                "per_ddc_almost_full_startup_after_fifo_reset_us",
+                TelemetryValue::optional_number(per_ddc_almost_full.startup_after_fifo_reset_us),
+            ),
+            (
+                "per_ddc_almost_full_startup_after_enable_us",
+                TelemetryValue::optional_number(per_ddc_almost_full.startup_after_enable_us),
+            ),
+            (
+                "per_ddc_almost_full_successful_reads",
+                TelemetryValue::number(per_ddc_almost_full.successful_reads),
+            ),
+            (
+                "per_ddc_almost_full_read_failures",
+                TelemetryValue::number(per_ddc_almost_full.read_failures),
             ),
             (
                 "rx_host_ring_hwm",
@@ -2027,6 +2101,17 @@ fn write_performance(
             spectrum_metrics
                 .iter()
                 .map(|&(name, value)| (name, TelemetryValue::number(value))),
+        )
+        .chain(
+            PER_DDC_ALMOST_FULL_FIELDS
+                .iter()
+                .enumerate()
+                .map(|(ddc, name)| {
+                    (
+                        *name,
+                        TelemetryValue::number(per_ddc_almost_full.observations[ddc]),
+                    )
+                }),
         )
         .collect::<Vec<_>>(),
     )

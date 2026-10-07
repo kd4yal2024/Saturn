@@ -81,6 +81,8 @@ pub(crate) enum TelemetryValue {
     Bool(bool),
     Number(String),
     Text(String),
+    RawJson(String),
+    Null,
 }
 
 impl TelemetryValue {
@@ -96,6 +98,15 @@ impl TelemetryValue {
         Self::Text(value.into())
     }
 
+    /// Only for JSON assembled from fixed field names and numeric data in this process.
+    pub(crate) fn raw_json(value: String) -> Self {
+        Self::RawJson(value)
+    }
+
+    pub(crate) fn optional_number(value: Option<impl Display>) -> Self {
+        value.map_or(Self::Null, Self::number)
+    }
+
     fn to_json(&self) -> String {
         match self {
             Self::Bool(value) => value.to_string(),
@@ -107,6 +118,8 @@ impl TelemetryValue {
                 }
             }
             Self::Text(value) => json_string(value),
+            Self::RawJson(value) => value.clone(),
+            Self::Null => "null".to_string(),
         }
     }
 }
@@ -365,6 +378,10 @@ mod tests {
                 ("fifo_lwm", TelemetryValue::number(2342)),
                 ("rf_cleanup", TelemetryValue::boolean(true)),
                 ("antenna", TelemetryValue::text("ANT1")),
+                (
+                    "unavailable_mask",
+                    TelemetryValue::optional_number(None::<u32>),
+                ),
             ],
         );
         assert!(document.contains("\"phase\": 5"));
@@ -372,6 +389,25 @@ mod tests {
         assert!(document.contains("\"fifo_lwm\": 2342"));
         assert!(document.contains("\"rf_cleanup\": true"));
         assert!(document.contains("\"antenna\": \"ANT1\""));
+        assert!(document.contains("\"unavailable_mask\": null"));
+    }
+
+    #[test]
+    fn receiver_counter_object_is_not_quoted_as_text() {
+        let payload = "{\"schema\":\"rxc1-v1\",\"status\":\"unsupported\",\"ddc\":[]}";
+        let document = serialize_snapshot(
+            0,
+            "runtime",
+            "ready",
+            "none",
+            None,
+            &[(
+                "rx_counter_v31",
+                TelemetryValue::raw_json(payload.to_string()),
+            )],
+        );
+        assert!(document.contains(&format!("\"rx_counter_v31\": {payload}")));
+        assert!(!document.contains("\"rx_counter_v31\": \"{"));
     }
 
     #[test]

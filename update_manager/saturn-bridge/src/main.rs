@@ -3,6 +3,7 @@ mod display_spectrum;
 mod fftw_wisdom;
 mod p2;
 mod radio_model;
+mod rx_counter_v31;
 mod rx_thread;
 mod satp;
 mod satp_control;

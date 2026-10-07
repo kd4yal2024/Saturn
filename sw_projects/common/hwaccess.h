@@ -58,11 +58,16 @@ int DMAReadFromFPGA(int fd, unsigned char*DestData, uint32_t Length, uint32_t AX
 //
 uint32_t RegisterRead(uint32_t Address);
 
+// Checked AXI-Lite access for telemetry. False includes a closed device,
+// syscall error, or short transfer; callers must mark the reading invalid.
+bool RegisterReadChecked(uint32_t Address, uint32_t *Value);
+
 
 //
 // single 32 bit register write, to AXI-Lite bus
 //
 void RegisterWrite(uint32_t Address, uint32_t Data);
+bool RegisterWriteChecked(uint32_t Address, uint32_t Data);
 
 
 #endif

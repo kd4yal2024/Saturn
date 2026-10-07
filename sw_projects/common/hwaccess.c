@@ -156,6 +156,20 @@ uint32_t RegisterRead(uint32_t Address)
     return result;
 }
 
+bool RegisterReadChecked(uint32_t Address, uint32_t *Value)
+{
+    uint32_t result;
+    ssize_t nread;
+
+    if ((register_fd < 0) || (Value == NULL))
+        return false;
+    nread = pread(register_fd, &result, sizeof(result), (off_t)Address);
+    if (nread != (ssize_t)sizeof(result))
+        return false;
+    *Value = result;
+    return true;
+}
+
 //
 // 32 bit register write over the AXILite bus
 //
@@ -172,4 +186,11 @@ void RegisterWrite(uint32_t Address, uint32_t Data)
         printf("ERROR: Write: addr=0x%08X   error=%s\n",Address, strerror(errno));
 }
 
+bool RegisterWriteChecked(uint32_t Address, uint32_t Data)
+{
+    if (register_fd < 0)
+        return false;
+    return pwrite(register_fd, &Data, sizeof(Data), (off_t)Address)
+           == (ssize_t)sizeof(Data);
+}
 

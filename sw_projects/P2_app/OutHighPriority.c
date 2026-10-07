@@ -36,6 +36,7 @@
 #include "../common/p23_perf_telemetry.h"
 #include "../common/fpga_fifo_v29.h"
 #include "../common/fpga_adc_v30.h"
+#include "../common/fpga_rx_counter_v31.h"
 #include "LDGATU.h"
 
 static void UpdateFPGAFifoV29Telemetry(void)
@@ -54,6 +55,14 @@ static void UpdateFPGAADCV30Telemetry(void)
   (void)FPGAADCV30MaybeSample();
   FPGAADCV30GetSnapshot(&Snapshot);
   P23PerfTelemetrySetFPGAADCV30(&Snapshot);
+}
+
+static void UpdateRXC1Telemetry(void)
+{
+  TRXC1Snapshot Snapshot;
+  RXC1MaybeSample();
+  RXC1GetSnapshot(&Snapshot);
+  P23PerfTelemetrySetRXCounterV31(&Snapshot);
 }
 
 #define ADC_PEAK_TELEMETRY_ENABLE_FILE "/dev/shm/saturn_p23_adc_peak_telemetry.enabled"
@@ -201,6 +210,7 @@ void *OutgoingHighPriority(void *arg)
       P23PerfTelemetrySetDieTempC(GetDieTempC());
       UpdateFPGAFifoV29Telemetry();
       UpdateFPGAADCV30Telemetry();
+      UpdateRXC1Telemetry();
       P23PerfTelemetryMaybeWrite();
       // Port rebinding is handled centrally by the p2app control plane.
       usleep(100);
@@ -345,6 +355,7 @@ void *OutgoingHighPriority(void *arg)
       P23PerfTelemetrySetDieTempC(GetDieTempC());
       UpdateFPGAFifoV29Telemetry();
       UpdateFPGAADCV30Telemetry();
+      UpdateRXC1Telemetry();
       P23PerfTelemetryMaybeWrite();
       //
       // now we need to sleep for 1ms (in TX) or 200ms (not in TX)

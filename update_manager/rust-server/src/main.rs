@@ -3132,6 +3132,7 @@ fn bridge_perf_file_telemetry(
     let metrics_value = serde_json::Value::Object(metrics.clone());
     let fifo_v29 = serde_json::json!({
         "available": boolean("fifo_v29_available").unwrap_or(false),
+        "extrema_scope": "fpga_boot",
         "status": text("fifo_v29_status").unwrap_or("unavailable"),
         "build_id": integer("fifo_v29_build_id").unwrap_or(0),
         "snapshot_valid": boolean("fifo_v29_snapshot_valid").unwrap_or(false),
@@ -3217,6 +3218,50 @@ fn bridge_perf_file_telemetry(
         "startup_underflows": integer("tx_fifo_startup_underflows").unwrap_or(0),
         "host_queue_instrumented": false,
     });
+    // Register 0x6000 is read-to-clear. A set bit means its DDC was almost
+    // full at least once during a successful read window, not a pulse count.
+    // Preserve nulls when an older Bridge has no data or the latest read failed.
+    let per_ddc_almost_full = serde_json::json!({
+        "source_register": "0x6000",
+        "semantics": "read_to_clear_observation_windows",
+        "status": text("per_ddc_almost_full_status").unwrap_or("unavailable"),
+        "last_mask": integer("per_ddc_almost_full_last_mask"),
+        "startup": {
+            "context": "post_stream_enable_and_fifo_reset_before_dma_reader_start",
+            "classification": "ambiguous_startup_activity_not_counted_as_steady_state",
+            "status": text("per_ddc_almost_full_startup_status").unwrap_or("unavailable"),
+            "mask": integer("per_ddc_almost_full_startup_mask"),
+            "sampled_at_ms": integer("per_ddc_almost_full_startup_sampled_at_ms"),
+            "fifo_reset_completed_at_ms": integer("per_ddc_almost_full_startup_fifo_reset_completed_at_ms"),
+            "after_fifo_reset_us": integer("per_ddc_almost_full_startup_after_fifo_reset_us"),
+            "after_enable_us": integer("per_ddc_almost_full_startup_after_enable_us"),
+        },
+        "successful_reads": integer("per_ddc_almost_full_successful_reads"),
+        "read_failures": integer("per_ddc_almost_full_read_failures"),
+        "observations": {
+            "ddc0": integer("ddc0_almost_full_observations"),
+            "ddc1": integer("ddc1_almost_full_observations"),
+            "ddc2": integer("ddc2_almost_full_observations"),
+            "ddc3": integer("ddc3_almost_full_observations"),
+            "ddc4": integer("ddc4_almost_full_observations"),
+            "ddc5": integer("ddc5_almost_full_observations"),
+            "ddc6": integer("ddc6_almost_full_observations"),
+            "ddc7": integer("ddc7_almost_full_observations"),
+            "ddc8": integer("ddc8_almost_full_observations"),
+            "ddc9": integer("ddc9_almost_full_observations"),
+        },
+    });
+    let direct_xdma_fifo_monitor = serde_json::json!({
+        "source_register": "0x9000",
+        "threshold_register": "0x9010",
+        "threshold_words": integer("rx_fifo_monitor_threshold_words"),
+        "threshold_policy": "programmed_and_read_back_by_bridge_at_session_start",
+        "poll_high_water_words": integer("rx_fifo_hwm"),
+        "poll_high_water_scope": text("rx_fifo_hwm_scope").unwrap_or("unavailable"),
+        "seen_empty_observations": integer("rx_fifo_empty_observations"),
+        "startup_seen_empty_observations": integer("rx_fifo_startup_empty_observations"),
+        "bit29_semantics": "seen_empty_since_previous_read_not_dma_underflow",
+    });
 
     Ok(serde_json::json!({
         "snapshot_file": path.display().to_string(),
@@ -3241,6 +3286,12 @@ fn bridge_perf_file_telemetry(
                 "fpga_fifo_v29": fifo_v29,
                 "fpga_adc_v30": adc_v30,
                 "direct_xdma_duc": direct_xdma_duc,
+                "per_ddc_almost_full": per_ddc_almost_full,
+                "rx_counter_v31": metrics.get("rx_counter_v31")
+                    .filter(|value| value["schema"] == "rxc1-v1"
+                        && value["source_backend"] == "xdma")
+                    .cloned(),
+                "direct_xdma_fifo_monitor": direct_xdma_fifo_monitor,
             },
             "counters": {
                 "ddc_packets": integer("dma_reads").unwrap_or(0),
@@ -5259,8 +5310,31 @@ mod tests {
                     "header_resync":2,"host_buffer_drops":3,
                     "host_buffer_drop_bytes":12288,"host_discontinuities":1,
                     "host_pool_starvations":0,"rx_fifo_thresholds":4,
-                    "rx_fifo_almost_full":0,"rx_fifo_empty_observations":0,
+                    "rx_fifo_almost_full":0,"rx_fifo_empty_observations":3,
+                    "rx_fifo_startup_empty_observations":1,
+                    "rx_fifo_monitor_threshold_words":16384,
+                    "rx_fifo_hwm":754,"rx_fifo_hwm_scope":"bridge_session",
                     "rx_fifo_faults":0,
+                    "per_ddc_almost_full_status":"read_error",
+                    "per_ddc_almost_full_last_mask":null,
+                    "per_ddc_almost_full_startup_status":"ok",
+                    "per_ddc_almost_full_startup_mask":64,
+                    "per_ddc_almost_full_startup_sampled_at_ms":9000,
+                    "per_ddc_almost_full_startup_fifo_reset_completed_at_ms":8998,
+                    "per_ddc_almost_full_startup_after_fifo_reset_us":2400,
+                    "per_ddc_almost_full_startup_after_enable_us":1200,
+                    "per_ddc_almost_full_successful_reads":25,
+                    "per_ddc_almost_full_read_failures":1,
+                    "ddc0_almost_full_observations":0,
+                    "ddc6_almost_full_observations":2,
+                    "rx_counter_v31":{"schema":"rxc1-v1","source_backend":"xdma",
+                        "status":"partial","sampled_at_ms":10000,"host_acquisition_failures":1,
+                        "ddc":[{"receiver":6,"status":"valid","snapshot_serial":7,
+                            "host_token":123,"session_generation":2,"configuration_generation":3,
+                            "observed_configuration_word":"0x0000000001","rate_code":4,
+                            "accepted_pre_fir_pairs":"100","refused_pre_fir_pair_candidates":"9",
+                            "accepted_clamped_iq_components":"11","partial_ready_anomalies":"2",
+                            "one_sided_valid_anomalies":"1","overflow":false,"exact":true}]},
                     "wdsp_resume_count":2,"wdsp_resume_flush_failures":0,
                     "wdsp_resume_last_us":6100,"wdsp_resume_max_us":6400,
                     "fifo_v29_available":true,"fifo_v29_status":"available",
@@ -5333,6 +5407,28 @@ mod tests {
             telemetry["current"]["gauges"]["direct_xdma_duc"]["host_queue_instrumented"],
             false
         );
+        let per_ddc = &telemetry["current"]["gauges"]["per_ddc_almost_full"];
+        let rx_counter = &telemetry["current"]["gauges"]["rx_counter_v31"];
+        assert_eq!(rx_counter["source_backend"], "xdma");
+        assert_eq!(rx_counter["ddc"][0]["receiver"], 6);
+        assert_eq!(rx_counter["ddc"][0]["refused_pre_fir_pair_candidates"], "9");
+        assert_eq!(rx_counter["ddc"][0]["accepted_clamped_iq_components"], "11");
+        assert_eq!(per_ddc["source_register"], "0x6000");
+        assert_eq!(per_ddc["status"], "read_error");
+        assert!(per_ddc["last_mask"].is_null());
+        assert_eq!(per_ddc["read_failures"], 1);
+        assert_eq!(per_ddc["startup"]["mask"], 64);
+        assert_eq!(per_ddc["startup"]["fifo_reset_completed_at_ms"], 8998);
+        assert_eq!(per_ddc["startup"]["after_fifo_reset_us"], 2400);
+        assert_eq!(per_ddc["startup"]["after_enable_us"], 1200);
+        assert_eq!(per_ddc["observations"]["ddc0"], 0);
+        assert_eq!(per_ddc["observations"]["ddc6"], 2);
+        assert!(per_ddc["observations"]["ddc9"].is_null());
+        let monitor = &telemetry["current"]["gauges"]["direct_xdma_fifo_monitor"];
+        assert_eq!(monitor["threshold_words"], 16_384);
+        assert_eq!(monitor["poll_high_water_scope"], "bridge_session");
+        assert_eq!(monitor["seen_empty_observations"], 3);
+        assert_eq!(monitor["startup_seen_empty_observations"], 1);
         assert_eq!(
             telemetry["current"]["gauges"]["bridge"]["build_git_sha"],
             "d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c"

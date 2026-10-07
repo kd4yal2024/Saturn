@@ -7,6 +7,7 @@
 
 #include "fpga_fifo_v29.h"
 #include "fpga_adc_v30.h"
+#include "fpga_rx_counter_v31.h"
 #include "version.h"
 
 #define P23_PERF_MAX_DDC 10U
@@ -115,6 +116,7 @@ void P23PerfTelemetrySetFIFOSnapshot(uint32_t DDCSamples, uint32_t MicSamples,
 void P23PerfTelemetrySetFPGAFifoV29(const TFPGAFifoV29Snapshot *Snapshot);
 void P23PerfTelemetryWriteFPGAFifoV29JSON(FILE *File, const TFPGAFifoV29Snapshot *Snapshot);
 void P23PerfTelemetrySetFPGAADCV30(const TFPGAADCV30Snapshot *Snapshot);
+void P23PerfTelemetrySetRXCounterV31(const TRXC1Snapshot *Snapshot);
 void P23PerfTelemetryWriteFPGAADCV30JSON(FILE *File, const TFPGAADCV30Snapshot *Snapshot);
 void P23PerfTelemetrySetADCSnapshot(uint16_t ADC1Peak, uint16_t ADC2Peak, uint8_t OverflowBits);
 void P23PerfTelemetrySetDUCQueueContext(uint32_t QueueFrames, uint32_t FIFOFrames,
