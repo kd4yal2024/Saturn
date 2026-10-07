@@ -1414,9 +1414,10 @@ function fpgaImageIdentityPresentation(fpga){
     const version = String(fpga.firmware_display || 'firmware unknown');
     const filter = String(fpga.rx_filter || 'RX filter unknown');
     const saturated = version === '1.31.001' && filter === '22/Q24 saturated';
+    const rxc1 = version === '1.31.002' && filter === '22/Q24 saturated';
     return {
       summary:`${version} · ${filter}`,
-      detail:`USR_ACCESS ${buildId} · exact host-manifest match${saturated ? ' · 24-bit RX I/Q saturating output; no clamp-event counter is exported' : ''}.`,
+      detail:`USR_ACCESS ${buildId} · exact host-manifest match${saturated ? ' · 24-bit RX I/Q saturating output; no clamp-event counter is exported' : ''}${rxc1 ? ' · 24-bit RX I/Q saturating output; RXC1-capable image (check per-DDC freshness below)' : ''}.`,
     };
   }
   if (status === 'unidentified'){

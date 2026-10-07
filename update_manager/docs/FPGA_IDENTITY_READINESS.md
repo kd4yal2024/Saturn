@@ -53,4 +53,21 @@ The 1.31 BIT SHA-256 is `1c8d19a9f253cdc8b36a7ec99bc5d5290f5843680e1435c42d5bcb8
 | Saturn Go identity | Exact verified match gives `1.30.002`, `22/Q24` | Exact `0x53460003` and major/minor 1/31 match gives `1.31.001`, `22/Q24 saturated` |
 | XDMA kernel module | Generic register/DMA transport | No driver version gate or wire-format change; no driver edit justified by this firmware delta |
 
-Offline checks for this staged host set: Bridge unit tests cover existing 1.30 acceptance and exact-ID 1.31 RF-TX permission while rejecting unknown minor-31 IDs; P2 tests verify major-1 compatibility on minor 31 and exercise the unchanged FIFO and ADC marker contracts; Saturn Go tests identify 1.31 only for the exact ID and version pair; web tests distinguish identified 1.30.002, identified 1.31.001, and unknown images. This removes the Bridge host's minor-31 TX hold; it does **not** validate RF output or qualify the physical radio. The P2 path was already able to transmit on major-1/minor-31 firmware, and the live G2 currently runs P2. The updated Bridge, identity manifest, and telemetry display are not yet deployed there. Before a radio TX test, obtain the combined firmware/host review, use a supervised dummy-load setup and bounded low-power keying procedure, and keep the exact 1.30.002 restoration image available. No radio access or RF transmission was performed for this code change.
+Offline checks for this staged host set: Bridge unit tests cover existing 1.30 acceptance and exact-ID 1.31 RF-TX permission while rejecting unknown minor-31 IDs; P2 tests verify major-1 compatibility on minor 31 and exercise the unchanged FIFO and ADC marker contracts; Saturn Go tests identify 1.31 only for the exact ID and version pair; web tests distinguish identified 1.30.002, identified 1.31.001, and unknown images. This removes the Bridge host's minor-31 TX hold; it does **not** validate RF output or qualify the physical radio. The P2 path was already able to transmit on major-1/minor-31 firmware; the G2 ran P2 when this section was written. The updated Bridge, identity manifest, and telemetry display were not yet deployed there at that time. Before a radio TX test, obtain the combined firmware/host review, use a supervised dummy-load setup and bounded low-power keying procedure, and keep the exact 1.30.002 restoration image available. No radio access or RF transmission was performed for this code change.
+
+## RXC1 1.31.002 release preparation (2026-10-07)
+
+The isolated revision-4 RXC1 post-route checkpoint has been exported to a
+candidate BIT and primary-slot BIN with a new `0x53460004` USR_ACCESS identity.
+The resulting BIN is **not installed** and is deliberately kept outside the
+live `FPGA/` image directory. The manifest's exact-ID 1.31.002 entry uses the
+same 22/Q24 saturating receive filter description as 1.31.001; it does not
+claim that counter acquisition has succeeded on hardware. The Bridge allows
+the new identity for direct-XDMA runtime/receive but keeps RF TX unqualified
+for this candidate. P2's major-1 compatibility and TX policy are unchanged,
+so initial P2 qualification must be receive-only by operating procedure.
+
+The export and rollback hashes, routed timing and baseline CDC caveat, native
+ARM build gate, and separate P2/Bridge receive plan are recorded in
+`update_manager/release/rxc1/README.md`. The G2's working 1.31.001 image
+and host services remain unchanged pending a combined deployment review.

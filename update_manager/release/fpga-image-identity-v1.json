@@ -32,6 +32,20 @@
       "bit_sha256": "1c8d19a9f253cdc8b36a7ec99bc5d5290f5843680e1435c42d5bcb8fccfb7af7",
       "verified_source_manifest": "goldmarsh_fw131_20261004T130938Z/artifacts/identity_manifest_1_31_001.json",
       "verified_source_manifest_sha256": "04bf23010e618b2dbee8b2658d054bab88e509976b4d60f18b8fe24ff75f9cc0"
+    },
+    {
+      "build_id": "0x53460004",
+      "firmware_major": 1,
+      "firmware_minor": 31,
+      "firmware_subversion": 2,
+      "rx_filter": "22/Q24 saturated",
+      "bin_sha256": "e5ab5935385a3e6ec3c5f124a6751866f1c26ad8d675d86912601bc35ef7d2fa",
+      "bit_sha256": "54a5ae585a12848bc287da214b8eac812a3e248c648fbcc9b0a14f5499d2b4c6",
+      "reviewed_integration_archive": "silverforge_rx_counter_integration_20261006_revision4.tar.gz",
+      "reviewed_integration_archive_sha256": "55e8e14ae336aac68124f87352da941982ee82284de560ace6b55b4ee11505aa",
+      "source_checkpoint_sha256": "b196b332064cdc23dbfbab22c76306a84b893655502849a62a285ed217f76346",
+      "bitgen_log_sha256": "755cf54f61ae7569d079e3d32f55b687fb7b49680ea98650a0f385a9a4e0bafb",
+      "release_status": "candidate-not-deployed"
     }
   ]
 }

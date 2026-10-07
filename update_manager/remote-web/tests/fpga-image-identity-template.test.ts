@@ -30,7 +30,7 @@ describe('radio telemetry FPGA image identity', () => {
     const result = present({
       available: true,
       build_identity_status: 'unidentified',
-      build_id_hex: '0x53460004',
+      build_id_hex: '0x53460005',
       firmware_major_version: 1,
       firmware_version: 31,
       firmware_display: '1.31 — build unidentified',
@@ -51,6 +51,20 @@ describe('radio telemetry FPGA image identity', () => {
     });
     expect(result.summary).toBe('1.31.001 · 22/Q24 saturated');
     expect(result.detail).toContain('no clamp-event counter is exported');
+  });
+
+  it('labels the RXC1 candidate without claiming live counter availability', () => {
+    const result = present({
+      available: true,
+      build_identity_status: 'identified',
+      build_id_hex: '0x53460004',
+      firmware_display: '1.31.002',
+      rx_filter: '22/Q24 saturated',
+    });
+    expect(result.summary).toBe('1.31.002 · 22/Q24 saturated');
+    expect(result.detail).toContain('RXC1-capable image');
+    expect(result.detail).toContain('check per-DDC freshness');
+    expect(result.detail).not.toContain('no clamp-event counter is exported');
   });
 
   it('does not identify stale or unavailable telemetry', () => {

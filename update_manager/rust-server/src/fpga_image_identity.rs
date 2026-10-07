@@ -185,6 +185,15 @@ mod tests {
         annotate(&mut known);
         assert_eq!(
             known["current"]["fpga"]["build_identity_status"],
+            "identified"
+        );
+        assert_eq!(known["current"]["fpga"]["firmware_display"], "1.31.002");
+        assert_eq!(known["current"]["fpga"]["rx_filter"], "22/Q24 saturated");
+
+        known["current"]["fpga"]["build_id_raw"] = json!(0x53460005_u32);
+        annotate(&mut known);
+        assert_eq!(
+            known["current"]["fpga"]["build_identity_status"],
             "unidentified"
         );
         assert!(known["current"]["fpga"]["rx_filter"].is_null());
