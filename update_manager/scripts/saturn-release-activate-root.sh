@@ -341,7 +341,8 @@ if mode == "prepare":
         "rollback_directory": rollback_directory,
         "services": {
             "stop_order": [saturn_go, bridge, p2app],
-            "start_order": ([p2app] if selected_backend == "p2" else [bridge]) + [saturn_go],
+            "start_order": ([p2app] + ([bridge] if bridge_was_active == "1" else [])
+                            if selected_backend == "p2" else [bridge]) + [saturn_go],
             "selected_backend": selected_backend,
             "previously_active": {
                 saturn_go: saturn_go_was_active == "1",
@@ -653,7 +654,7 @@ if value.get("runtime") != selected or value.get("operational_status") != "ready
 if value.get("transaction_status") != "idle" or value.get("mutual_exclusion_ok") is not True:
     raise SystemExit(1)
 services = value.get("services") or {}
-if selected == "p2" and (services.get("p2app") != "active" or services.get("saturn_bridge") != "inactive"):
+if selected == "p2" and (services.get("p2app") != "active" or services.get("saturn_bridge") not in ("active", "inactive")):
     raise SystemExit(1)
 if selected == "xdma" and (services.get("saturn_bridge") != "active" or services.get("p2app") != "inactive"):
     raise SystemExit(1)
@@ -805,11 +806,11 @@ stop_affected_services(){
 
 restore_previous_services(){
   local rc=0
-  if [[ "$SELECTED_BACKEND" == "p2" && "$P2APP_WAS_ACTIVE" == "1" ]]; then
+  if [[ "$P2APP_WAS_ACTIVE" == "1" ]]; then
     systemctl start "$P2APP_SERVICE" || rc=1
     systemctl is-active --quiet "$P2APP_SERVICE" || rc=1
   fi
-  if [[ "$SELECTED_BACKEND" == "xdma" && "$BRIDGE_WAS_ACTIVE" == "1" ]]; then
+  if [[ "$BRIDGE_WAS_ACTIVE" == "1" ]]; then
     systemctl start "$BRIDGE_SERVICE" || rc=1
     systemctl is-active --quiet "$BRIDGE_SERVICE" || rc=1
   fi
@@ -955,7 +956,7 @@ if systemctl is-active --quiet "$P2APP_SERVICE"; then P2APP_WAS_ACTIVE=1; fi
 SELECTED_BACKEND="$(selected_backend_status)" \
   || die "cannot activate without one healthy selected radio owner"
 if [[ "$SELECTED_BACKEND" == "p2" ]]; then
-  [[ "$P2APP_WAS_ACTIVE" == "1" && "$BRIDGE_WAS_ACTIVE" == "0" ]] \
+  [[ "$P2APP_WAS_ACTIVE" == "1" ]] \
     || die "P2 selection disagrees with active services"
 else
   [[ "$BRIDGE_WAS_ACTIVE" == "1" && "$P2APP_WAS_ACTIVE" == "0" ]] \
@@ -1010,11 +1011,20 @@ write_transaction "activating" "$PHASE" "Starting affected services in dependenc
 if [[ "$SELECTED_BACKEND" == "p2" ]]; then
   systemctl start "$P2APP_SERVICE"
   systemctl is-active --quiet "$P2APP_SERVICE"
-  ! systemctl is-active --quiet "$BRIDGE_SERVICE"
+  if [[ "$BRIDGE_WAS_ACTIVE" == "1" ]]; then
+    systemctl start "$BRIDGE_SERVICE"
+    systemctl is-active --quiet "$BRIDGE_SERVICE"
+  else
+    if systemctl is-active --quiet "$BRIDGE_SERVICE"; then
+      die "P2-only activation unexpectedly started the Bridge"
+    fi
+  fi
 else
   systemctl start "$BRIDGE_SERVICE"
   systemctl is-active --quiet "$BRIDGE_SERVICE"
-  ! systemctl is-active --quiet "$P2APP_SERVICE"
+  if systemctl is-active --quiet "$P2APP_SERVICE"; then
+    die "direct-XDMA activation unexpectedly started P2"
+  fi
 fi
 systemctl start "$SATURN_GO_SERVICE"
 systemctl is-active --quiet "$SATURN_GO_SERVICE"

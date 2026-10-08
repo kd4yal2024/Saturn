@@ -72,7 +72,11 @@ part of preparation.
    installed P2, Bridge and Saturn Go binaries, `p23test.html`, the remote web
    bundle and the 1.31.001 primary-slot BIN. Keep the rollback files outside
    the release install target and verify them again immediately before use.
-2. Install the validated ARM release *inactive*. Rehearse rollback from the
+2. Install the validated ARM release *inactive*. Staging/installing that
+   release does **not** update the privileged activator at
+   `/usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh`.
+   Before activation, use the bounded helper/config installation below.
+   Rehearse rollback from the
    present legacy `/opt/saturn-go` layout on a spare appliance before
    enabling `saturn-release-activate-root.sh`; there is no pre-existing
    `/opt/saturn/current` release pointer on this G2. The activation helper's
@@ -82,9 +86,13 @@ part of preparation.
 3. With 1.31.001 (`0x53460003`) still installed, unkeyed and receiving,
    activate the compatible new ARM host through the approved transaction
    helper. Keep an auto-reconnecting receive client attached: activation
-   commits only when the selected P2 **or** direct-XDMA owner (never both)
+   commits only when the selected P2 **or** direct-XDMA FPGA owner (never both)
    reports fresh, PID-matched, active receive telemetry in addition to the
-   Saturn Go commit. Confirm the old image ID and normal receive after this
+   Saturn Go commit. The supported service arrangements are direct XDMA
+   (Bridge active, P2 inactive), P2 alone, and P2 with Bridge active as a
+   **P2 client**. In the last arrangement P2 remains the sole FPGA owner and
+   the Bridge must explicitly report runtime backend `p2`; activation
+   preserves both services in P2-then-Bridge order. Confirm the old image ID and normal receive after this
    host change. If activation fails, let its automatic host rollback finish;
    do not flash the candidate.
 4. Stage the candidate BIN under a dedicated path, verify its exact SHA-256
@@ -95,7 +103,9 @@ part of preparation.
    build ID `0x53460004`, RXC1 magic and normal clocks.
 5. Qualify P2 and Bridge **separately** as the selected acquisition owner.
    Use the transactional `saturn-radio-backend-switch-root.sh` helper; never
-   run P2 and direct XDMA together. In each mode verify all DDC identities,
+   run P2 and direct XDMA together. P2 plus Bridge configured as a P2 client
+   is a separate supported service arrangement, not simultaneous FPGA
+   ownership. In each mode verify all DDC identities,
    nonzero session/configuration/serial/token, freshness age, and the
    diagnostics page's unavailable-versus-zero distinction. Restart the
    owner with an old snapshot pending, exercise bounded request-error
@@ -107,10 +117,11 @@ part of preparation.
    gate, and do not claim RF TX qualification from the identity allowlist.
 
 For that comparison, put `Environment=SATURN_RXC1_POLL_ENABLED=0` in a
-separate root-owned systemd drop-in for **only the selected owner**
+separate root-owned systemd drop-in for **only the selected FPGA owner**
 (`saturn-bridge.service` for `xdma`, `p2app.service` for `p2`), reload systemd
-and restart that owner through its controlled owner path. Verify the other
-owner remains inactive, IQ reception resumes, non-RXC1 telemetry continues,
+and restart that owner through its controlled owner path. In P2-client mode,
+the Bridge can remain active but must report runtime backend `p2`; it must not
+poll the FPGA RXC1 register bank directly. Verify IQ reception resumes, non-RXC1 telemetry continues,
 and RXC1 is explicitly `disabled` / `unavailable` with null counters. Remove
 the drop-in, reload and restart the same owner to re-enable polling. Allow
 startup to settle before comparing equal-length receive windows; record
@@ -126,3 +137,56 @@ unit configuration using the rehearsed legacy-layout procedure; never start
 the old Bridge against `0x53460004`. Finally verify the previous selected
 backend, normal receive and RXC1 **unsupported/unavailable**, never zero
 losses. Preserve failed-candidate logs and counters off-device.
+
+### Bounded privileged-helper installation (after approval, before activation)
+
+Use the **installed, validated** immutable ARM release, not an unverified
+checkout or archive. The reviewed activator in this source revision has
+SHA-256 `f1fbfc8de7946c9e0b241f9240e68ccbe4c9ac99829cba4a4252f4fb497fe3f4`;
+the earlier reviewed helper was
+`bee25b458ec0c2f75f7f0b78a01b8cbed016af4be86532fc5802f4fbe4113800`.
+The new hash must match both the release copy and installed copy. The config
+is host-specific: preserve its reviewed values and keep activation disabled
+during this helper installation. Set `commit` to the exact
+40-character commit in the validated ARM manifest; do not use a moving
+`current` pointer as the source.
+
+```bash
+commit=REPLACE_WITH_REVIEWED_40_HEX_COMMIT
+[[ "$commit" =~ ^[0-9a-f]{40}$ ]] || exit 1
+release="/opt/saturn/releases/$commit"
+helper=/usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh
+config=/etc/default/saturn-release-activate
+backup="/var/lib/saturn-state/deployments/pre-activation-$commit"
+sudo test -f "$release/scripts/saturn-release-activate-root.sh"
+sudo test -f "$helper" && sudo test -f "$config"
+sudo test ! -e "$backup"
+sudo grep -Fx 'ACTIVATION_ENABLED="0"' "$config"
+printf '%s  %s\n' f1fbfc8de7946c9e0b241f9240e68ccbe4c9ac99829cba4a4252f4fb497fe3f4 \
+  "$release/scripts/saturn-release-activate-root.sh" | sha256sum -c -
+sudo install -d -o root -g root -m 0700 "$backup"
+sudo cp -a -- "$helper" "$backup/activator.before"
+sudo cp -a -- "$config" "$backup/config.before"
+sudo sha256sum "$backup/activator.before" "$backup/config.before"
+sudo install -o root -g root -m 0755 \
+  "$release/scripts/saturn-release-activate-root.sh" "$helper"
+sudo install -o root -g root -m 0644 "$backup/config.before" "$config"
+printf '%s  %s\n' f1fbfc8de7946c9e0b241f9240e68ccbe4c9ac99829cba4a4252f4fb497fe3f4 \
+  "$helper" | sha256sum -c -
+sudo cmp "$backup/config.before" "$config"
+sudo sha256sum "$config" "$backup/config.before"
+sudo stat -c '%U:%G %a %n' "$helper" "$config"
+sudo bash -n "$helper"
+sudo grep -Fx 'ACTIVATION_ENABLED="0"' "$config"
+sudo "$helper" --validate "$commit"
+```
+
+Record the two pre-install hashes, the config hash after installation, the
+validated release manifest hash and the commands' output off-device. Stop
+if the config is already enabled or its paths/backend helper/URL values are
+not the reviewed host values. Enabling activation is a **separate approved
+configuration change**; record its new config hash. For a helper-only
+reversal, restore `activator.before` and `config.before` with their recorded
+modes/ownership, recheck hashes and leave activation disabled. This does not
+replace the legacy-layout host rollback or the firmware-before-legacy-host
+rollback order above.

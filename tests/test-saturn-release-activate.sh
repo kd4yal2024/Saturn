@@ -27,6 +27,8 @@ ROLLBACK_FAIL_COMMIT="7777777777777777777777777777777777777777"
 MIGRATION_FAIL_COMMIT="8888888888888888888888888888888888888888"
 OWNER_FAIL_COMMIT="9999999999999999999999999999999999999999"
 P2_COMMIT="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+P2_CLIENT_COMMIT="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+P2_CLIENT_FAIL_COMMIT="cccccccccccccccccccccccccccccccccccccccc"
 
 cleanup(){ rm -rf -- "$TMP_ROOT"; }
 trap cleanup EXIT
@@ -119,6 +121,8 @@ create_release "$ROLLBACK_FAIL_COMMIT"
 create_release "$MIGRATION_FAIL_COMMIT"
 create_release "$OWNER_FAIL_COMMIT"
 create_release "$P2_COMMIT"
+create_release "$P2_CLIENT_COMMIT"
+create_release "$P2_CLIENT_FAIL_COMMIT"
 
 mkdir -p "$SYSTEMCTL_STATE"
 : >"$SYSTEMCTL_STATE/saturn-go.service"
@@ -136,7 +140,14 @@ if [[ -n "${SATURN_TEST_SYSTEMCTL_FAIL_ONCE:-}" \
 fi
 case "$1" in
   is-active) [[ -f "$SATURN_TEST_SYSTEMCTL_STATE/$3" ]] ;;
-  start) : >"$SATURN_TEST_SYSTEMCTL_STATE/$2" ;;
+  start)
+    : >"$SATURN_TEST_SYSTEMCTL_STATE/$2"
+    if [[ "$2" == "${SATURN_TEST_COACTIVATE_ONCE:-}" \
+          && ! -e "$SATURN_TEST_COACTIVATE_MARKER" ]]; then
+      : >"$SATURN_TEST_COACTIVATE_MARKER"
+      : >"$SATURN_TEST_SYSTEMCTL_STATE/${SATURN_TEST_COACTIVATE_SERVICE:?}"
+    fi
+    ;;
   stop) rm -f -- "$SATURN_TEST_SYSTEMCTL_STATE/$2" ;;
 esac
 EOF
@@ -175,15 +186,18 @@ cat >"$FAKE_BIN/backend-status" <<'EOF'
 set -Eeuo pipefail
 [[ "${1:-}" == "status" ]] || exit 1
 backend="${SATURN_TEST_SELECTED_BACKEND:-xdma}"
+runtime="${SATURN_TEST_BRIDGE_RUNTIME:-$backend}"
 p2=inactive
 bridge=inactive
 [[ -f "$SATURN_TEST_SYSTEMCTL_STATE/p2app.service" ]] && p2=active
 [[ -f "$SATURN_TEST_SYSTEMCTL_STATE/saturn-bridge.service" ]] && bridge=active
 status=stopped
-if [[ "$backend" == p2 && "$p2" == active && "$bridge" == inactive ]] || \
-   [[ "$backend" == xdma && "$bridge" == active && "$p2" == inactive ]]; then status=ready; fi
-printf '{"selected":"%s","runtime":"%s","operational_status":"%s","transaction_status":"idle","mutual_exclusion_ok":true,"services":{"p2app":"%s","saturn_bridge":"%s"}}\n' \
-  "$backend" "$backend" "$status" "$p2" "$bridge"
+if [[ "$backend" == p2 && "$runtime" == p2 && "$p2" == active ]] || \
+   [[ "$backend" == xdma && "$runtime" == xdma && "$bridge" == active && "$p2" == inactive ]]; then status=ready; fi
+mutual_exclusion=true
+[[ "$runtime" == xdma && "$p2" == active ]] && mutual_exclusion=false
+printf '{"selected":"%s","runtime":"%s","operational_status":"%s","transaction_status":"idle","mutual_exclusion_ok":%s,"services":{"p2app":"%s","saturn_bridge":"%s"}}\n' \
+  "$backend" "$runtime" "$status" "$mutual_exclusion" "$p2" "$bridge"
 EOF
 chmod 0755 "$FAKE_BIN/systemctl" "$FAKE_BIN/curl" "$FAKE_BIN/backend-status"
 
@@ -195,6 +209,7 @@ export SATURN_TEST_SYSTEMCTL_STATE="$SYSTEMCTL_STATE"
 export SATURN_TEST_CURRENT_LINK="$CURRENT_LINK"
 export SATURN_TEST_RUNNING_COMMIT="$OLD_COMMIT"
 export SATURN_TEST_SYSTEMCTL_FAIL_MARKER="$TMP_ROOT/systemctl-failed-once"
+export SATURN_TEST_COACTIVATE_MARKER="$TMP_ROOT/systemctl-coactivated-once"
 
 # Production installation carries the root-owned helper but keeps activation
 # disabled and does not grant the web-service account passwordless access.
@@ -367,6 +382,29 @@ if grep -Fq 'start p2app.service' "$SYSTEMCTL_LOG"; then
   exit 1
 fi
 
+# If P2 appears while starting the direct-XDMA Bridge, fail before commit and
+# roll back to the original exclusive service set.
+export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
+export SATURN_TEST_COACTIVATE_ONCE=saturn-bridge.service
+export SATURN_TEST_COACTIVATE_SERVICE=p2app.service
+rm -f "$SATURN_TEST_COACTIVATE_MARKER"
+if "$ACTIVATOR" "$STARTUP_COMMIT" >/dev/null 2>&1; then
+  printf 'direct-XDMA activation with unexpected P2 unexpectedly committed\n' >&2
+  exit 1
+fi
+unset SATURN_TEST_COACTIVATE_ONCE SATURN_TEST_COACTIVATE_SERVICE
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ -f "$SYSTEMCTL_STATE/saturn-bridge.service" && ! -f "$SYSTEMCTL_STATE/p2app.service" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["activation_failure"]["phase"] == "service-start"
+assert value["rollback"]["status"] == "succeeded"
+PY
+
 # A running Bridge without selected-owner reception must not commit.
 export SATURN_TEST_OWNER_UNAVAILABLE_COMMIT="$OWNER_FAIL_COMMIT"
 if "$ACTIVATOR" "$OWNER_FAIL_COMMIT" >/dev/null 2>&1; then
@@ -478,7 +516,7 @@ assert "did not fully restore" in value["rollback"]["message"]
 PY
 
 # Activation and rollback never prune the active or prior immutable releases.
-[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 10 ]]
+[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 12 ]]
 
 # P2-selected activation must not initialize the direct-XDMA Bridge.
 rm -f -- "$TRANSACTION_FILE" "$SYSTEMCTL_STATE/saturn-bridge.service"
@@ -495,5 +533,103 @@ assert value["status"] == "committed"
 assert value["services"]["selected_backend"] == "p2"
 assert value["services"]["start_order"] == ["p2app.service", "saturn-go.service"]
 PY
+
+# A Bridge that unexpectedly starts during P2-only activation is a failure,
+# even when it would otherwise report runtime=p2. Automatic rollback must
+# restore the original P2-only service set.
+export SATURN_TEST_RUNNING_COMMIT="$P2_COMMIT"
+export SATURN_TEST_COACTIVATE_ONCE=p2app.service
+export SATURN_TEST_COACTIVATE_SERVICE=saturn-bridge.service
+rm -f "$SATURN_TEST_COACTIVATE_MARKER"
+if "$ACTIVATOR" "$P2_CLIENT_FAIL_COMMIT" >/dev/null 2>&1; then
+  printf 'P2-only activation with unexpected Bridge unexpectedly committed\n' >&2
+  exit 1
+fi
+unset SATURN_TEST_COACTIVATE_ONCE SATURN_TEST_COACTIVATE_SERVICE
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$P2_COMMIT" ]]
+[[ -f "$SYSTEMCTL_STATE/p2app.service" && ! -f "$SYSTEMCTL_STATE/saturn-bridge.service" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["activation_failure"]["phase"] == "service-start"
+assert value["rollback"]["status"] == "succeeded"
+PY
+
+# P2 remains the sole FPGA owner when the Bridge is explicitly a P2 client.
+# The client must be restarted after P2, before Saturn Go, and restored after
+# a failed activation instead of silently being left down.
+export SATURN_TEST_RUNNING_COMMIT="$P2_COMMIT"
+: >"$SYSTEMCTL_STATE/saturn-bridge.service"
+: >"$SYSTEMCTL_LOG"
+"$ACTIVATOR" "$P2_CLIENT_COMMIT" >/dev/null
+[[ -f "$SYSTEMCTL_STATE/p2app.service" && -f "$SYSTEMCTL_STATE/saturn-bridge.service" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "committed"
+assert value["services"]["selected_backend"] == "p2"
+assert value["services"]["previously_active"]["p2app.service"] is True
+assert value["services"]["previously_active"]["saturn-bridge.service"] is True
+assert value["services"]["start_order"] == [
+    "p2app.service", "saturn-bridge.service", "saturn-go.service"
+]
+PY
+python3 - "$SYSTEMCTL_LOG" <<'PY'
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    calls = [line.strip() for line in handle]
+starts = [line for line in calls if line.startswith("start ")]
+assert starts == [
+    "start p2app.service", "start saturn-bridge.service", "start saturn-go.service"
+], starts
+PY
+
+export SATURN_TEST_RUNNING_COMMIT="$P2_CLIENT_COMMIT"
+export SATURN_TEST_SYSTEMCTL_FAIL_ONCE="start saturn-bridge.service"
+rm -f "$SATURN_TEST_SYSTEMCTL_FAIL_MARKER"
+: >"$SYSTEMCTL_LOG"
+if "$ACTIVATOR" "$P2_CLIENT_FAIL_COMMIT" >/dev/null 2>&1; then
+  printf 'P2-client Bridge startup failure unexpectedly committed activation\n' >&2
+  exit 1
+fi
+unset SATURN_TEST_SYSTEMCTL_FAIL_ONCE
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$P2_CLIENT_COMMIT" ]]
+[[ -f "$SYSTEMCTL_STATE/p2app.service" && -f "$SYSTEMCTL_STATE/saturn-bridge.service" ]]
+python3 - "$TRANSACTION_FILE" "$SYSTEMCTL_LOG" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["activation_failure"]["phase"] == "service-start"
+assert value["rollback"]["status"] == "succeeded"
+with open(sys.argv[2], encoding="utf-8") as handle:
+    starts = [line.strip() for line in handle if line.startswith("start ")]
+assert starts == [
+    "start p2app.service", "start saturn-bridge.service",
+    "start p2app.service", "start saturn-bridge.service", "start saturn-go.service"
+], starts
+PY
+
+# A concurrent P2/direct-XDMA combination is not a P2-client configuration.
+# It must be rejected before service interruption, even if both are active.
+rm -f -- "$TRANSACTION_FILE"
+export SATURN_TEST_BRIDGE_RUNTIME=xdma
+: >"$SYSTEMCTL_LOG"
+if "$ACTIVATOR" "$P2_CLIENT_FAIL_COMMIT" >/dev/null 2>&1; then
+  printf 'P2 with direct-XDMA Bridge unexpectedly passed preflight\n' >&2
+  exit 1
+fi
+unset SATURN_TEST_BRIDGE_RUNTIME
+if grep -Eq '^(start|stop) ' "$SYSTEMCTL_LOG"; then
+  printf 'invalid P2/direct-XDMA baseline changed service state\n' >&2
+  exit 1
+fi
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$P2_CLIENT_COMMIT" ]]
 
 printf 'Saturn release activation and automatic rollback tests passed\n'
