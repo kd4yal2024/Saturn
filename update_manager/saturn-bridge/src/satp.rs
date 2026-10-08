@@ -33,6 +33,8 @@ const REQUESTED_SOCKET_BUFFER_BYTES: i32 = 1024 * 1024;
 const PLAYOUT_POLL: Duration = Duration::from_micros(250);
 const HEALTHY_LIMIT: Duration = Duration::from_millis(50);
 const STATUS_WRITE_PERIOD: Duration = Duration::from_secs(1);
+const ADDRESS_RETRY_PERIOD: Duration = Duration::from_secs(2);
+const ADDRESS_RETRY_STOP_POLL: Duration = Duration::from_millis(100);
 const RATE_MATCH_FILTER_ALPHA: f64 = 1.0 / 32.0;
 const RATE_MATCH_PPM_PER_FRAME: f64 = 2.0;
 const RATE_MATCH_MAX_PPM: f64 = 2_000.0;
@@ -627,6 +629,98 @@ pub struct SatpRuntime {
     worker: Option<JoinHandle<()>>,
 }
 
+fn describe_bind_error(address: SocketAddr, error: io::Error) -> io::Error {
+    let detail = if error.kind() == io::ErrorKind::AddrInUse {
+        "configured port is already occupied"
+    } else {
+        "bind failed"
+    };
+    io::Error::new(error.kind(), format!("SATP {detail} at {address}: {error}"))
+}
+
+fn initial_bind<T>(
+    address: SocketAddr,
+    bind: impl FnOnce(SocketAddr) -> io::Result<T>,
+) -> io::Result<Option<T>> {
+    match bind(address) {
+        Ok(socket) => Ok(Some(socket)),
+        Err(error) if error.kind() == io::ErrorKind::AddrNotAvailable => Ok(None),
+        Err(error) => Err(describe_bind_error(address, error)),
+    }
+}
+
+fn wait_for_stop(stop: &AtomicBool, duration: Duration) -> bool {
+    let deadline = Instant::now() + duration;
+    while !stop.load(Ordering::SeqCst) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        thread::sleep(remaining.min(ADDRESS_RETRY_STOP_POLL));
+    }
+    true
+}
+
+fn retry_late_bind<T>(
+    address: SocketAddr,
+    stop: &AtomicBool,
+    mut bind: impl FnMut(SocketAddr) -> io::Result<T>,
+    mut wait: impl FnMut(&AtomicBool, Duration) -> bool,
+) -> io::Result<Option<T>> {
+    let mut attempts = 0u64;
+    loop {
+        if stop.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        match bind(address) {
+            Ok(socket) => {
+                println!(
+                    "saturn-bridge: configured SATP address {address} became available after {attempts} retries"
+                );
+                return Ok(Some(socket));
+            }
+            Err(error) if error.kind() == io::ErrorKind::AddrNotAvailable => {
+                attempts = attempts.saturating_add(1);
+                if attempts == 1 || attempts.is_multiple_of(30) {
+                    eprintln!(
+                        "saturn-bridge: configured SATP address {address} is unavailable; waiting {}s before retry (attempt {attempts})",
+                        ADDRESS_RETRY_PERIOD.as_secs()
+                    );
+                }
+                if wait(stop, ADDRESS_RETRY_PERIOD) {
+                    return Ok(None);
+                }
+            }
+            Err(error) => return Err(describe_bind_error(address, error)),
+        }
+    }
+}
+
+fn prepare_bound_socket(
+    socket: UdpSocket,
+    config: &BridgeConfig,
+    status: &Arc<Mutex<SatpStatus>>,
+) -> io::Result<UdpSocket> {
+    socket.set_nonblocking(true)?;
+    let actual_socket_buffer_bytes = configure_receive_buffer(&socket)?;
+    {
+        let mut snapshot = status.lock_unpoisoned();
+        snapshot.running = true;
+        snapshot.actual_socket_buffer_bytes = actual_socket_buffer_bytes;
+        write_status_file(&snapshot);
+    }
+    println!(
+        "saturn-bridge: authenticated SATP v2 receiver listening on {} sink={} rf_enabled={} target={} capacity={} SO_RCVBUF={}",
+        config.satp_bind_addr,
+        status.lock_unpoisoned().sink,
+        u8::from(config.remote_tx_rf_enabled),
+        config.satp_jitter_target_frames,
+        config.satp_jitter_capacity_frames,
+        actual_socket_buffer_bytes,
+    );
+    Ok(socket)
+}
+
 impl SatpRuntime {
     pub fn start(
         config: &BridgeConfig,
@@ -645,24 +739,17 @@ impl SatpRuntime {
             });
         }
 
-        let socket = UdpSocket::bind(config.satp_bind_addr)?;
-        socket.set_nonblocking(true)?;
-        let actual_socket_buffer_bytes = configure_receive_buffer(&socket)?;
-        {
-            let mut snapshot = status.lock_unpoisoned();
-            snapshot.running = true;
-            snapshot.actual_socket_buffer_bytes = actual_socket_buffer_bytes;
-            write_status_file(&snapshot);
+        let initial_socket = initial_bind(config.satp_bind_addr, UdpSocket::bind)?;
+        let initial_socket = initial_socket
+            .map(|socket| prepare_bound_socket(socket, config, &status))
+            .transpose()?;
+        if initial_socket.is_none() {
+            eprintln!(
+                "saturn-bridge: configured SATP address {} is unavailable at startup; receive will continue while SATP waits for the address",
+                config.satp_bind_addr
+            );
+            write_status_file(&status.lock_unpoisoned());
         }
-        println!(
-            "saturn-bridge: authenticated SATP v2 receiver listening on {} sink={} rf_enabled={} target={} capacity={} SO_RCVBUF={}",
-            config.satp_bind_addr,
-            status.lock_unpoisoned().sink,
-            u8::from(config.remote_tx_rf_enabled),
-            config.satp_jitter_target_frames,
-            config.satp_jitter_capacity_frames,
-            actual_socket_buffer_bytes,
-        );
 
         let worker_status = status.clone();
         let worker_stop = stop.clone();
@@ -670,9 +757,34 @@ impl SatpRuntime {
         let jitter_target_frames = config.satp_jitter_target_frames;
         let jitter_capacity_frames = config.satp_jitter_capacity_frames;
         let audio_loss_timeout = config.satp_audio_loss_timeout;
+        let worker_config = config.clone();
         let worker = thread::Builder::new()
             .name("saturn-satp".into())
             .spawn(move || {
+                let socket = match initial_socket {
+                    Some(socket) => socket,
+                    None => match retry_late_bind(
+                        worker_config.satp_bind_addr,
+                        &worker_stop,
+                        UdpSocket::bind,
+                        wait_for_stop,
+                    ) {
+                        Ok(Some(socket)) => {
+                            match prepare_bound_socket(socket, &worker_config, &worker_status) {
+                                Ok(socket) => socket,
+                                Err(error) => {
+                                    eprintln!("saturn-bridge: SATP socket setup failed: {error}");
+                                    return;
+                                }
+                            }
+                        }
+                        Ok(None) => return,
+                        Err(error) => {
+                            eprintln!("saturn-bridge: {error}");
+                            return;
+                        }
+                    },
+                };
                 run_receiver(
                     socket,
                     allowed_source_ip,
@@ -1273,6 +1385,135 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn satp_binds_immediately_when_configured_address_is_available() {
+        let address: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let socket = initial_bind(address, UdpSocket::bind).unwrap().unwrap();
+        assert_eq!(socket.local_addr().unwrap().ip(), address.ip());
+    }
+
+    #[test]
+    fn satp_retries_past_old_service_limit_then_binds_exact_address() {
+        let address: SocketAddr = "192.168.0.139:50100".parse().unwrap();
+        assert!(initial_bind(address, |_| Err::<(), _>(
+            io::ErrorKind::AddrNotAvailable.into()
+        ))
+        .unwrap()
+        .is_none());
+        let stop = AtomicBool::new(false);
+        let mut attempts = 0;
+        let mut waits = Vec::new();
+        let result = retry_late_bind(
+            address,
+            &stop,
+            |requested| {
+                assert_eq!(requested, address);
+                attempts += 1;
+                if attempts <= 7 {
+                    Err(io::ErrorKind::AddrNotAvailable.into())
+                } else {
+                    Ok(42)
+                }
+            },
+            |_, delay| {
+                waits.push(delay);
+                false
+            },
+        )
+        .unwrap();
+        assert_eq!(result, Some(42));
+        assert_eq!(attempts, 8);
+        assert_eq!(waits, vec![ADDRESS_RETRY_PERIOD; 7]);
+    }
+
+    #[test]
+    fn satp_waits_at_controlled_intervals_and_stops_when_address_never_arrives() {
+        let address: SocketAddr = "192.168.0.139:50100".parse().unwrap();
+        let stop = AtomicBool::new(false);
+        let mut attempts = 0;
+        let mut waits = 0;
+        let result = retry_late_bind(
+            address,
+            &stop,
+            |_| {
+                attempts += 1;
+                Err::<(), _>(io::ErrorKind::AddrNotAvailable.into())
+            },
+            |stop, delay| {
+                assert_eq!(delay, ADDRESS_RETRY_PERIOD);
+                waits += 1;
+                if waits == 8 {
+                    stop.store(true, Ordering::SeqCst);
+                    true
+                } else {
+                    false
+                }
+            },
+        )
+        .unwrap();
+        assert!(result.is_none());
+        assert_eq!(attempts, 8);
+        assert_eq!(waits, 8);
+    }
+
+    #[test]
+    fn satp_wait_is_interruptible_on_shutdown() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let other = stop.clone();
+        let signal = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            other.store(true, Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        assert!(wait_for_stop(&stop, Duration::from_secs(2)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        signal.join().unwrap();
+    }
+
+    #[test]
+    fn occupied_satp_port_is_an_error_not_an_address_wait() {
+        let occupied = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let address = occupied.local_addr().unwrap();
+        let error = initial_bind(address, UdpSocket::bind).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert!(error
+            .to_string()
+            .contains("configured port is already occupied"));
+        assert!(error.to_string().contains(&address.to_string()));
+    }
+
+    #[test]
+    fn port_occupied_after_address_arrives_ends_retry_with_distinct_error() {
+        let address: SocketAddr = "192.168.0.139:50100".parse().unwrap();
+        let stop = AtomicBool::new(false);
+        let mut attempts = 0;
+        let mut waits = 0;
+        let error = retry_late_bind(
+            address,
+            &stop,
+            |_| {
+                attempts += 1;
+                if attempts == 1 {
+                    Err::<(), _>(io::ErrorKind::AddrNotAvailable.into())
+                } else {
+                    Err(io::ErrorKind::AddrInUse.into())
+                }
+            },
+            |_, delay| {
+                assert_eq!(delay, ADDRESS_RETRY_PERIOD);
+                waits += 1;
+                false
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AddrInUse);
+        assert!(error
+            .to_string()
+            .contains("configured port is already occupied"));
+        assert_eq!(attempts, 2);
+        assert_eq!(waits, 1);
+    }
 
     #[test]
     fn authenticated_udp_reaches_bounded_tx_ingress_and_replay_triggers_disarm_without_rf() {

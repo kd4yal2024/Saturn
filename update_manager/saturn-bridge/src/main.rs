@@ -409,7 +409,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let backend = RadioBackend::from_env()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
-    let mut config = BridgeConfig::from_env();
+    let mut config = BridgeConfig::from_env()?;
     if backend == RadioBackend::Xdma {
         config.rx_ddc_index = xdma_rx::DIRECT_DDC_INDEX as u8;
         config.ddc0_adc = 0;

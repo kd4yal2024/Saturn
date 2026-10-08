@@ -117,7 +117,7 @@ impl Default for BridgeConfig {
 }
 
 impl BridgeConfig {
-    pub fn from_env() -> Self {
+    pub fn from_env() -> Result<Self, String> {
         let defaults = Self::default();
 
         let radio_host =
@@ -137,7 +137,9 @@ impl BridgeConfig {
         let tci_port = parse_env_u16("SATURN_BRIDGE_TCI_PORT", defaults.tci_bind_addr.port());
         let satp_host =
             env::var("SATURN_BRIDGE_SATP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-        let satp_port = parse_env_u16("SATURN_BRIDGE_SATP_PORT", defaults.satp_bind_addr.port());
+        let satp_port = env::var("SATURN_BRIDGE_SATP_PORT")
+            .unwrap_or_else(|_| defaults.satp_bind_addr.port().to_string());
+        let satp_bind_addr = parse_satp_bind_addr(&satp_host, &satp_port)?;
         let satp_allowed_source_ip = match env::var("SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP") {
             Ok(value) if value.trim().is_empty() => None,
             Ok(value) => match value.trim().parse::<IpAddr>() {
@@ -282,7 +284,7 @@ impl BridgeConfig {
             ),
             tx_audio_source,
             satp_enabled: parse_env_bool("SATURN_BRIDGE_SATP_ENABLED", defaults.satp_enabled),
-            satp_bind_addr: parse_socket_addr(&satp_host, satp_port, defaults.satp_bind_addr),
+            satp_bind_addr,
             satp_allowed_source_ip,
             satp_jitter_target_frames,
             satp_jitter_capacity_frames,
@@ -299,8 +301,20 @@ impl BridgeConfig {
                 "saturn-bridge: SATP is selected as TX audio source but its receiver is disabled; TX will remain audio-starved and fail safe"
             );
         }
-        config
+        Ok(config)
     }
+}
+
+fn parse_satp_bind_addr(host: &str, port: &str) -> Result<SocketAddr, String> {
+    let address = host.parse::<IpAddr>().map_err(|_| {
+        format!("invalid SATURN_BRIDGE_SATP_HOST {host:?}: expected a numeric IP address")
+    })?;
+    let port = port
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
+        .ok_or_else(|| format!("invalid SATURN_BRIDGE_SATP_PORT {port:?}: expected 1..65535"))?;
+    Ok(SocketAddr::new(address, port))
 }
 
 fn parse_socket_addr(host: &str, port: u16, fallback: SocketAddr) -> SocketAddr {
@@ -380,7 +394,7 @@ fn clamp_fft_size(value: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{align_packet_frames, RadioBackend};
+    use super::{align_packet_frames, parse_satp_bind_addr, RadioBackend};
     use crate::tx_audio::TxAudioSource;
 
     #[test]
@@ -403,5 +417,18 @@ mod tests {
         assert_eq!(TxAudioSource::parse("tci"), Some(TxAudioSource::Tci));
         assert_eq!(TxAudioSource::parse(" SATP "), Some(TxAudioSource::Satp));
         assert_eq!(TxAudioSource::parse("auto"), None);
+    }
+
+    #[test]
+    fn satp_bind_configuration_does_not_fall_back_to_another_address() {
+        let address = parse_satp_bind_addr("192.168.0.139", "50100").unwrap();
+        assert_eq!(address.to_string(), "192.168.0.139:50100");
+        assert!(parse_satp_bind_addr("not-an-address", "50100")
+            .unwrap_err()
+            .contains("SATURN_BRIDGE_SATP_HOST"));
+        assert!(parse_satp_bind_addr("192.168.0.139", "invalid")
+            .unwrap_err()
+            .contains("SATURN_BRIDGE_SATP_PORT"));
+        assert!(parse_satp_bind_addr("192.168.0.139", "0").is_err());
     }
 }
