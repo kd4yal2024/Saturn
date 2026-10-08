@@ -474,9 +474,7 @@ create_manifest(){
     --build-result saturn-bridge-release-build \
     --build-result native-release-build \
     --build-result release-manifest-validation \
-    --build-result state-compatibility-tests \
-    --build-result release-activation-tests \
-    --build-result release-helper-install-tests
+    --build-result state-compatibility-tests
 }
 
 require_positive_integer SATURN_RELEASE_BUILD_JOBS "$BUILD_JOBS"

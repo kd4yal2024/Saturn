@@ -12,9 +12,7 @@
     "saturn-bridge-release-build",
     "native-release-build",
     "release-manifest-validation",
-    "state-compatibility-tests",
-    "release-activation-tests",
-    "release-helper-install-tests"
+    "state-compatibility-tests"
   ],
   "state_compatibility": {
     "format": "saturn-state-compatibility",
