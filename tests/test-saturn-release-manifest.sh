@@ -183,7 +183,11 @@ value["schema_version"] = 1
 value.pop("state_compatibility", None)
 value["build"]["results"] = [
     item for item in value["build"]["results"]
-    if item["name"] != "state-compatibility-tests"
+    if item["name"] not in {
+        "state-compatibility-tests",
+        "release-activation-tests",
+        "release-helper-install-tests",
+    }
 ]
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(value, handle, indent=2, sort_keys=True)

@@ -57,6 +57,7 @@ SATURN_GO_WAS_ACTIVE=0
 BRIDGE_WAS_ACTIVE=0
 P2APP_WAS_ACTIVE=0
 STATE_PLAN_JSON=""
+STATE_TOOL_ARGS=()
 STATE_BACKUP_DIR=""
 STATE_MIGRATED=0
 SELECTED_BACKEND=""
@@ -189,40 +190,44 @@ PY
 }
 
 validate_release(){
-  local commit="$1" release canonical_saturn canonical_root canonical_release actual architecture bad
-  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "target must be one lowercase full Git commit"
+  local commit="$1" release canonical_saturn canonical_root canonical_release actual architecture bad identity
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { die "target must be one lowercase full Git commit"; return 1; }
   [[ -d "$SATURN_ROOT" && ! -L "$SATURN_ROOT" ]] \
-    || die "Saturn application root is not a real directory: $SATURN_ROOT"
+    || { die "Saturn application root is not a real directory: $SATURN_ROOT"; return 1; }
   [[ -d "$RELEASES_ROOT" && ! -L "$RELEASES_ROOT" ]] \
-    || die "release root is not a real directory: $RELEASES_ROOT"
-  canonical_saturn="$(realpath -e "$SATURN_ROOT")"
-  canonical_root="$(realpath -e "$RELEASES_ROOT")"
+    || { die "release root is not a real directory: $RELEASES_ROOT"; return 1; }
+  canonical_saturn="$(realpath -e "$SATURN_ROOT")" || return 1
+  canonical_root="$(realpath -e "$RELEASES_ROOT")" || return 1
   [[ "$(dirname "$canonical_root")" == "$canonical_saturn" ]] \
-    || die "release root is not directly beneath the Saturn application root: $canonical_root"
+    || { die "release root is not directly beneath the Saturn application root: $canonical_root"; return 1; }
   release="$RELEASES_ROOT/$commit"
-  [[ -d "$release" && ! -L "$release" ]] || die "installed release not found: $release"
-  canonical_release="$(realpath -e "$release")"
+  [[ -d "$release" && ! -L "$release" ]] || { die "installed release not found: $release"; return 1; }
+  canonical_release="$(realpath -e "$release")" || return 1
   [[ "$(dirname "$canonical_release")" == "$canonical_root" ]] \
-    || die "release is not a direct child of the trusted release root: $canonical_release"
-  bad="$(find "$canonical_release" -xdev -type l -print -quit)"
-  [[ -z "$bad" ]] || die "symbolic links are not permitted inside a release: $bad"
-  bad="$(find "$canonical_release" -xdev ! -type d ! -type f -print -quit)"
-  [[ -z "$bad" ]] || die "non-regular release entry rejected: $bad"
-  bad="$(find "$canonical_release" -xdev -perm /022 -print -quit)"
-  [[ -z "$bad" ]] || die "group/world-writable release entry rejected: $bad"
-  bad="$(find "$canonical_release" -xdev -type d ! -perm 0755 -print -quit)"
-  [[ -z "$bad" ]] || die "release directory must use mode 0755: $bad"
+    || { die "release is not a direct child of the trusted release root: $canonical_release"; return 1; }
+  bad="$(find "$canonical_release" -xdev -type l -print -quit)" || return 1
+  [[ -z "$bad" ]] || { die "symbolic links are not permitted inside a release: $bad"; return 1; }
+  bad="$(find "$canonical_release" -xdev ! -type d ! -type f -print -quit)" || return 1
+  [[ -z "$bad" ]] || { die "non-regular release entry rejected: $bad"; return 1; }
+  bad="$(find "$canonical_release" -xdev -perm /022 -print -quit)" || return 1
+  [[ -z "$bad" ]] || { die "group/world-writable release entry rejected: $bad"; return 1; }
+  bad="$(find "$canonical_release" -xdev -type d ! -perm 0755 -print -quit)" || return 1
+  [[ -z "$bad" ]] || { die "release directory must use mode 0755: $bad"; return 1; }
   if (( EUID == 0 )); then
-    bad="$(find "$canonical_release" -xdev \( ! -user root -o ! -group root \) -print -quit)"
-    [[ -z "$bad" ]] || die "installed release ownership mismatch: $bad"
+    bad="$(find "$canonical_release" -xdev \( ! -user root -o ! -group root \) -print -quit)" || return 1
+    [[ -z "$bad" ]] || { die "installed release ownership mismatch: $bad"; return 1; }
   fi
   python3 "$MANIFEST_TOOL" validate \
     --release-root "$canonical_release" \
-    --components "$COMPONENTS_FILE" >/dev/null
-  IFS=$'\t' read -r actual architecture < <(release_identity "$canonical_release")
-  [[ "$actual" == "$commit" ]] || die "installed release commit mismatch: $actual"
+    --components "$COMPONENTS_FILE" >/dev/null \
+    || { die "release manifest validation failed: $canonical_release"; return 1; }
+  # A process substitution can retain FD 9 after this helper exits. Wait for
+  # the identity reader before releasing the activation lock.
+  identity="$(release_identity "$canonical_release")" || return 1
+  IFS=$'\t' read -r actual architecture <<<"$identity"
+  [[ "$actual" == "$commit" ]] || { die "installed release commit mismatch: $actual"; return 1; }
   [[ "$architecture" == "$(uname -m)" ]] \
-    || die "installed release architecture $architecture does not match host $(uname -m)"
+    || { die "installed release architecture $architecture does not match host $(uname -m)"; return 1; }
   printf '%s\n' "$canonical_release"
 }
 
@@ -232,13 +237,13 @@ current_release_identity(){
     printf '\t\n'
     return 0
   fi
-  [[ -L "$CURRENT_LINK" ]] || die "current release pointer is not a symbolic link: $CURRENT_LINK"
-  canonical_root="$(realpath -e "$RELEASES_ROOT")"
-  resolved="$(realpath -e "$CURRENT_LINK")"
+  [[ -L "$CURRENT_LINK" ]] || { die "current release pointer is not a symbolic link: $CURRENT_LINK"; return 1; }
+  canonical_root="$(realpath -e "$RELEASES_ROOT")" || return 1
+  resolved="$(realpath -e "$CURRENT_LINK")" || return 1
   [[ "$(dirname "$resolved")" == "$canonical_root" ]] \
-    || die "current release points outside the trusted release root: $resolved"
+    || { die "current release points outside the trusted release root: $resolved"; return 1; }
   leaf="$(basename "$resolved")"
-  [[ "$leaf" =~ ^[0-9a-f]{40}$ ]] || die "current release target is not a full commit: $resolved"
+  [[ "$leaf" =~ ^[0-9a-f]{40}$ ]] || { die "current release target is not a full commit: $resolved"; return 1; }
   printf '%s\t%s\n' "$leaf" "$resolved"
 }
 
@@ -730,21 +735,18 @@ verify_restored_dropin(){
 }
 
 state_tool_release_args(){
-  printf '%s\0' --state-root "$STATE_ROOT" --target-release "$TARGET_RELEASE"
+  STATE_TOOL_ARGS=(--state-root "$STATE_ROOT" --target-release "$TARGET_RELEASE")
   if [[ -n "$PREVIOUS_RELEASE" ]]; then
-    printf '%s\0' --previous-release "$PREVIOUS_RELEASE"
+    STATE_TOOL_ARGS+=(--previous-release "$PREVIOUS_RELEASE")
   fi
   if (( APPROVE_ONE_WAY_MIGRATION )); then
-    printf '%s\0' --approve-one-way
+    STATE_TOOL_ARGS+=(--approve-one-way)
   fi
 }
 
 preflight_state_compatibility(){
-  local -a args=()
-  while IFS= read -r -d '' value; do
-    args+=("$value")
-  done < <(state_tool_release_args)
-  STATE_PLAN_JSON="$("$STATE_TOOL" preflight "${args[@]}")"
+  state_tool_release_args
+  STATE_PLAN_JSON="$("$STATE_TOOL" preflight "${STATE_TOOL_ARGS[@]}")"
   python3 - "$STATE_PLAN_JSON" <<'PY'
 import json
 import sys
@@ -762,27 +764,25 @@ PY
 }
 
 migrate_state_if_required(){
-  local result value
-  local -a args=()
-  while IFS= read -r -d '' value; do
-    args+=("$value")
-  done < <(state_tool_release_args)
+  local result parsed
+  state_tool_release_args
   # Keep the command substitution in a tested conditional. With errtrace on,
   # allowing the substitution itself to trigger ERR would invoke automatic
   # rollback once in the subshell and again when this function returned.
-  if ! result="$("$STATE_TOOL" migrate "${args[@]}" \
+  if ! result="$("$STATE_TOOL" migrate "${STATE_TOOL_ARGS[@]}" \
     --backup-root "$STATE_BACKUP_ROOT" \
     --target-commit "$TARGET_COMMIT" \
     --state-group "$TRANSACTION_GROUP")"; then
     return 1
   fi
-  IFS=$'\t' read -r STATE_MIGRATED STATE_BACKUP_DIR < <(python3 - "$result" <<'PY'
+  parsed="$(python3 - "$result" <<'PY'
 import json
 import sys
 value = json.loads(sys.argv[1])
 print(f'{1 if value.get("migrated") is True else 0}\t{value.get("backup_directory") or ""}')
 PY
-  )
+  )" || return 1
+  IFS=$'\t' read -r STATE_MIGRATED STATE_BACKUP_DIR <<<"$parsed"
   [[ "$STATE_MIGRATED" == "0" || "$STATE_MIGRATED" == "1" ]] \
     || die "state migration tool returned an invalid result"
 }
@@ -934,7 +934,7 @@ flock -n 9 || die "another release activation is already running"
 [[ -x "$MANIFEST_TOOL" ]] || die "trusted manifest validator not executable: $MANIFEST_TOOL"
 [[ -x "$STATE_TOOL" ]] || die "trusted state compatibility tool not executable: $STATE_TOOL"
 [[ -f "$COMPONENTS_FILE" ]] || die "trusted component policy missing: $COMPONENTS_FILE"
-TARGET_RELEASE="$(validate_release "$TARGET_COMMIT")"
+TARGET_RELEASE="$(validate_release "$TARGET_COMMIT")" || die "target release validation failed"
 if (( VALIDATE_ONLY )); then
   log "installed release validation passed: $TARGET_RELEASE"
   exit 0
@@ -942,13 +942,13 @@ fi
 
 [[ "$ACTIVATION_ENABLED" == "1" ]] \
   || die "activation is disabled by root-owned policy; enable only for an approved appliance rollback test"
-prepare_transaction_directory
 existing_status="$(transaction_status)"
 case "$existing_status" in
   ""|committed|rolled_back) ;;
   *) die "unresolved deployment transaction has status '$existing_status': $TRANSACTION_FILE" ;;
 esac
-IFS=$'\t' read -r PREVIOUS_COMMIT PREVIOUS_RELEASE < <(current_release_identity)
+previous_identity="$(current_release_identity)" || die "current release identity failed"
+IFS=$'\t' read -r PREVIOUS_COMMIT PREVIOUS_RELEASE <<<"$previous_identity"
 [[ "$PREVIOUS_COMMIT" != "$TARGET_COMMIT" ]] || die "release is already active: $TARGET_COMMIT"
 if systemctl is-active --quiet "$SATURN_GO_SERVICE"; then SATURN_GO_WAS_ACTIVE=1; fi
 if systemctl is-active --quiet "$BRIDGE_SERVICE"; then BRIDGE_WAS_ACTIVE=1; fi
@@ -969,10 +969,13 @@ PREVIOUS_READY_COMMIT="$(probe_running_commit)" \
 if [[ -n "$PREVIOUS_COMMIT" ]]; then
   [[ "$PREVIOUS_READY_COMMIT" == "$PREVIOUS_COMMIT" ]] \
     || die "active pointer and running commit disagree: $PREVIOUS_COMMIT != $PREVIOUS_READY_COMMIT"
-  [[ "$(validate_release "$PREVIOUS_COMMIT")" == "$PREVIOUS_RELEASE" ]] \
+  validated_previous="$(validate_release "$PREVIOUS_COMMIT")" \
+    || die "previous active release failed validation"
+  [[ "$validated_previous" == "$PREVIOUS_RELEASE" ]] \
     || die "previous active release failed validation"
 fi
 preflight_state_compatibility
+prepare_transaction_directory
 SATURN_GO_DROPIN="$SYSTEMD_ROOT/$SATURN_GO_SERVICE.d/50-saturn-release.conf"
 BRIDGE_DROPIN="$SYSTEMD_ROOT/$BRIDGE_SERVICE.d/50-saturn-release.conf"
 P2APP_DROPIN="$SYSTEMD_ROOT/$P2APP_SERVICE.d/50-saturn-release.conf"

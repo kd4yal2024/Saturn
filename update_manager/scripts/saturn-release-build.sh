@@ -333,6 +333,10 @@ run_test_gates(){
 
   log "Running persistent-state compatibility tests"
   run "$REPO_ROOT/tests/test-saturn-state-compatibility.sh"
+
+  log "Running release activation and privileged-helper installation tests"
+  run bash "$REPO_ROOT/tests/test-saturn-release-activate.sh"
+  run bash "$REPO_ROOT/tests/test-saturn-release-install-activator.sh"
 }
 
 build_release_components(){
@@ -470,7 +474,9 @@ create_manifest(){
     --build-result saturn-bridge-release-build \
     --build-result native-release-build \
     --build-result release-manifest-validation \
-    --build-result state-compatibility-tests
+    --build-result state-compatibility-tests \
+    --build-result release-activation-tests \
+    --build-result release-helper-install-tests
 }
 
 require_positive_integer SATURN_RELEASE_BUILD_JOBS "$BUILD_JOBS"

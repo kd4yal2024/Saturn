@@ -6,6 +6,7 @@ ACTIVATOR="$REPO_ROOT/update_manager/scripts/saturn-release-activate-root.sh"
 MANIFEST_TOOL="$REPO_ROOT/update_manager/scripts/saturn-release-manifest.py"
 STATE_TOOL="$REPO_ROOT/update_manager/scripts/saturn-state-compatibility.py"
 COMPONENTS="$REPO_ROOT/update_manager/release/components-v1.json"
+REAL_PYTHON="$(command -v python3)"
 TMP_ROOT="$(mktemp -d)"
 SATURN_ROOT="$TMP_ROOT/saturn"
 RELEASES_ROOT="$SATURN_ROOT/releases"
@@ -239,6 +240,85 @@ fi
 
 write_config 0
 "$ACTIVATOR" --validate "$NEW_COMMIT" >/dev/null
+
+# A failed manifest check must remain a failure when validate_release runs in
+# command substitution, both in --validate and before an active transaction.
+printf 'tampered payload\n' >>"$RELEASES_ROOT/$BAD_COMMIT/bin/p2app"
+if "$ACTIVATOR" --validate "$BAD_COMMIT" >/dev/null 2>&1; then
+  printf 'tampered release unexpectedly passed validation\n' >&2
+  exit 1
+fi
+write_config 1
+: >"$SYSTEMCTL_LOG"
+if "$ACTIVATOR" "$BAD_COMMIT" >/dev/null 2>&1; then
+  printf 'tampered release unexpectedly activated\n' >&2
+  exit 1
+fi
+if grep -Eq '^(start|stop) ' "$SYSTEMCTL_LOG"; then
+  printf 'tampered release changed service state\n' >&2
+  exit 1
+fi
+[[ ! -e "$TRANSACTION_FILE" && ! -e "$CURRENT_LINK" ]]
+create_release "$BAD_COMMIT"
+
+# All other mandatory guards must fail closed as well.
+chmod 0666 "$RELEASES_ROOT/$BAD_COMMIT/bin/p2app"
+if "$ACTIVATOR" --validate "$BAD_COMMIT" >/dev/null 2>&1; then
+  printf 'unsafe release permissions unexpectedly passed validation\n' >&2
+  exit 1
+fi
+create_release "$BAD_COMMIT"
+ln -s /etc/passwd "$RELEASES_ROOT/$BAD_COMMIT/unsafe-link"
+if "$ACTIVATOR" --validate "$BAD_COMMIT" >/dev/null 2>&1; then
+  printf 'symlinked release entry unexpectedly passed validation\n' >&2
+  exit 1
+fi
+rm "$RELEASES_ROOT/$BAD_COMMIT/unsafe-link"
+sed -i "s/\"architecture\": \"$(uname -m)\"/\"architecture\": \"wrong-architecture\"/" \
+  "$RELEASES_ROOT/$BAD_COMMIT/release-manifest.json"
+if "$ACTIVATOR" --validate "$BAD_COMMIT" >/dev/null 2>&1; then
+  printf 'wrong release architecture unexpectedly passed validation\n' >&2
+  exit 1
+fi
+create_release "$BAD_COMMIT"
+sed -i "s/$BAD_COMMIT/$OLD_COMMIT/" "$RELEASES_ROOT/$BAD_COMMIT/release-manifest.json"
+if "$ACTIVATOR" --validate "$BAD_COMMIT" >/dev/null 2>&1; then
+  printf 'wrong release commit unexpectedly passed validation\n' >&2
+  exit 1
+fi
+create_release "$BAD_COMMIT"
+
+# The identity producer must finish before the helper drops the lock. The
+# delayed wrapper emits the identity line, then holds inherited FD 9 briefly.
+cat >"$FAKE_BIN/python3" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+if [[ "${1:-}" == "-" && "${2:-}" == */release-manifest.json ]]; then
+  if [[ "${SATURN_TEST_IDENTITY_MODE:-}" == fail ]]; then exit 42; fi
+  "$SATURN_TEST_REAL_PYTHON" "$@"
+  if [[ "${SATURN_TEST_IDENTITY_MODE:-}" == delay ]]; then
+    : >"$SATURN_TEST_IDENTITY_MARKER"
+    sleep 2
+  fi
+  exit 0
+fi
+exec "$SATURN_TEST_REAL_PYTHON" "$@"
+EOF
+chmod 0755 "$FAKE_BIN/python3"
+export SATURN_TEST_REAL_PYTHON="$REAL_PYTHON"
+export SATURN_TEST_IDENTITY_MARKER="$TMP_ROOT/identity-delayed"
+export SATURN_TEST_IDENTITY_MODE=fail
+if "$ACTIVATOR" --validate "$NEW_COMMIT" >/dev/null 2>&1; then
+  printf 'failed identity producer unexpectedly passed validation\n' >&2
+  exit 1
+fi
+export SATURN_TEST_IDENTITY_MODE=delay
+"$ACTIVATOR" --validate "$NEW_COMMIT" >/dev/null
+[[ -f "$SATURN_TEST_IDENTITY_MARKER" ]]
+unset SATURN_TEST_IDENTITY_MODE
+rm "$FAKE_BIN/python3"
+write_config 0
+
 install -d -m 0755 "$(dirname "$LOCK_FILE")"
 exec 8>"$LOCK_FILE"
 flock -n 8
@@ -326,6 +406,23 @@ export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
 [[ "$(stat -c '%a' "$TRANSACTION_FILE")" == "640" ]]
 [[ "$(stat -c '%a' "$TRANSACTION_FILE.last-good")" == "640" ]]
 cmp "$TRANSACTION_FILE" "$TRANSACTION_FILE.last-good"
+
+# A damaged active rollback release must be rejected before touching the
+# selected owner, pointer, drop-ins, or transaction record.
+cp "$TRANSACTION_FILE" "$TMP_ROOT/transaction.before-corrupt-rollback"
+printf 'tampered active payload\n' >>"$RELEASES_ROOT/$NEW_COMMIT/bin/p2app"
+: >"$SYSTEMCTL_LOG"
+if "$ACTIVATOR" "$STARTUP_COMMIT" >/dev/null 2>&1; then
+  printf 'damaged rollback release unexpectedly allowed activation\n' >&2
+  exit 1
+fi
+if grep -Eq '^(start|stop) ' "$SYSTEMCTL_LOG"; then
+  printf 'damaged rollback release changed service state\n' >&2
+  exit 1
+fi
+cmp "$TMP_ROOT/transaction.before-corrupt-rollback" "$TRANSACTION_FILE"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+create_release "$NEW_COMMIT"
 
 python3 - "$TRANSACTION_FILE" "$OLD_COMMIT" "$NEW_COMMIT" <<'PY'
 import json
