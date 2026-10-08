@@ -27,6 +27,8 @@ SATURN_GO_SERVICE="saturn-go.service"
 BRIDGE_SERVICE="saturn-bridge.service"
 P2APP_SERVICE="p2app.service"
 SATURN_GO_READY_URL="http://127.0.0.1:8080/readyz"
+P23_PERF_URL="http://127.0.0.1:8080/p23_perf"
+BACKEND_STATUS_HELPER="/usr/local/lib/saturn-go/scripts/saturn-radio-backend-switch-root.sh"
 READY_TIMEOUT_SECONDS=30
 P2APP_PANEL_ENABLED=0
 TRANSACTION_GROUP="pi"
@@ -57,6 +59,7 @@ P2APP_WAS_ACTIVE=0
 STATE_PLAN_JSON=""
 STATE_BACKUP_DIR=""
 STATE_MIGRATED=0
+SELECTED_BACKEND=""
 
 log(){ printf '[saturn-release-activate] %s\n' "$*"; }
 die(){ printf '[saturn-release-activate] ERROR: %s\n' "$*" >&2; return 1; }
@@ -117,6 +120,8 @@ load_config(){
       BRIDGE_SERVICE) BRIDGE_SERVICE="$value" ;;
       P2APP_SERVICE) P2APP_SERVICE="$value" ;;
       SATURN_GO_READY_URL) SATURN_GO_READY_URL="$value" ;;
+      P23_PERF_URL) P23_PERF_URL="$value" ;;
+      BACKEND_STATUS_HELPER) BACKEND_STATUS_HELPER="$value" ;;
       READY_TIMEOUT_SECONDS) READY_TIMEOUT_SECONDS="$value" ;;
       P2APP_PANEL_ENABLED) P2APP_PANEL_ENABLED="$value" ;;
       TRANSACTION_GROUP) TRANSACTION_GROUP="$value" ;;
@@ -137,7 +142,7 @@ validate_configuration(){
   for path in \
     "$SATURN_ROOT" "$RELEASES_ROOT" "$CURRENT_LINK" "$TRANSACTION_FILE" "$LOCK_FILE" \
     "$MANIFEST_TOOL" "$COMPONENTS_FILE" "$SYSTEMD_ROOT" \
-    "$STATE_TOOL" "$STATE_ROOT" "$STATE_BACKUP_ROOT"
+    "$STATE_TOOL" "$STATE_ROOT" "$STATE_BACKUP_ROOT" "$BACKEND_STATUS_HELPER"
   do
     [[ "$path" == /* && "$path" != *[$'\t\r\n ']* ]] || die "unsafe configured path: $path"
   done
@@ -158,6 +163,9 @@ validate_configuration(){
   [[ "$TRANSACTION_GID" =~ ^[0-9]+$ ]] || die "cannot resolve transaction group: $TRANSACTION_GROUP"
   [[ "$SATURN_GO_READY_URL" =~ ^http://127\.0\.0\.1:[0-9]+/[A-Za-z0-9_./-]+$ ]] \
     || die "SATURN_GO_READY_URL must be an explicit loopback HTTP endpoint"
+  [[ "$P23_PERF_URL" =~ ^http://127\.0\.0\.1:[0-9]+/[A-Za-z0-9_./-]+$ ]] \
+    || die "P23_PERF_URL must be an explicit loopback HTTP endpoint"
+  [[ -x "$BACKEND_STATUS_HELPER" ]] || die "backend status helper is not executable: $BACKEND_STATUS_HELPER"
 
   if (( EUID != 0 )); then
     [[ "${SATURN_RELEASE_ACTIVATE_TEST_MODE:-0}" == "1" ]] \
@@ -285,7 +293,7 @@ write_transaction(){
     "$BRIDGE_DROPIN" "$BRIDGE_DROPIN_EXISTED" \
     "$P2APP_DROPIN" "$P2APP_DROPIN_EXISTED" "$TRANSACTION_GID" \
     "$PREVIOUS_READY_COMMIT" "$ROLLBACK_DIR" \
-    "$SATURN_GO_WAS_ACTIVE" "$BRIDGE_WAS_ACTIVE" "$P2APP_WAS_ACTIVE" \
+    "$SATURN_GO_WAS_ACTIVE" "$BRIDGE_WAS_ACTIVE" "$P2APP_WAS_ACTIVE" "$SELECTED_BACKEND" \
     "$ACTIVATION_FAILURE_PHASE" "$ACTIVATION_FAILURE_COMMAND" \
     "$ACTIVATION_FAILURE_STATUS" "$ROLLBACK_STATUS" "$ROLLBACK_MESSAGE" \
     "$STATE_PLAN_JSON" "$STATE_BACKUP_DIR" "$STATE_MIGRATED" \
@@ -305,7 +313,7 @@ from pathlib import Path
     p2app_dropin, p2app_dropin_existed,
     transaction_gid,
     previous_ready_commit, rollback_directory,
-    saturn_go_was_active, bridge_was_active, p2app_was_active,
+    saturn_go_was_active, bridge_was_active, p2app_was_active, selected_backend,
     failure_phase, failure_command, failure_status,
     rollback_status, rollback_message,
     state_plan_json, state_backup_directory, state_migrated,
@@ -333,7 +341,8 @@ if mode == "prepare":
         "rollback_directory": rollback_directory,
         "services": {
             "stop_order": [saturn_go, bridge, p2app],
-            "start_order": [p2app, bridge, saturn_go],
+            "start_order": ([p2app] if selected_backend == "p2" else [bridge]) + [saturn_go],
+            "selected_backend": selected_backend,
             "previously_active": {
                 saturn_go: saturn_go_was_active == "1",
                 bridge: bridge_was_active == "1",
@@ -626,6 +635,76 @@ wait_for_commit(){
   ready_response_matches "$response" "$expected"
 }
 
+selected_backend_status(){
+  local response
+  response="$("$BACKEND_STATUS_HELPER" status)" || return 1
+  python3 - "$response" <<'PY'
+import json
+import sys
+try:
+    value = json.loads(sys.argv[1])
+except (ValueError, TypeError):
+    raise SystemExit(1)
+selected = value.get("selected")
+if selected not in ("p2", "xdma"):
+    raise SystemExit(1)
+if value.get("runtime") != selected or value.get("operational_status") != "ready":
+    raise SystemExit(1)
+if value.get("transaction_status") != "idle" or value.get("mutual_exclusion_ok") is not True:
+    raise SystemExit(1)
+services = value.get("services") or {}
+if selected == "p2" and (services.get("p2app") != "active" or services.get("saturn_bridge") != "inactive"):
+    raise SystemExit(1)
+if selected == "xdma" and (services.get("saturn_bridge") != "active" or services.get("p2app") != "inactive"):
+    raise SystemExit(1)
+print(selected)
+PY
+}
+
+selected_owner_receiving(){
+  local backend="$1" response status
+  status="$(selected_backend_status)" || return 1
+  [[ "$status" == "$backend" ]] || return 1
+  response="$(curl -fsS --max-time 2 "$P23_PERF_URL")" || return 1
+  python3 - "$backend" "$response" <<'PY'
+import json
+import sys
+backend = sys.argv[1]
+try:
+    root = json.loads(sys.argv[2])
+    perf = root["perf"]
+    workload = perf["workload"]
+    telemetry = perf["app_telemetry"]
+    current = telemetry["current"]
+    state = current["state"]
+    pid = workload["service_main_pid"]
+    age = telemetry["age_seconds"]
+except (ValueError, TypeError, KeyError):
+    raise SystemExit(1)
+expected_app = "p2" if backend == "p2" else "saturn-bridge"
+if (workload.get("selected_app") != backend or current.get("app") != expected_app
+        or not isinstance(pid, int) or pid <= 0 or current.get("pid") != pid
+        or telemetry.get("snapshot_readable") is not True
+        or telemetry.get("pid_matches_service") is not True
+        or not isinstance(age, (int, float)) or not 0 <= age <= 5
+        or state.get("sdr_active") is not True
+        or state.get("thread_error") is True):
+    raise SystemExit(1)
+PY
+}
+
+wait_for_selected_owner(){
+  local backend="$1" elapsed=0
+  while (( elapsed < READY_TIMEOUT_SECONDS )); do
+    if selected_owner_receiving "$backend"; then
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  selected_owner_receiving "$backend"
+}
+
 restore_dropin(){
   local destination="$1" existed="$2" backup="$3"
   if [[ "$existed" == "1" ]]; then
@@ -726,11 +805,11 @@ stop_affected_services(){
 
 restore_previous_services(){
   local rc=0
-  if [[ "$P2APP_WAS_ACTIVE" == "1" ]]; then
+  if [[ "$SELECTED_BACKEND" == "p2" && "$P2APP_WAS_ACTIVE" == "1" ]]; then
     systemctl start "$P2APP_SERVICE" || rc=1
     systemctl is-active --quiet "$P2APP_SERVICE" || rc=1
   fi
-  if [[ "$BRIDGE_WAS_ACTIVE" == "1" ]]; then
+  if [[ "$SELECTED_BACKEND" == "xdma" && "$BRIDGE_WAS_ACTIVE" == "1" ]]; then
     systemctl start "$BRIDGE_SERVICE" || rc=1
     systemctl is-active --quiet "$BRIDGE_SERVICE" || rc=1
   fi
@@ -773,6 +852,7 @@ rollback_activation(){
   restore_previous_services || rc=1
   if [[ "$SATURN_GO_WAS_ACTIVE" == "1" ]]; then
     wait_for_commit "$PREVIOUS_READY_COMMIT" || rc=1
+    wait_for_selected_owner "$SELECTED_BACKEND" || rc=1
   fi
 
   if (( rc == 0 )); then
@@ -872,6 +952,15 @@ IFS=$'\t' read -r PREVIOUS_COMMIT PREVIOUS_RELEASE < <(current_release_identity)
 if systemctl is-active --quiet "$SATURN_GO_SERVICE"; then SATURN_GO_WAS_ACTIVE=1; fi
 if systemctl is-active --quiet "$BRIDGE_SERVICE"; then BRIDGE_WAS_ACTIVE=1; fi
 if systemctl is-active --quiet "$P2APP_SERVICE"; then P2APP_WAS_ACTIVE=1; fi
+SELECTED_BACKEND="$(selected_backend_status)" \
+  || die "cannot activate without one healthy selected radio owner"
+if [[ "$SELECTED_BACKEND" == "p2" ]]; then
+  [[ "$P2APP_WAS_ACTIVE" == "1" && "$BRIDGE_WAS_ACTIVE" == "0" ]] \
+    || die "P2 selection disagrees with active services"
+else
+  [[ "$BRIDGE_WAS_ACTIVE" == "1" && "$P2APP_WAS_ACTIVE" == "0" ]] \
+    || die "direct-XDMA selection disagrees with active services"
+fi
 [[ "$SATURN_GO_WAS_ACTIVE" == "1" ]] \
   || die "cannot activate from an unhealthy baseline: $SATURN_GO_SERVICE is not active"
 PREVIOUS_READY_COMMIT="$(probe_running_commit)" \
@@ -918,16 +1007,24 @@ atomic_switch_pointer "$TARGET_RELEASE"
 
 PHASE="service-start"
 write_transaction "activating" "$PHASE" "Starting affected services in dependency order"
-systemctl start "$P2APP_SERVICE"
-systemctl is-active --quiet "$P2APP_SERVICE"
-systemctl start "$BRIDGE_SERVICE"
-systemctl is-active --quiet "$BRIDGE_SERVICE"
+if [[ "$SELECTED_BACKEND" == "p2" ]]; then
+  systemctl start "$P2APP_SERVICE"
+  systemctl is-active --quiet "$P2APP_SERVICE"
+  ! systemctl is-active --quiet "$BRIDGE_SERVICE"
+else
+  systemctl start "$BRIDGE_SERVICE"
+  systemctl is-active --quiet "$BRIDGE_SERVICE"
+  ! systemctl is-active --quiet "$P2APP_SERVICE"
+fi
 systemctl start "$SATURN_GO_SERVICE"
 systemctl is-active --quiet "$SATURN_GO_SERVICE"
 
 PHASE="readiness"
 write_transaction "verifying" "$PHASE" "Waiting for target-aware readiness"
 if ! wait_for_commit "$TARGET_COMMIT"; then
+  false
+fi
+if ! wait_for_selected_owner "$SELECTED_BACKEND"; then
   false
 fi
 

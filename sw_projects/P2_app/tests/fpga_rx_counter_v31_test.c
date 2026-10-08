@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "fpga_rx_counter_v31.h"
@@ -26,9 +27,11 @@ static bool Valid, Reset;
 static bool FaultFired;
 static uint32_t FailedRequestToken;
 static unsigned int AckFailuresRemaining, AckAttempts;
+static unsigned int RegisterReads, RegisterWrites;
 
 bool RegisterReadChecked(uint32_t Address, uint32_t *Value)
 {
+  RegisterReads++;
   uint32_t Offset = Address - 0x8000U;
   uint64_t Counter;
   unsigned int Index;
@@ -75,6 +78,7 @@ bool RegisterReadChecked(uint32_t Address, uint32_t *Value)
 
 bool RegisterWriteChecked(uint32_t Address, uint32_t Value)
 {
+  RegisterWrites++;
   if (Reset) return false;
   if (Address == 0x804cU && !Valid && Value != 0)
   { Token = Value; return true; }
@@ -120,7 +124,39 @@ static void ResetFake(EMode NewMode)
   Valid = Reset = FaultFired = false;
   FailedRequestToken = 0;
   AckFailuresRemaining = AckAttempts = 0;
+  RegisterReads = RegisterWrites = 0;
   RXC1Init();
+}
+
+static void TestPollingDisabled(void)
+{
+  TRXC1Snapshot Snapshot;
+  FILE *File;
+  char Buffer[8192];
+  size_t Length;
+  unsigned int Receiver;
+  assert(setenv("SATURN_RXC1_POLL_ENABLED", "0", 1) == 0);
+  ResetFake(Normal);
+  RXC1Sample();
+  RXC1MaybeSample();
+  RXC1GetSnapshot(&Snapshot);
+  assert(RegisterReads == 0 && RegisterWrites == 0);
+  assert(Snapshot.SampledAtMs == 0 && Snapshot.HostAcquisitionFailures == 0);
+  for (Receiver = 0; Receiver < RXC1_DDC_COUNT; Receiver++)
+    assert(Snapshot.DDC[Receiver].Status == eRXC1Disabled);
+  File = tmpfile();
+  assert(File != NULL);
+  RXC1WriteJSON(File, &Snapshot);
+  rewind(File);
+  Length = fread(Buffer, 1, sizeof(Buffer) - 1U, File);
+  Buffer[Length] = 0;
+  fclose(File);
+  assert(strstr(Buffer, "\"status\":\"disabled\"") != NULL);
+  assert(strstr(Buffer, "\"refused_pre_fir_pair_candidates\":null") != NULL);
+  assert(unsetenv("SATURN_RXC1_POLL_ENABLED") == 0);
+  ResetFake(Normal);
+  RXC1Sample();
+  assert(RegisterReads != 0 && RegisterWrites != 0);
 }
 
 static void TestNormalAndRestart(void)
@@ -342,6 +378,7 @@ int main(void)
   TestPostAckIdentityChanges();
   TestUnavailableJSON();
   TestSaturation();
+  TestPollingDisabled();
   puts("RXC1 checked acquisition tests passed");
   return 0;
 }

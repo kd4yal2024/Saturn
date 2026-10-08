@@ -1504,6 +1504,9 @@ function rxCounterV31Presentation(value, activeBackend){
   if ((activeBackend === 'p2' || activeBackend === 'xdma') && backend !== activeBackend){
     return { state:'unavailable', summary:'unavailable', detail:`Stale ${backend} reading does not belong to active ${activeBackend} backend; no loss count is inferred.` };
   }
+  if (value.status === 'disabled'){
+    return { state:'unavailable', summary:'disabled / unavailable', detail:'RXC1 polling is disabled in the selected acquisition owner; no register reads or loss count are inferred.' };
+  }
   if (backend === 'unknown' || !['valid', 'partial'].includes(value.status)){
     return { state:'unavailable', summary:'unavailable', detail:`Acquisition ${String(value.status || 'missing')} from ${backend}; no loss count is inferred.` };
   }

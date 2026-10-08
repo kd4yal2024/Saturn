@@ -16,6 +16,7 @@ SYSTEMD_ROOT="$TMP_ROOT/systemd"
 CONFIG_FILE="$TMP_ROOT/activate.conf"
 FAKE_BIN="$TMP_ROOT/bin"
 SYSTEMCTL_LOG="$TMP_ROOT/systemctl.log"
+SYSTEMCTL_STATE="$TMP_ROOT/service-state"
 OLD_COMMIT="1111111111111111111111111111111111111111"
 NEW_COMMIT="2222222222222222222222222222222222222222"
 BAD_COMMIT="3333333333333333333333333333333333333333"
@@ -24,6 +25,8 @@ CONFIG_COMMIT="5555555555555555555555555555555555555555"
 WRONG_COMMIT="6666666666666666666666666666666666666666"
 ROLLBACK_FAIL_COMMIT="7777777777777777777777777777777777777777"
 MIGRATION_FAIL_COMMIT="8888888888888888888888888888888888888888"
+OWNER_FAIL_COMMIT="9999999999999999999999999999999999999999"
+P2_COMMIT="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 cleanup(){ rm -rf -- "$TMP_ROOT"; }
 trap cleanup EXIT
@@ -95,6 +98,8 @@ SATURN_GO_SERVICE="saturn-go.service"
 BRIDGE_SERVICE="saturn-bridge.service"
 P2APP_SERVICE="p2app.service"
 SATURN_GO_READY_URL="http://127.0.0.1:18080/readyz"
+P23_PERF_URL="http://127.0.0.1:18080/p23_perf"
+BACKEND_STATUS_HELPER="$FAKE_BIN/backend-status"
 READY_TIMEOUT_SECONDS="2"
 P2APP_PANEL_ENABLED="0"
 TRANSACTION_GROUP="$(id -gn)"
@@ -112,6 +117,12 @@ create_release "$CONFIG_COMMIT"
 create_release "$WRONG_COMMIT"
 create_release "$ROLLBACK_FAIL_COMMIT"
 create_release "$MIGRATION_FAIL_COMMIT"
+create_release "$OWNER_FAIL_COMMIT"
+create_release "$P2_COMMIT"
+
+mkdir -p "$SYSTEMCTL_STATE"
+: >"$SYSTEMCTL_STATE/saturn-go.service"
+: >"$SYSTEMCTL_STATE/saturn-bridge.service"
 
 cat >"$FAKE_BIN/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -123,11 +134,26 @@ if [[ -n "${SATURN_TEST_SYSTEMCTL_FAIL_ONCE:-}" \
   : >"$SATURN_TEST_SYSTEMCTL_FAIL_MARKER"
   exit 1
 fi
-exit 0
+case "$1" in
+  is-active) [[ -f "$SATURN_TEST_SYSTEMCTL_STATE/$3" ]] ;;
+  start) : >"$SATURN_TEST_SYSTEMCTL_STATE/$2" ;;
+  stop) rm -f -- "$SATURN_TEST_SYSTEMCTL_STATE/$2" ;;
+esac
 EOF
 cat >"$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [[ "$*" == *'/p23_perf'* ]]; then
+  backend="${SATURN_TEST_SELECTED_BACKEND:-xdma}"
+  app="saturn-bridge"
+  [[ "$backend" == "p2" ]] && app="p2"
+  active=true
+  current="$(readlink -f "$SATURN_TEST_CURRENT_LINK" 2>/dev/null || true)"
+  if [[ "$current" == *"/${SATURN_TEST_OWNER_UNAVAILABLE_COMMIT:-not-a-commit}" ]]; then active=false; fi
+  printf '{"perf":{"workload":{"selected_app":"%s","service_main_pid":123},"app_telemetry":{"snapshot_readable":true,"pid_matches_service":true,"age_seconds":0.1,"current":{"app":"%s","pid":123,"state":{"sdr_active":%s,"thread_error":false}}}}}\n' \
+    "$backend" "$app" "$active"
+  exit 0
+fi
 if [[ "$*" =~ expected_commit=([0-9a-f]{40}) ]]; then
   expected="${BASH_REMATCH[1]}"
   if [[ " ${SATURN_TEST_READY_FAIL_COMMITS:-} " == *" $expected "* ]]; then
@@ -144,12 +170,29 @@ fi
 printf '{"status":"ready","ready":true,"build_commit":"%s","expected_commit":"%s"}\n' \
   "$SATURN_TEST_RUNNING_COMMIT" "$SATURN_TEST_RUNNING_COMMIT"
 EOF
-chmod 0755 "$FAKE_BIN/systemctl" "$FAKE_BIN/curl"
+cat >"$FAKE_BIN/backend-status" <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ "${1:-}" == "status" ]] || exit 1
+backend="${SATURN_TEST_SELECTED_BACKEND:-xdma}"
+p2=inactive
+bridge=inactive
+[[ -f "$SATURN_TEST_SYSTEMCTL_STATE/p2app.service" ]] && p2=active
+[[ -f "$SATURN_TEST_SYSTEMCTL_STATE/saturn-bridge.service" ]] && bridge=active
+status=stopped
+if [[ "$backend" == p2 && "$p2" == active && "$bridge" == inactive ]] || \
+   [[ "$backend" == xdma && "$bridge" == active && "$p2" == inactive ]]; then status=ready; fi
+printf '{"selected":"%s","runtime":"%s","operational_status":"%s","transaction_status":"idle","mutual_exclusion_ok":true,"services":{"p2app":"%s","saturn_bridge":"%s"}}\n' \
+  "$backend" "$backend" "$status" "$p2" "$bridge"
+EOF
+chmod 0755 "$FAKE_BIN/systemctl" "$FAKE_BIN/curl" "$FAKE_BIN/backend-status"
 
 export PATH="$FAKE_BIN:$PATH"
 export SATURN_RELEASE_ACTIVATE_CONFIG="$CONFIG_FILE"
 export SATURN_RELEASE_ACTIVATE_TEST_MODE=1
 export SATURN_TEST_SYSTEMCTL_LOG="$SYSTEMCTL_LOG"
+export SATURN_TEST_SYSTEMCTL_STATE="$SYSTEMCTL_STATE"
+export SATURN_TEST_CURRENT_LINK="$CURRENT_LINK"
 export SATURN_TEST_RUNNING_COMMIT="$OLD_COMMIT"
 export SATURN_TEST_SYSTEMCTL_FAIL_MARKER="$TMP_ROOT/systemctl-failed-once"
 
@@ -285,8 +328,9 @@ assert value["services"]["stop_order"] == [
     "saturn-go.service", "saturn-bridge.service", "p2app.service"
 ]
 assert value["services"]["start_order"] == [
-    "p2app.service", "saturn-bridge.service", "saturn-go.service"
+    "saturn-bridge.service", "saturn-go.service"
 ]
+assert value["services"]["selected_backend"] == "xdma"
 assert all(
     not item["previously_existed"]
     for item in value["service_dropins"].values()
@@ -318,61 +362,28 @@ cp "$SYSTEMD_ROOT/saturn-go.service.d/50-saturn-release.conf" "$TMP_ROOT/saturn-
 cp "$SYSTEMD_ROOT/saturn-bridge.service.d/50-saturn-release.conf" "$TMP_ROOT/saturn-bridge.expected"
 cp "$SYSTEMD_ROOT/p2app.service.d/50-saturn-release.conf" "$TMP_ROOT/p2app.expected"
 
-cat >"$TMP_ROOT/expected-systemctl.log" <<'EOF'
-is-active --quiet saturn-go.service
-is-active --quiet saturn-bridge.service
-is-active --quiet p2app.service
-stop saturn-go.service
-stop saturn-bridge.service
-stop p2app.service
-stop saturn-go.service
-stop saturn-bridge.service
-stop p2app.service
-daemon-reload
-start p2app.service
-is-active --quiet p2app.service
-start saturn-bridge.service
-is-active --quiet saturn-bridge.service
-start saturn-go.service
-is-active --quiet saturn-go.service
-is-active --quiet saturn-go.service
-is-active --quiet saturn-bridge.service
-is-active --quiet p2app.service
-stop saturn-go.service
-stop saturn-bridge.service
-stop p2app.service
-daemon-reload
-start p2app.service
-is-active --quiet p2app.service
-start saturn-bridge.service
-is-active --quiet saturn-bridge.service
-start saturn-go.service
-is-active --quiet saturn-go.service
-stop saturn-go.service
-stop saturn-bridge.service
-stop p2app.service
-daemon-reload
-start p2app.service
-is-active --quiet p2app.service
-start saturn-bridge.service
-is-active --quiet saturn-bridge.service
-start saturn-go.service
-is-active --quiet saturn-go.service
-is-active --quiet saturn-go.service
-is-active --quiet saturn-bridge.service
-is-active --quiet p2app.service
-stop saturn-go.service
-stop saturn-bridge.service
-stop p2app.service
-daemon-reload
-start p2app.service
-is-active --quiet p2app.service
-start saturn-bridge.service
-is-active --quiet saturn-bridge.service
-start saturn-go.service
-is-active --quiet saturn-go.service
-EOF
-diff -u "$TMP_ROOT/expected-systemctl.log" "$SYSTEMCTL_LOG"
+if grep -Fq 'start p2app.service' "$SYSTEMCTL_LOG"; then
+  printf 'direct-XDMA activation started P2 unexpectedly\n' >&2
+  exit 1
+fi
+
+# A running Bridge without selected-owner reception must not commit.
+export SATURN_TEST_OWNER_UNAVAILABLE_COMMIT="$OWNER_FAIL_COMMIT"
+if "$ACTIVATOR" "$OWNER_FAIL_COMMIT" >/dev/null 2>&1; then
+  printf 'unavailable Bridge receive unexpectedly committed activation\n' >&2
+  exit 1
+fi
+unset SATURN_TEST_OWNER_UNAVAILABLE_COMMIT
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["services"]["selected_backend"] == "xdma"
+assert value["activation_failure"]["phase"] == "readiness"
+PY
 
 # A target service startup failure returns to the verified prior release.
 export SATURN_TEST_SYSTEMCTL_FAIL_ONCE="start saturn-bridge.service"
@@ -467,6 +478,22 @@ assert "did not fully restore" in value["rollback"]["message"]
 PY
 
 # Activation and rollback never prune the active or prior immutable releases.
-[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 8 ]]
+[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 10 ]]
+
+# P2-selected activation must not initialize the direct-XDMA Bridge.
+rm -f -- "$TRANSACTION_FILE" "$SYSTEMCTL_STATE/saturn-bridge.service"
+: >"$SYSTEMCTL_STATE/p2app.service"
+export SATURN_TEST_SELECTED_BACKEND=p2
+"$ACTIVATOR" "$P2_COMMIT" >/dev/null
+[[ -f "$SYSTEMCTL_STATE/p2app.service" && ! -f "$SYSTEMCTL_STATE/saturn-bridge.service" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "committed"
+assert value["services"]["selected_backend"] == "p2"
+assert value["services"]["start_order"] == ["p2app.service", "saturn-go.service"]
+PY
 
 printf 'Saturn release activation and automatic rollback tests passed\n'

@@ -69,6 +69,7 @@ impl Reading {
 
 #[derive(Debug)]
 pub(crate) struct Owner {
+    poll_enabled: bool,
     token: u32,
     session: Option<u32>,
     readings: Vec<Reading>,
@@ -79,16 +80,36 @@ pub(crate) struct Owner {
 
 impl Default for Owner {
     fn default() -> Self {
+        Self::with_polling(std::env::var("SATURN_RXC1_POLL_ENABLED").as_deref() != Ok("0"))
+    }
+}
+
+impl Owner {
+    fn with_polling(poll_enabled: bool) -> Self {
         Self {
+            poll_enabled,
             token: 0,
             session: None,
             readings: (0..DDC_COUNT)
-                .map(|receiver| Reading::invalid(receiver, "unavailable"))
+                .map(|receiver| {
+                    Reading::invalid(
+                        receiver,
+                        if poll_enabled {
+                            "unavailable"
+                        } else {
+                            "disabled"
+                        },
+                    )
+                })
                 .collect(),
             failures: 0,
             sampled_at_ms: 0,
             last_poll: None,
         }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.poll_enabled
     }
 }
 
@@ -295,6 +316,9 @@ impl Owner {
     }
 
     pub(crate) fn maybe_sample(&mut self, io: &impl Registers) {
+        if !self.poll_enabled {
+            return;
+        }
         if self.last_poll.is_some_and(|last| last.elapsed() < PERIOD) {
             return;
         }
@@ -413,6 +437,29 @@ impl Owner {
 mod tests {
     use super::*;
     use std::cell::RefCell;
+
+    #[test]
+    fn disabled_polling_never_touches_registers_and_never_reports_zero() {
+        struct NoAccess;
+        impl Registers for NoAccess {
+            fn read(&self, _: u64) -> Result<u32, String> {
+                panic!("disabled RXC1 reader accessed registers")
+            }
+            fn write(&self, _: u64, _: u32) -> Result<(), String> {
+                panic!("disabled RXC1 reader accessed registers")
+            }
+        }
+        let mut owner = Owner::with_polling(false);
+        owner.maybe_sample(&NoAccess);
+        assert!(!owner.is_enabled());
+        assert!(owner
+            .readings
+            .iter()
+            .all(|reading| reading.status == "disabled"));
+        let json = owner.json();
+        assert!(json.contains("\"status\":\"disabled\""));
+        assert!(json.contains("\"refused_pre_fir_pair_candidates\":null"));
+    }
 
     // The expected values are the independently scripted snapshot-boundary
     // oracle. The fake bank may corrupt its readback without changing these.

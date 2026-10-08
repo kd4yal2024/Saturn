@@ -2,6 +2,7 @@
 #include "fpga_rx_counter_v31.h"
 
 #include <inttypes.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
@@ -24,6 +25,7 @@ static uint32_t g_session;
 static bool g_bound;
 static time_t g_last_sample_second;
 static uint32_t g_token_sequence;
+static bool g_poll_enabled = true;
 
 static uint64_t NowMs(void)
 {
@@ -77,9 +79,12 @@ static void Invalidate(TRXC1DDC *DDC, unsigned int Receiver, ERXC1Status Status)
 void RXC1Init(void)
 {
   unsigned int Receiver;
+  const char *PollEnabled = getenv("SATURN_RXC1_POLL_ENABLED");
+  g_poll_enabled = PollEnabled == NULL || strcmp(PollEnabled, "0") != 0;
   memset(&g_snapshot, 0, sizeof(g_snapshot));
   for (Receiver = 0; Receiver < RXC1_DDC_COUNT; Receiver++)
-    Invalidate(&g_snapshot.DDC[Receiver], Receiver, eRXC1Unavailable);
+    Invalidate(&g_snapshot.DDC[Receiver], Receiver,
+               g_poll_enabled ? eRXC1Unavailable : eRXC1Disabled);
   g_bound = false;
   g_token = 0;
   g_session = 0;
@@ -203,6 +208,7 @@ void RXC1Sample(void)
   unsigned int Receiver;
   ERXC1Status Status;
   bool AnyValid = false;
+  if (!g_poll_enabled) return;
   if (!g_bound)
   {
     Status = Bind();
@@ -251,6 +257,7 @@ void RXC1Sample(void)
 void RXC1MaybeSample(void)
 {
   time_t Now = time(NULL);
+  if (!g_poll_enabled) return;
   if (Now == (time_t)-1 || (g_last_sample_second != 0 && Now - g_last_sample_second < 5))
     return;
   g_last_sample_second = Now;

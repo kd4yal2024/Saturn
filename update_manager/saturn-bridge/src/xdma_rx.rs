@@ -1443,6 +1443,9 @@ impl OperationalRxSession {
     }
 
     pub(crate) fn sample_rx_counter_v31(&mut self) {
+        if !self.rx_counter_v31.is_enabled() {
+            return;
+        }
         let registers = self
             .registers
             .lock()

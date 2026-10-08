@@ -41,6 +41,11 @@ qualify its RF TX. P2 still accepts major-1 firmware and its existing TX
 policy is unchanged: during initial P2 receive testing, do not key the radio.
 Both owners probe the RXC1 register bank and report unsupported, failed,
 reset, or stale acquisition as unavailable rather than zero loss.
+Both owners accept `SATURN_RXC1_POLL_ENABLED=0` at process startup. This
+suppresses only RXC1 register transactions; IQ acquisition and other
+telemetry continue. Their RXC1 JSON and the existing diagnostics page show
+`disabled` / `unavailable`, with null counters. Unset the variable (or use
+`1`) and restart the selected owner to resume five-second RXC1 polling.
 
 ## Inactive build and deployment gate
 
@@ -74,29 +79,50 @@ part of preparation.
    automatic failure rollback restores prior unit drop-ins, but successful
    first activation has no old immutable release to select. The legacy
    binary/web backups are therefore required for an operator-directed return.
-3. With the radio unkeyed and the operator present, stage the candidate BIN
-   under a dedicated path, verify its exact SHA-256 and use the existing
-   `saturn-flash-fpga.sh --image <candidate> --primary --verify --dry-run
-   --confirm e5ab59` preflight. Only after approval, repeat without
-   `--dry-run`. Never target the fallback slot. Follow the radio's controlled
-   reload/power-cycle procedure, then verify major/minor `1.31`, build ID
-   `0x53460004`, RXC1 magic and normal clocks before enabling counters.
-4. Qualify P2 and Bridge **separately** as the selected acquisition owner.
+3. With 1.31.001 (`0x53460003`) still installed, unkeyed and receiving,
+   activate the compatible new ARM host through the approved transaction
+   helper. Keep an auto-reconnecting receive client attached: activation
+   commits only when the selected P2 **or** direct-XDMA owner (never both)
+   reports fresh, PID-matched, active receive telemetry in addition to the
+   Saturn Go commit. Confirm the old image ID and normal receive after this
+   host change. If activation fails, let its automatic host rollback finish;
+   do not flash the candidate.
+4. Stage the candidate BIN under a dedicated path, verify its exact SHA-256
+   and run `saturn-flash-fpga.sh --image <candidate> --primary --verify
+   --dry-run --confirm e5ab59`. Only after the separate deployment approval,
+   repeat without `--dry-run`. Never target the fallback slot. Follow the
+   controlled reload/power-cycle procedure, then verify major/minor `1.31`,
+   build ID `0x53460004`, RXC1 magic and normal clocks.
+5. Qualify P2 and Bridge **separately** as the selected acquisition owner.
    Use the transactional `saturn-radio-backend-switch-root.sh` helper; never
    run P2 and direct XDMA together. In each mode verify all DDC identities,
    nonzero session/configuration/serial/token, freshness age, and the
    diagnostics page's unavailable-versus-zero distinction. Restart the
    owner with an old snapshot pending, exercise bounded request-error
    recovery, and check reset/configuration changes invalidate reads.
-5. Compare receive timing with RXC1 polling enabled and disabled at the same
+6. Compare receive timing with RXC1 polling enabled and disabled at the same
    sample rate and settings: DMA gaps, FIFO state, host drops, audio
    underruns, CPU/scheduler wait and counter freshness. Do not infer FPGA
    loss solely from a browser pause. Keep TX disabled during this receive
    gate, and do not claim RF TX qualification from the identity allowlist.
 
-If any identity, readout, timing or receive gate fails, stop the experiment;
-restore the exact 1.31.001 primary-slot BIN with `--verify` and the backed-up
-legacy host binaries/web assets under the rehearsed operator procedure, then
-verify `0x53460003`, the previous backend state and normal receive. RXC1 must
-again show **unsupported/unavailable**, never zero losses. Preserve the failed
-candidate's logs and counters for diagnosis; do not overwrite the evidence.
+For that comparison, put `Environment=SATURN_RXC1_POLL_ENABLED=0` in a
+separate root-owned systemd drop-in for **only the selected owner**
+(`saturn-bridge.service` for `xdma`, `p2app.service` for `p2`), reload systemd
+and restart that owner through its controlled owner path. Verify the other
+owner remains inactive, IQ reception resumes, non-RXC1 telemetry continues,
+and RXC1 is explicitly `disabled` / `unavailable` with null counters. Remove
+the drop-in, reload and restart the same owner to re-enable polling. Allow
+startup to settle before comparing equal-length receive windows; record
+backend, rate, DDC, data width, firmware ID and owner PID for each window.
+
+If host activation fails before flashing, verify the activation helper's
+automatic rollback while 1.31.001 remains installed. If rollback is needed
+*after* flashing, stop the selected owner and manager, restore the exact
+1.31.001 primary-slot BIN with `--verify`, perform the controlled reload,
+and verify live ID `0x53460003` **before** restoring/restarting the legacy
+owner and Saturn Go. Restore the backed-up legacy binaries/web assets and
+unit configuration using the rehearsed legacy-layout procedure; never start
+the old Bridge against `0x53460004`. Finally verify the previous selected
+backend, normal receive and RXC1 **unsupported/unavailable**, never zero
+losses. Preserve failed-candidate logs and counters off-device.

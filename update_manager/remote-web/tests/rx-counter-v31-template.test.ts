@@ -18,6 +18,13 @@ describe('RXC1 receiver-counter presentation', () => {
       .toBe('unavailable');
   });
 
+  it('shows disabled polling as unavailable without hiding other telemetry', () => {
+    const result = present({ schema: 'rxc1-v1', source_backend: 'xdma', status: 'disabled' }, 'xdma');
+    expect(result.state).toBe('unavailable');
+    expect(result.summary).toBe('disabled / unavailable');
+    expect(result.detail).toContain('no register reads or loss count');
+  });
+
   it('does not attribute a stale P2 reading to a direct-XDMA session', () => {
     const result = present({ schema: 'rxc1-v1', source_backend: 'p2', status: 'valid' }, 'xdma');
     expect(result.state).toBe('unavailable');
