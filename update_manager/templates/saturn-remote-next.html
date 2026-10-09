@@ -10776,7 +10776,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
       }
-      if (!rxSpectrumSourceReady() || !rxIqFresh()) {
+      if (!rxSpectrumSourceReady() || !rxMeasureIqFresh()) {
         $("rx-spectrum-status").textContent = "Start RX IQ on the raw IQ display path before capturing.";
         if (leased) {
           $("rx-spectrum-start-btn").disabled = false;
@@ -10797,7 +10797,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if ((state.displaySessionGeneration || 0) !== session || (leased && !state.displayIqLease)) {
           throw new Error("The connection changed while reading FPGA identity");
         }
-        if (!rxSpectrumSourceReady() || !rxIqFresh()) {
+        if (!rxSpectrumSourceReady() || !rxMeasureIqFresh()) {
           throw new Error("Raw RX IQ stream stopped while reading FPGA identity");
         }
         rxSpectrumAccumulator = new _next.RxSpectrumAccumulator(
@@ -16214,6 +16214,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.displayIqLeaseGeneration = (state.displayIqLeaseGeneration || 0) + 1;
       // Anything started before this point belongs to a connection that is gone.
       state.displaySessionGeneration = (state.displaySessionGeneration || 0) + 1;
+      state.rxIqFrameVersion = 0;
+      state.lastRxIqFrameAt = 0;
       updateWsDiagMarker(`Display transport reset (${reason})`, 1000);
     }
 
@@ -16350,7 +16352,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // It never touches the RX transport mode, the IQ rate or the RX audio profile.
     const RX_IQ_FRESH_MS = 1500;
 
-    function rxIqFresh(now = performance.now()) {
+    function rxMeasureIqFresh(now = performance.now()) {
       return (state.rxIqFrameVersion || 0) > 0 && now - (state.lastRxIqFrameAt || 0) <= RX_IQ_FRESH_MS;
     }
 
@@ -16358,7 +16360,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return Boolean(state.displayIqLease) &&
         state.displayIqLeaseEchoed === true &&
         (state.rxIqFrameVersion || 0) > (state.displayIqLeaseEchoBaseline || 0) &&
-        rxIqFresh();
+        rxMeasureIqFresh();
     }
 
     function acquireRawIqLease(isReady = () => true, timeoutMs = 3000, pollMs = 100) {

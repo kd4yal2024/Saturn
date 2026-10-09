@@ -1,3 +1,4 @@
+import { parse } from 'acorn';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -25,6 +26,26 @@ function slice(start: string, end: string): string {
   const to = template.indexOf(end, from);
   if (from < 0 || to < 0) throw new Error(`template slice not found: ${start}`);
   return template.slice(from, to);
+}
+
+/**
+ * The page's main script, parsed whole. The tests above load *slices* of it, which
+ * cannot see that another declaration of the same name elsewhere in the page would
+ * win (a later function declaration replaces an earlier one). These helpers look at
+ * the complete script.
+ */
+const pageScript = [...template.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+  .map((match) => match[1] ?? '')
+  .find((script) => script.includes('function startRxSpectrumCapture'))!;
+type FunctionNode = { type: string; id?: { name: string }; start: number; end: number };
+const pageFunctions = (parse(pageScript, { ecmaVersion: 'latest' }) as unknown as { body: FunctionNode[] }).body
+  .filter((node) => node.type === 'FunctionDeclaration' && node.id)
+  .map((node) => ({ name: node.id!.name, text: pageScript.slice(node.start, node.end) }));
+
+/** Names of the functions a block of loaded template code declares. */
+function declaredFunctionNames(code: string): Set<string> {
+  const body = (parse(code, { ecmaVersion: 'latest' }) as unknown as { body: FunctionNode[] }).body;
+  return new Set(body.filter((node) => node.type === 'FunctionDeclaration' && node.id).map((node) => node.id!.name));
 }
 
 type RowOptions = {
@@ -261,8 +282,9 @@ function makeHarness(options: {
     });
   }
   const measureSlice = options.measure ? `${slice(MEASURE_START, MEASURE_END)}\n` : '';
+  const loadedCode = `${slice(TRANSPORT_START, TRANSPORT_END)}\n${slice(BINARY_START, BINARY_END)}\n${measureSlice}`;
   const api = runInNewContext(
-    `${slice(TRANSPORT_START, TRANSPORT_END)}\n${slice(BINARY_START, BINARY_END)}\n${measureSlice}` +
+    loadedCode +
       '({ requestDisplayTransport, applyDisplayEcho, desiredDisplayCommand, iqStartGated, ' +
       'sendIqStart, flushDeferredIqStart, handleSpectrumRow, handleBinaryFrame, scanDisplayTransportText, resetDisplayTransport, ' +
       'readDisplayTransportOverride, displayTransportOverride, displayTransportRequested, ' +
@@ -287,6 +309,14 @@ function makeHarness(options: {
     });
     runInNewContext(slice(IQ_HANDLER_START, IQ_HANDLER_END), sandbox);
   }
+  // Wherever the complete page declares a function the loaded code also declares, evaluate
+  // the page's declarations in source order too, so the later one wins exactly as it does
+  // in the real page. With no such name collision this changes nothing.
+  const loadedNames = declaredFunctionNames(
+    options.measure ? `${loadedCode}\n${slice(IQ_HANDLER_START, IQ_HANDLER_END)}` : loadedCode,
+  );
+  const pageDeclarations = pageFunctions.filter((fn) => loadedNames.has(fn.name)).map((fn) => fn.text).join('\n');
+  if (pageDeclarations) runInNewContext(pageDeclarations, sandbox);
   return {
     api, sandbox, sent, logs, audioFrames, opusFrames, iqFrames, elements,
     state: sandbox.state as Record<string, unknown>,
@@ -1163,5 +1193,94 @@ describe('RX Measure readiness needs fresh raw RX IQ from this connection', () =
     expect(h.state.displayIqLease).toBe(false);
     expect(h.sent).toEqual([IQ, ROWS]);
     h.api.resetDisplayTransport();
+  });
+});
+
+describe('RX Measure readiness against the complete page', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('no function is declared twice at the top level of the page script', () => {
+    // A later declaration silently replaces an earlier one, and the sliced tests above
+    // cannot see it. This is how the measurement helper once got overridden by an older
+    // function of the same name that checks a different timestamp.
+    const seen = new Map<string, number>();
+    for (const fn of pageFunctions) seen.set(fn.name, (seen.get(fn.name) ?? 0) + 1);
+    const duplicated = [...seen].filter(([, count]) => count > 1).map(([name]) => name);
+    expect(duplicated).toEqual([]);
+    expect(pageFunctions.length).toBeGreaterThan(300); // the parse really covered the page
+  });
+
+  it('the measurement helper and the media-recovery helper are separate, with their own meanings', () => {
+    const names = pageFunctions.map((fn) => fn.name);
+    expect(names.filter((name) => name === 'rxMeasureIqFresh')).toHaveLength(1);
+    expect(names.filter((name) => name === 'rxIqFresh')).toHaveLength(1);
+    const recovery = pageFunctions.find((fn) => fn.name === 'rxIqFresh')!.text;
+    // Media recovery counts any display frame (rows too) as activity; that must not change.
+    expect(recovery).toContain('state.lastFrameAt');
+    // The measurement helper looks only at raw RX IQ, never at the shared timestamp.
+    const measure = pageFunctions.find((fn) => fn.name === 'rxMeasureIqFresh')!.text;
+    expect(measure).toContain('lastRxIqFrameAt');
+    expect(measure).toContain('rxIqFrameVersion');
+    expect(measure).not.toContain('lastFrameAt');
+    // And every RX Measure start check calls it, not the recovery helper.
+    const startCheck = pageFunctions.find((fn) => fn.name === 'startRxSpectrumCapture')!.text;
+    expect(startCheck).toContain('rxMeasureIqFresh()');
+    expect(startCheck).not.toMatch(/\brxIqFresh\(/);
+  });
+
+  function plainRawIqPage() {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const h = makeHarness({ search: '?display_transport=iq', streamMode: 'lan', measure: {} });
+    Object.assign(h.sandbox.window as object, { setTimeout, clearTimeout, setInterval, clearInterval });
+    h.sandbox.performance = { now: () => Date.now() };
+    return h;
+  }
+  const statusOf = (h: ReturnType<typeof plainRawIqPage>) => h.elements['rx-spectrum-status']?.textContent ?? '';
+
+  it('with the complete page bound, a spectrum row and an IQ echo alone do not start a capture', async () => {
+    const h = plainRawIqPage();
+    h.api.handleSpectrumRow(buildRow()); // refreshes the shared lastFrameAt
+    h.api.applyDisplayEcho(['0', 'iq']);
+    await h.api.startRxSpectrumCapture();
+    expect(statusOf(h)).not.toContain('Capturing');
+    expect(statusOf(h)).toContain('Start RX IQ on the raw IQ display path');
+  });
+
+  it('positive control: with actual fresh raw RX IQ the same page starts a capture', async () => {
+    const h = plainRawIqPage();
+    h.api.handleSpectrumRow(buildRow());
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await h.api.startRxSpectrumCapture();
+    expect(statusOf(h)).toContain('Capturing');
+    h.api.finishRxSpectrumCapture();
+    h.api.resetDisplayTransport('cleanup');
+  });
+
+  it('RX IQ freshness belongs to the connection: a quick reconnect cannot borrow the previous one', async () => {
+    const h = plainRawIqPage();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0)); // decoded on the first connection
+    expect(h.state.rxIqFrameVersion).toBe(1);
+    h.api.resetDisplayTransport('socket closed');
+    expect(h.state.rxIqFrameVersion).toBe(0);
+    expect(h.state.lastRxIqFrameAt).toBe(0);
+    h.state.connected = false;
+    await vi.advanceTimersByTimeAsync(100);
+    // The new connection is up and has asked for the stream, but no data has arrived yet.
+    h.state.connected = true;
+    h.state.bridgeReady = true;
+    h.state.iqStreaming = true;
+    h.api.scanDisplayTransportText('saturn_display_caps:spectrum_u8;');
+    h.api.applyDisplayEcho(['0', 'iq']);
+    await h.api.startRxSpectrumCapture();
+    expect(statusOf(h)).not.toContain('Capturing');
+    // The new connection's own frame is what makes it ready.
+    h.api.handleBinaryFrame(iqFrame(0));
+    await h.api.startRxSpectrumCapture();
+    expect(statusOf(h)).toContain('Capturing');
+    h.api.finishRxSpectrumCapture();
+    h.api.resetDisplayTransport('cleanup');
   });
 });
