@@ -4,6 +4,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- App/Firmware Info now omits historical P2 startup banners when P2 is
+  inactive, avoiding a misleading stale image ID while Direct XDMA is active.
 - Add negotiated RX Opus audio over the existing WebSocket media lane for
   browsers with WebCodecs decoding. A shared bridge worker encodes 20 ms mono
   or stereo packets for clients that opt into browser-side gain; PCM remains

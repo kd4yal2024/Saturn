@@ -12,7 +12,7 @@ if [[ "${NODE_BIN}" == *.exe ]]; then
 fi
 
 grep -Fq '#define P2APPVERSION 52' "${ROOT}/sw_projects/P2_app/p2app.c"
-grep -Fq 'SCRIPT_VERSION="1.7"' "${VERSION_SCRIPT}"
+grep -Fq 'SCRIPT_VERSION="1.9"' "${VERSION_SCRIPT}"
 grep -Fq 'generation apply only to those captured occupancy values' "${API_REFERENCE}"
 grep -Fq 'accumulators read separately from the coherent occupancy snapshot' "${API_REFERENCE}"
 make -C "${ROOT}/sw_projects/P2_app" test-fpga-fifo-v29
@@ -108,6 +108,7 @@ exit 1
 SH
 cat > "${TEST_TMP}/bin/systemctl" <<'SH'
 #!/usr/bin/env bash
+if [[ "$1" == "is-active" ]]; then printf '%s\n' active; exit 0; fi
 printf '%s\n' 'Sat 2026-09-12 23:00:00 EDT'
 SH
 cat > "${TEST_TMP}/bin/journalctl" <<'SH'
@@ -138,6 +139,25 @@ bash "${VERSION_SCRIPT}" > "${TEST_TMP}/version-output.txt"
 grep -Fq 'STALE retained startup banner: firmware_version retained=28 live=29' "${TEST_TMP}/version-output.txt"
 grep -Fq 'Historical only; this banner is not current FPGA identity evidence' "${TEST_TMP}/version-output.txt"
 grep -Fq '[stale]  FPGA Firmware loaded:' "${TEST_TMP}/version-output.txt"
+
+cat > "${TEST_TMP}/bin/systemctl" <<'SH'
+#!/usr/bin/env bash
+if [[ "$1" == "is-active" ]]; then printf '%s\n' inactive; exit 3; fi
+exit 1
+SH
+chmod +x "${TEST_TMP}/bin/systemctl"
+
+SATURN_TEST_FIXTURE="${TEST_TMP}/perf.json" \
+SATURN_ACTIVE_REPO_ROOT="${TEST_TMP}/repo" \
+PATH="${TEST_TMP}/bin:${PATH}" \
+bash "${VERSION_SCRIPT}" > "${TEST_TMP}/inactive-version-output.txt"
+
+grep -Fq 'p2app.service is inactive; historical P2 startup banner omitted.' "${TEST_TMP}/inactive-version-output.txt"
+grep -Fq 'Current FPGA identity and live-telemetry status are shown under Runtime above.' "${TEST_TMP}/inactive-version-output.txt"
+if grep -Fq 'FPGA BIT file data code = 09122026' "${TEST_TMP}/inactive-version-output.txt"; then
+  echo "inactive P2 leaked a historical startup banner" >&2
+  exit 1
+fi
 
 bash -n "${VERSION_SCRIPT}"
 echo "g2-version-info stale-banner tests passed"

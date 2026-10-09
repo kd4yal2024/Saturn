@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.8"
+SCRIPT_VERSION="1.9"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
@@ -269,7 +269,12 @@ else
 fi
 
 say
-say "Latest startup banner"
+say "P2 startup banner"
+P2_SERVICE_STATE="$(systemctl is-active p2app.service 2>/dev/null || true)"
+if [[ "${P2_SERVICE_STATE}" != "active" ]]; then
+  say "  p2app.service is ${P2_SERVICE_STATE:-unknown}; historical P2 startup banner omitted."
+  say "  Current FPGA identity and live-telemetry status are shown under Runtime above."
+else
 ACTIVE_SINCE="$(systemctl show -p ActiveEnterTimestamp --value p2app.service 2>/dev/null || true)"
 CURRENT_STARTUP_LINES=""
 LAST_KNOWN_STARTUP_LINES=""
@@ -358,9 +363,10 @@ else
   fi
   say "  No retained FPGA startup banner lines were found in p2app.service journal."
 fi
+fi
 
 say
 say "Notes"
-say "  - In Trixie the app runs as p2app.service in the background."
-say "  - The startup banner above replaces the old terminal window scrollback."
-say "  - Die Temp is the value logged during the most recent service start."
+say "  - P2 uses p2app.service; Direct XDMA uses saturn-bridge.service."
+say "  - A P2 startup banner is shown only while P2 is active."
+say "  - A banner Die Temp is the value logged during that P2 service start."
