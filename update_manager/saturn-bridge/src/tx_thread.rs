@@ -489,6 +489,38 @@ fn configure_tx_thread_scheduling(
     Ok(Some((cpu, policy, actual_priority)))
 }
 
+/// Next TX command: those already moved aside by `release_is_pending`, oldest
+/// first, then whatever is still in the channel.
+fn next_tx_command(
+    pending: &mut VecDeque<TxCommand>,
+    rx: &Receiver<TxCommand>,
+) -> Result<TxCommand, TryRecvError> {
+    match pending.pop_front() {
+        Some(command) => Ok(command),
+        None => rx.try_recv(),
+    }
+}
+
+/// Moves every command now in the channel behind those already set aside, in
+/// order, and reports whether a release (or shutdown, or a closed channel) is
+/// among them. The bounded command batch can stop right after an Arm, and an
+/// Arm's native setup can take long enough for the release to arrive behind
+/// it; the release is then still unread when the keying code runs. Checking
+/// here, immediately before keying, makes the outcome independent of where
+/// the release sits in the queue.
+fn release_is_pending(pending: &mut VecDeque<TxCommand>, rx: &Receiver<TxCommand>) -> bool {
+    loop {
+        match rx.try_recv() {
+            Ok(command) => pending.push_back(command),
+            Err(TryRecvError::Empty) => break,
+            Err(TryRecvError::Disconnected) => return true,
+        }
+    }
+    pending
+        .iter()
+        .any(|command| matches!(command, TxCommand::Disarm | TxCommand::Shutdown))
+}
+
 fn run(
     session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
@@ -581,13 +613,15 @@ fn run(
         keyable_mic_window.as_millis()
     );
 
+    let mut pending_commands: VecDeque<TxCommand> = VecDeque::new();
+
     while !stop_flag.load(Ordering::Relaxed) {
         let mut did_work = false;
 
         // Bound command draining so synchronized feedback traffic cannot starve
         // the fixed-cadence DUC IQ producer.
         for _ in 0..MAX_TX_COMMANDS_PER_LOOP {
-            match cmd_rx.try_recv() {
+            match next_tx_command(&mut pending_commands, &cmd_rx) {
                 Ok(TxCommand::SelectAudioSource(source)) => {
                     let mut model = radio_model.lock_unpoisoned();
                     if state == TxState::Idle
@@ -1203,6 +1237,14 @@ fn run(
                         );
                             last_zero_iq_log_at = Instant::now();
                         }
+                        did_work = true;
+                        continue;
+                    }
+
+                    // A release already queued behind this arm cancels it, even
+                    // when the command batch ended before reaching it. Drop the
+                    // packet; the release is handled at the top of the next pass.
+                    if release_is_pending(&mut pending_commands, &cmd_rx) {
                         did_work = true;
                         continue;
                     }
@@ -1931,5 +1973,274 @@ mod tests {
     #[test]
     fn rf_inhibited_direct_output_can_exercise_the_batch_path() {
         assert_eq!(duc_batch_packet_count(true, 8, 8, 8), 8);
+    }
+}
+
+/// Arm cancellation against a fake radio. These run the real TX worker loop
+/// with the stub DSP, which can be told to emit keyable IQ, and assert on what
+/// reaches `try_key_with_iq`.
+#[cfg(all(test, saturn_bridge_stub_native))]
+mod arm_cancellation_tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    unsafe extern "C" {
+        fn saturn_wdsp_stub_set_output_fill(value: f64, count: usize);
+    }
+
+    /// Number of doubles in the WDSP TX output buffer (2048 IQ pairs).
+    const TX_OUTPUT_DOUBLES: usize = 4096;
+    const WAIT: Duration = Duration::from_secs(5);
+
+    #[derive(Default)]
+    struct FakeTxRadio {
+        key_calls: AtomicUsize,
+        /// Runs once, on the worker thread, while the first Arm is being set
+        /// up: the point at which a release can arrive during the rebuild.
+        during_arm_setup: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    }
+
+    impl TxRadio for FakeTxRadio {
+        fn startup_settle_blocks(&self) -> usize {
+            // Called once on the worker thread before its loop starts: make
+            // that thread's stub DSP emit a constant, keyable IQ level.
+            unsafe { saturn_wdsp_stub_set_output_fill(0.5, TX_OUTPUT_DOUBLES) };
+            0
+        }
+        fn recreate_wdsp_on_arm(&self) -> bool {
+            true // as direct XDMA: a native rebuild on every arm
+        }
+        fn configure_puresignal_feedback(&self) -> TxRadioResult {
+            Ok(())
+        }
+        fn send_duc_specific(&self, _model: &RadioModel) -> TxRadioResult {
+            if let Some(hook) = self.during_arm_setup.lock_unpoisoned().take() {
+                hook();
+            }
+            Ok(())
+        }
+        fn send_high_priority(&self, _model: &RadioModel) -> TxRadioResult {
+            Ok(())
+        }
+        fn try_key_with_iq(&self, _model: &RadioModel, _iq: &[f32]) -> Result<bool, String> {
+            self.key_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
+        }
+        fn send_duc_iq(&self, _iq: &[f32]) -> TxRadioResult {
+            Ok(())
+        }
+        fn configure_rx_ddc(&self, _: u8, _: u16, _: u8, _: u8) -> TxRadioResult {
+            Ok(())
+        }
+    }
+
+    struct Worker {
+        radio: Arc<FakeTxRadio>,
+        commands: Sender<TxCommand>,
+        events: Receiver<TxEvent>,
+        stop: Arc<AtomicBool>,
+        handle: Option<JoinHandle<()>>,
+    }
+
+    impl Worker {
+        fn key_calls(&self) -> usize {
+            self.radio.key_calls.load(Ordering::SeqCst)
+        }
+
+        /// Waits for an event matching `wanted`; false on timeout.
+        fn wait_for(&self, wanted: impl Fn(&TxEvent) -> bool) -> bool {
+            let deadline = Instant::now() + WAIT;
+            while let Some(left) = deadline.checked_duration_since(Instant::now()) {
+                match self.events.recv_timeout(left) {
+                    Ok(event) if wanted(&event) => return true,
+                    Ok(_) => {}
+                    Err(_) => return false,
+                }
+            }
+            false
+        }
+
+        fn wait_unkeyed(&self) -> bool {
+            self.wait_for(|event| matches!(event, TxEvent::Unkeyed))
+        }
+
+        fn wait_keyed(&self) -> bool {
+            self.wait_for(|event| matches!(event, TxEvent::Keyed))
+        }
+    }
+
+    impl Drop for Worker {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let _ = self.commands.send(TxCommand::Shutdown);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn arm() -> TxCommand {
+        TxCommand::Arm { rf_enabled: true }
+    }
+
+    /// Starts the worker with `queued` already in its command channel, so a
+    /// test controls exactly which commands the first batch contains.
+    fn start(
+        two_tone: bool,
+        queued: Vec<TxCommand>,
+        during_arm_setup: impl FnOnce(Sender<TxCommand>) -> Option<Box<dyn FnOnce() + Send>>,
+    ) -> Worker {
+        let radio = Arc::new(FakeTxRadio::default());
+        let (commands, command_rx) = mpsc::channel();
+        for command in queued {
+            commands.send(command).unwrap();
+        }
+        *radio.during_arm_setup.lock_unpoisoned() = during_arm_setup(commands.clone());
+        let (_audio_tx, audio_rx) = mpsc::channel();
+        let (event_tx, events) = mpsc::channel();
+        let model = {
+            let mut model = RadioModel::new(6, 7_215_000, 0, 384, 24, 2048, true, 4096, true);
+            model.desired.two_tone_enabled = two_tone;
+            model.desired.tx_phase = TxPhase::Armed;
+            Arc::new(Mutex::new(model))
+        };
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = {
+            let (radio, stop) = (radio.clone(), stop.clone());
+            thread::spawn(move || {
+                run(
+                    radio,
+                    model,
+                    command_rx,
+                    audio_rx,
+                    Arc::new(TxAudioIngressStats::default()),
+                    TxAudioSource::Tci,
+                    event_tx,
+                    stop,
+                );
+                drop(_audio_tx);
+            })
+        };
+        Worker {
+            radio,
+            commands,
+            events,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn no_hook(_: Sender<TxCommand>) -> Option<Box<dyn FnOnce() + Send>> {
+        None
+    }
+
+    /// A harmless command used to fill a drain batch.
+    fn filler() -> TxCommand {
+        TxCommand::PureSignalReset
+    }
+
+    fn full_batch_ending_in_arm() -> Vec<TxCommand> {
+        let mut queued: Vec<TxCommand> = (0..MAX_TX_COMMANDS_PER_LOOP - 1).map(|_| filler()).collect();
+        queued.push(arm());
+        queued
+    }
+
+    /// Positive control: without a release, the fake radio is keyed. If this
+    /// fails, the harness cannot tell a cancelled arm from one that never
+    /// became keyable, and every other test here would be vacuous.
+    #[test]
+    fn harness_keys_a_plain_two_tone_arm() {
+        let worker = start(true, vec![arm()], no_hook);
+        assert!(worker.wait_keyed(), "never keyed");
+        assert_eq!(worker.key_calls(), 1);
+    }
+
+    #[test]
+    fn without_two_tone_an_arm_with_no_microphone_audio_does_not_key() {
+        // The microphone-recency gate is what normally keeps an idle arm from
+        // keying; two-tone is the mode that bypasses it.
+        let worker = start(false, vec![arm()], no_hook);
+        thread::sleep(Duration::from_millis(500));
+        assert_eq!(worker.key_calls(), 0);
+    }
+
+    #[test]
+    fn release_queued_behind_an_arm_in_the_same_batch_never_keys() {
+        let worker = start(true, vec![arm(), TxCommand::Disarm], no_hook);
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0);
+    }
+
+    #[test]
+    fn release_behind_an_arm_that_ends_a_full_batch_never_keys() {
+        // The bounded drain stops after the Arm, so the release is not read
+        // before the keying code runs in the same loop pass.
+        let mut queued = full_batch_ending_in_arm();
+        queued.push(TxCommand::Disarm);
+        let worker = start(true, queued, no_hook);
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0, "a cancelled arm reached try_key_with_iq");
+    }
+
+    #[test]
+    fn release_arriving_during_the_native_rebuild_never_keys() {
+        // The release lands while the Arm is being set up, behind a full batch.
+        let worker = start(true, full_batch_ending_in_arm(), |commands| {
+            Some(Box::new(move || {
+                commands.send(TxCommand::Disarm).unwrap();
+            }))
+        });
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0, "a cancelled arm reached try_key_with_iq");
+    }
+
+    #[test]
+    fn release_arriving_during_the_rebuild_without_a_full_batch_never_keys() {
+        let worker = start(true, vec![arm()], |commands| {
+            Some(Box::new(move || {
+                commands.send(TxCommand::Disarm).unwrap();
+            }))
+        });
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0);
+    }
+
+    #[test]
+    fn a_new_press_after_a_release_keys_and_the_cancelled_one_does_not() {
+        // Arm, release and a genuinely new Arm are all queued behind a full
+        // batch. Only the new press may reach the radio.
+        let mut queued = full_batch_ending_in_arm();
+        queued.push(TxCommand::Disarm);
+        queued.push(arm());
+        let worker = start(true, queued, no_hook);
+        assert!(worker.wait_unkeyed(), "the cancelled arm must be released first");
+        assert!(worker.wait_keyed(), "the new press never keyed");
+        assert_eq!(worker.key_calls(), 1);
+    }
+
+    #[test]
+    fn a_new_press_issued_during_the_rebuild_keys_after_the_release() {
+        let worker = start(true, full_batch_ending_in_arm(), |commands| {
+            Some(Box::new(move || {
+                commands.send(TxCommand::Disarm).unwrap();
+                commands.send(arm()).unwrap();
+            }))
+        });
+        assert!(worker.wait_unkeyed());
+        assert!(worker.wait_keyed(), "the new press never keyed");
+        assert_eq!(
+            worker.key_calls(),
+            1,
+            "the cancelled arm keyed before the release was read"
+        );
+    }
+
+    #[test]
+    fn a_pending_shutdown_also_blocks_keying() {
+        let mut queued = full_batch_ending_in_arm();
+        queued.push(TxCommand::Shutdown);
+        let worker = start(true, queued, no_hook);
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0);
     }
 }

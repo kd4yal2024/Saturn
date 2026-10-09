@@ -46,9 +46,22 @@ void SetInputSamplerate(int32_t channel, int32_t samplerate) {
 void SetDSPSamplerate(int32_t channel, int32_t samplerate) {
   (void)channel; (void)samplerate;
 }
+// Test hook: when a thread opts in, fexchange0 on that thread writes `value`
+// into the first `count` output doubles, so a fake-radio TX worker sees keyable
+// IQ without real DSP. Off by default and thread-local, so other tests, which
+// expect the output untouched, are unaffected.
+static _Thread_local double saturn_wdsp_stub_output_fill_value = 0.0;
+static _Thread_local size_t saturn_wdsp_stub_output_fill_count = 0;
+void saturn_wdsp_stub_set_output_fill(double value, size_t count) {
+  saturn_wdsp_stub_output_fill_value = value;
+  saturn_wdsp_stub_output_fill_count = count;
+}
 void fexchange0(int32_t channel, const double *input, double *output,
                 int32_t *error) {
-  (void)channel; (void)input; (void)output;
+  (void)channel; (void)input;
+  for (size_t i = 0; output && i < saturn_wdsp_stub_output_fill_count; i++) {
+    output[i] = saturn_wdsp_stub_output_fill_value;
+  }
   if (error) *error = 0;
 }
 
