@@ -30,6 +30,7 @@ OWNER_FAIL_COMMIT="9999999999999999999999999999999999999999"
 P2_COMMIT="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 P2_CLIENT_COMMIT="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 P2_CLIENT_FAIL_COMMIT="cccccccccccccccccccccccccccccccccccccccc"
+PAGE_FAIL_COMMIT="dddddddddddddddddddddddddddddddddddddddd"
 
 cleanup(){ rm -rf -- "$TMP_ROOT"; }
 trap cleanup EXIT
@@ -124,6 +125,7 @@ create_release "$OWNER_FAIL_COMMIT"
 create_release "$P2_COMMIT"
 create_release "$P2_CLIENT_COMMIT"
 create_release "$P2_CLIENT_FAIL_COMMIT"
+create_release "$PAGE_FAIL_COMMIT"
 
 mkdir -p "$SYSTEMCTL_STATE"
 : >"$SYSTEMCTL_STATE/saturn-go.service"
@@ -155,6 +157,16 @@ EOF
 cat >"$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [[ "$*" == *'/telemetry'* || "$*" == *'/settings'* ]]; then
+  current="$(readlink -f "$SATURN_TEST_CURRENT_LINK" 2>/dev/null || true)"
+  if [[ "$current" == *"/${SATURN_TEST_PAGE_UNAVAILABLE_COMMIT:-not-a-commit}" ]]; then exit 22; fi
+  if [[ "$*" == *'/telemetry'* ]]; then
+    printf '<title>Saturn G2 Radio Telemetry</title>\n'
+  else
+    printf '<title>Saturn Go Settings</title>\n'
+  fi
+  exit 0
+fi
 if [[ "$*" == *'/p23_perf'* ]]; then
   backend="${SATURN_TEST_SELECTED_BACKEND:-xdma}"
   app="saturn-bridge"
@@ -479,6 +491,24 @@ if grep -Fq 'start p2app.service' "$SYSTEMCTL_LOG"; then
   exit 1
 fi
 
+# Readiness must exercise the actual pages, not only the JSON health endpoint.
+export SATURN_TEST_PAGE_UNAVAILABLE_COMMIT="$PAGE_FAIL_COMMIT"
+if "$ACTIVATOR" "$PAGE_FAIL_COMMIT" >/dev/null 2>&1; then
+  printf 'activation with unreadable web pages unexpectedly committed\n' >&2
+  exit 1
+fi
+unset SATURN_TEST_PAGE_UNAVAILABLE_COMMIT
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["activation_failure"]["phase"] == "readiness"
+assert value["rollback"]["status"] == "succeeded"
+PY
+
 # If P2 appears while starting the direct-XDMA Bridge, fail before commit and
 # roll back to the original exclusive service set.
 export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
@@ -613,7 +643,7 @@ assert "did not fully restore" in value["rollback"]["message"]
 PY
 
 # Activation and rollback never prune the active or prior immutable releases.
-[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 12 ]]
+[[ "$(find "$RELEASES_ROOT" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 13 ]]
 
 # P2-selected activation must not initialize the direct-XDMA Bridge.
 rm -f -- "$TRANSACTION_FILE" "$SYSTEMCTL_STATE/saturn-bridge.service"

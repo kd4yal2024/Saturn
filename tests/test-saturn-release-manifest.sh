@@ -4,6 +4,7 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TOOL="$REPO_ROOT/update_manager/scripts/saturn-release-manifest.py"
 COMPONENTS="$REPO_ROOT/update_manager/release/components-v1.json"
+source "$REPO_ROOT/update_manager/scripts/saturn-go-web-assets.sh"
 TMP_ROOT="$(mktemp -d)"
 RELEASE_ROOT="$TMP_ROOT/release"
 CURRENT_LINK="$TMP_ROOT/current"
@@ -90,9 +91,47 @@ fi
 
 create_fixture_manifest >/dev/null
 
+# A restrictive build umask previously let unreadable web pages into a valid
+# root-owned release. Creation must reject them; normalization must repair all
+# static web files before the release manifest records their modes.
+(
+  umask 077
+  printf 'private fixture\n' >"$RELEASE_ROOT/webroot/p23test.html"
+)
+[[ "$(stat -c '%a' "$RELEASE_ROOT/webroot/p23test.html")" == "600" ]]
+if create_fixture_manifest >/dev/null 2>&1; then
+  printf 'unreadable web page unexpectedly created a release manifest\n' >&2
+  exit 1
+fi
+saturn_go_normalize_web_assets_permissions "$RELEASE_ROOT/webroot"
+[[ "$(stat -c '%a' "$RELEASE_ROOT/webroot/p23test.html")" == "644" ]]
+create_fixture_manifest >/dev/null
+
 python3 "$TOOL" validate \
   --release-root "$RELEASE_ROOT" \
   --components "$COMPONENTS" >/dev/null
+
+# Validation keeps existing schema-v3 releases usable as previous/rollback
+# releases even if they captured the old unreadable mode. New creation above
+# rejects the same file mode.
+chmod 0600 "$RELEASE_ROOT/webroot/p23test.html"
+python3 - "$RELEASE_ROOT/release-manifest.json" <<'PY'
+import json
+import sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+for item in value["files"]:
+    if item["path"] == "webroot/p23test.html":
+        item["mode"] = "0600"
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(value, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+refresh_checksum_index
+python3 "$TOOL" validate --release-root "$RELEASE_ROOT" --components "$COMPONENTS" >/dev/null
+chmod 0644 "$RELEASE_ROOT/webroot/p23test.html"
+create_fixture_manifest >/dev/null
 
 chmod 0664 "$RELEASE_ROOT/webroot/saturn-remote-next.js"
 if create_fixture_manifest >/dev/null 2>&1; then

@@ -313,3 +313,12 @@ saturn_go_copy_shared_assets() {
   mkdir -p "$dest_dir/assets"
   cp -rf "$src_dir/." "$dest_dir/assets/"
 }
+
+# Releases are installed root:root while Saturn Go serves webroot as an
+# unprivileged user. Do not inherit a restrictive source mode or build umask.
+saturn_go_normalize_web_assets_permissions() {
+  local dest_dir="$1"
+  [[ -d "$dest_dir" ]] || return 1
+  find "$dest_dir" -type d -exec chmod 0755 {} +
+  find "$dest_dir" -type f -exec chmod 0644 {} +
+}

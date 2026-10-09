@@ -286,10 +286,14 @@ def required_build_results(path: Path) -> set[str]:
     return names
 
 
-def file_record(relative: str, path: Path) -> dict[str, Any]:
+def file_record(
+    relative: str, path: Path, *, require_web_readable: bool = False
+) -> dict[str, Any]:
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode & 0o022:
         fail(f"group/world-writable release file rejected: {relative}")
+    if require_web_readable and relative.startswith("webroot/") and not (mode & stat.S_IROTH):
+        fail(f"web asset is not readable by the unprivileged service: {relative}")
     return {
         "path": relative,
         "sha256": sha256_file(path),
@@ -311,7 +315,12 @@ def create_manifest(args: argparse.Namespace) -> None:
 
     descriptor = load_descriptor(args.components)
     files = regular_release_files(root)
-    file_records = {relative: file_record(relative, path) for relative, path in files}
+    # Older installed manifests must remain valid as rollback targets. Enforce
+    # runtime readability when creating new releases, before modes are signed.
+    file_records = {
+        relative: file_record(relative, path, require_web_readable=True)
+        for relative, path in files
+    }
     components: list[dict[str, Any]] = []
     for item in descriptor:
         relative = safe_relative(str(item["path"]))

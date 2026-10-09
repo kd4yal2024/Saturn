@@ -641,6 +641,14 @@ wait_for_commit(){
   ready_response_matches "$response" "$expected"
 }
 
+probe_web_pages(){
+  local origin="${SATURN_GO_READY_URL%/*}" response
+  response="$(curl -fsS --max-time 2 "$origin/telemetry")" || return 1
+  [[ "$response" == *'<title>Saturn G2 Radio Telemetry</title>'* ]] || return 1
+  response="$(curl -fsS --max-time 2 "$origin/settings")" || return 1
+  [[ "$response" == *'<title>Saturn Go Settings</title>'* ]]
+}
+
 selected_backend_status(){
   local response
   response="$("$BACKEND_STATUS_HELPER" status)" || return 1
@@ -1035,6 +1043,10 @@ systemctl is-active --quiet "$SATURN_GO_SERVICE"
 PHASE="readiness"
 write_transaction "verifying" "$PHASE" "Waiting for target-aware readiness"
 if ! wait_for_commit "$TARGET_COMMIT"; then
+  false
+fi
+if ! probe_web_pages; then
+  log "activated Saturn Go cannot serve Radio Telemetry and Settings"
   false
 fi
 if ! wait_for_selected_owner "$SELECTED_BACKEND"; then

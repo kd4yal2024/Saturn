@@ -443,11 +443,12 @@ PY
 normalize_release_permissions(){
   log "Normalizing inactive release permissions"
   if (( DRY_RUN )); then
-    log "[dry-run] remove group/world write bits from the complete release payload"
+    log "[dry-run] remove group/world write bits and make static web assets readable"
     return 0
   fi
   find "$TEMP_STAGE" -type d -exec chmod 0755 {} +
   find "$TEMP_STAGE" -type f -exec chmod go-w {} +
+  saturn_go_normalize_web_assets_permissions "$TEMP_STAGE/webroot"
 }
 
 create_manifest(){
