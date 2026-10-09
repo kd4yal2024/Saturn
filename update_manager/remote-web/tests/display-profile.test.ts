@@ -7,7 +7,7 @@ const start = template.indexOf('    function tailnetTransportActive()');
 const end = template.indexOf('    function displayPacketHistoryLimit(', start);
 
 function diagnostics(options: { mode?: string; host?: string; rtt?: number; rttAt?: number;
-  phone?: boolean; terrain?: boolean; rate?: number; pixels?: number; zoom?: number } = {}) {
+  phone?: boolean; terrain?: boolean; rate?: number; pixels?: number; zoom?: number; search?: string } = {}) {
   const state = {
     streamMode: options.mode ?? 'lan', layoutMode: options.phone ? 'phone' : 'desktop',
     terrainActive: options.terrain ?? false,
@@ -18,7 +18,8 @@ function diagnostics(options: { mode?: string; host?: string; rtt?: number; rttA
   return runInNewContext(`${template.slice(start, end)};
     ({ profile: displayProfileDiagnostics, record: recordDisplaySlowFrame, slowFrames: displaySlowFrames })`, {
     state, displaySlowFrames: slowFrames,
-    window: { location: { hostname: options.host ?? '192.168.0.139' }, matchMedia: () => ({ matches: false }) },
+    window: { location: { hostname: options.host ?? '192.168.0.139', search: options.search ?? '' }, matchMedia: () => ({ matches: false }) },
+    URLSearchParams,
     document: { visibilityState: 'visible' },
     performance: { now: () => 2000 },
     BRIDGE_RTT_STALE_MS: 5000,
@@ -60,6 +61,17 @@ describe('display profile diagnosis', () => {
     expect(info.profile).toBe('lan');
     expect(info.targetFftSize).toBe(4096);
     expect(info.profileReasons).toEqual(['LAN display defaults']);
+  });
+  it('labels a display-transport override so exported measurements name their arm', () => {
+    const plain = diagnostics().profile();
+    expect(plain.displayTransportOverride).toBe('auto');
+    expect(plain.profileReasons).toEqual(['LAN display defaults']);
+    const spectrum = diagnostics({ search: '?display_transport=spectrum' }).profile();
+    expect(spectrum.displayTransportOverride).toBe('spectrum');
+    expect(spectrum.profileReasons).toEqual(['Display transport override: spectrum']);
+    // The override does not make a LAN session count as WAN.
+    expect(spectrum.profile).toBe('lan');
+    expect(spectrum.streamMode).toBe('lan');
   });
   it('identifies a Tailscale hostname', () => {
     expect(diagnostics({ host: 'radio.example.ts.net' }).profile().profileReasons).toEqual(['Page uses a Tailscale host']);

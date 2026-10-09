@@ -177,6 +177,15 @@ from the control lane at pairing. The raw-IQ packetizer runs and resets only
 while some client still receives raw IQ. `perf.json` reports
 `display_spectrum_*` counters and the `display_spectrum_fft_session` histogram.
 
+The Remote page asks for rows automatically when RX Transport is WAN, which also
+caps IQ at 96 kHz and switches RX audio to 12 kHz mono. To compare display
+transports with the audio profile held fixed, add `?display_transport=spectrum`
+(rows) or `?display_transport=iq` (raw IQ) to the page URL. The default, `auto`,
+is the original rule, so existing sessions are unchanged. The override never
+changes RX Transport, the IQ rate or the audio profile; it still needs the
+`saturn_display_caps:spectrum_u8;` advertisement, and the exported display
+diagnostics name it.
+
 ## Same-Host P2 Port Map
 
 | Traffic              | Direction        | Port  |

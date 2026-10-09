@@ -15960,12 +15960,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const reasons = [];
       const freshRtt = state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS;
       if (state.streamMode === "wan") reasons.push("RX Transport is set to WAN");
+      if (displayTransportOverride() !== "auto") reasons.push(`Display transport override: ${displayTransportOverride()}`);
       if (tailnetTransportActive()) reasons.push("Page uses a Tailscale host");
       if (freshRtt && state.bridgeRttMs > (phoneWan ? 180 : 250)) reasons.push("Recent bridge RTT exceeds display threshold");
       return {
         profile: phoneWan ? "phone-wan" : (wan ? "wan" : "lan"),
         profileReasons: reasons.length ? reasons : ["LAN display defaults"],
         streamMode: state.streamMode,
+        displayTransportOverride: displayTransportOverride(),
         targetFftSize: displayFftTargetSize(now),
         targetRenderIntervalMs: displayRenderIntervalMs(now),
         sampleRateHz: displaySampleRateHz(),
@@ -16001,8 +16003,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // on today's raw IQ path.
     let displayEchoFallbackTimer = null;
 
+    // Measurement override: `?display_transport=spectrum` asks for server rows
+    // and `?display_transport=iq` for raw IQ, whatever RX Transport is set to.
+    // The default, `auto`, is the original rule: rows only for a WAN session.
+    // WAN also caps IQ at 96 kHz and switches RX audio to 12 kHz mono, so this
+    // is how an A/B comparison changes only the display transport. It never
+    // touches `streamMode`, the IQ rate or the RX audio profile.
+    function readDisplayTransportOverride(search) {
+      const raw = new URLSearchParams(String(search || "")).get("display_transport");
+      const value = String(raw === null ? "" : raw).trim().toLowerCase();
+      return value === "spectrum" || value === "iq" ? value : "auto";
+    }
+
+    let displayTransportOverrideValue = null;
+
+    function displayTransportOverride() {
+      if (displayTransportOverrideValue === null) {
+        displayTransportOverrideValue = readDisplayTransportOverride(
+          window.location ? window.location.search : "");
+      }
+      return displayTransportOverrideValue;
+    }
+
     function displayTransportRequested() {
-      return Boolean(state.displayCapsSpectrum) && state.streamMode === "wan";
+      if (!state.displayCapsSpectrum) return false;
+      const override = displayTransportOverride();
+      if (override === "spectrum") return true;
+      if (override === "iq") return false;
+      return state.streamMode === "wan";
     }
 
     function desiredDisplayFftSize() {
@@ -16124,7 +16152,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function iqStartGated() {
-      return state.displayCapsSpectrum && state.streamMode === "wan" && !state.displayEchoReceived;
+      return displayTransportRequested() && !state.displayEchoReceived;
     }
 
     function sendIqStart() {

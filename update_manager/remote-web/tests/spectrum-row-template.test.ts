@@ -61,6 +61,8 @@ type HarnessApi = {
   handleBinaryFrame: (buffer: ArrayBuffer) => void;
   scanDisplayTransportText: (text: string) => void;
   resetDisplayTransport: (reason?: string) => void;
+  readDisplayTransportOverride: (search: string) => string;
+  displayTransportOverride: () => string;
 };
 
 function makeHarness(options: {
@@ -71,6 +73,7 @@ function makeHarness(options: {
   intervalMs?: number;
   echoTimeoutMs?: number;
   dds?: number;
+  search?: string;
 } = {}) {
   const sent: string[] = [];
   const logs: string[] = [];
@@ -126,7 +129,7 @@ function makeHarness(options: {
     updateWsDiagMarker: () => {},
     scheduleUiRefresh: () => {},
     performance: { now: () => 1000 },
-    window: { setTimeout, clearTimeout },
+    window: { setTimeout, clearTimeout, location: { search: options.search ?? '' } },
     displayFftTargetSize: () => options.targetFftSize ?? 2048,
     displayRenderIntervalMs: () => options.intervalMs ?? 50,
     DISPLAY_ECHO_TIMEOUT_MS: options.echoTimeoutMs ?? 1000,
@@ -147,11 +150,14 @@ function makeHarness(options: {
     DataView,
     Uint8Array,
     Float32Array,
+    // A browser global the vm context does not provide on its own.
+    URLSearchParams,
   };
   const api = runInNewContext(
     `${slice(TRANSPORT_START, TRANSPORT_END)}\n${slice(BINARY_START, BINARY_END)}\n` +
       '({ requestDisplayTransport, applyDisplayEcho, desiredDisplayCommand, iqStartGated, ' +
-      'sendIqStart, flushDeferredIqStart, handleSpectrumRow, handleBinaryFrame, scanDisplayTransportText, resetDisplayTransport })',
+      'sendIqStart, flushDeferredIqStart, handleSpectrumRow, handleBinaryFrame, scanDisplayTransportText, resetDisplayTransport, ' +
+      'readDisplayTransportOverride, displayTransportOverride })',
     sandbox,
   ) as unknown as HarnessApi;
   return { api, sandbox, sent, logs, audioFrames, opusFrames, iqFrames, state: sandbox.state as Record<string, unknown> };
@@ -492,5 +498,77 @@ describe('drawDisplayBins across both render sources', () => {
     expect(peakIndex(shifted.bins) - peakIndex(baseline.bins)).toBe(-27);
     // The tone is translated, not clipped.
     expect(Math.max(...shifted.bins)).toBeCloseTo(-20, 5);
+  });
+});
+
+describe('display transport override for matched measurements', () => {
+  it('defaults to auto and keeps the original rule: rows only in WAN', () => {
+    const wan = makeHarness({ streamMode: 'wan' });
+    expect(wan.api.displayTransportOverride()).toBe('auto');
+    expect(wan.api.desiredDisplayCommand()).toMatch(/^saturn_display:spectrum,/);
+    const lan = makeHarness({ streamMode: 'lan' });
+    expect(lan.api.desiredDisplayCommand()).toBe('saturn_display:iq;');
+    expect(lan.api.iqStartGated()).toBe(false);
+  });
+
+  it('reads only spectrum and iq, in any case, and treats anything else as auto', () => {
+    const { api } = makeHarness();
+    expect(api.readDisplayTransportOverride('?display_transport=spectrum')).toBe('spectrum');
+    expect(api.readDisplayTransportOverride('?x=1&display_transport=IQ')).toBe('iq');
+    expect(api.readDisplayTransportOverride('?display_transport= Spectrum ')).toBe('spectrum');
+    for (const search of ['', '?display_transport=', '?display_transport=wan', '?display_transport=1', '?transport=spectrum', undefined as unknown as string]) {
+      expect(api.readDisplayTransportOverride(search)).toBe('auto');
+    }
+  });
+
+  it('spectrum override requests rows in a LAN session at the LAN display profile', () => {
+    const h = makeHarness({
+      streamMode: 'lan', search: '?display_transport=spectrum', targetFftSize: 8192, intervalMs: 16,
+    });
+    expect(h.api.displayTransportOverride()).toBe('spectrum');
+    // The bridge's own clamps: 4096 bins at no faster than 33 ms (about 30 rows/s).
+    expect(h.api.desiredDisplayCommand()).toBe('saturn_display:spectrum,4096,33;');
+    expect(h.api.requestDisplayTransport('test', true)).toBe(true);
+    expect(h.sent).toEqual(['saturn_display:spectrum,4096,33;']);
+    // iq_start waits for the echo, then is flushed, exactly as in WAN.
+    expect(h.api.iqStartGated()).toBe(true);
+    expect(h.api.sendIqStart()).toBe(false);
+    h.api.applyDisplayEcho(['0', 'spectrum', '4096', '33']);
+    expect(h.state.displayRenderSource).toBe('server');
+    expect(h.sent).toContain('iq_start:0;');
+    // The override does not change the RX transport mode.
+    expect(h.state.streamMode).toBe('lan');
+  });
+
+  it('iq override keeps raw IQ in a WAN session and never gates iq_start', () => {
+    const h = makeHarness({ streamMode: 'wan', search: '?display_transport=iq' });
+    expect(h.api.desiredDisplayCommand()).toBe('saturn_display:iq;');
+    expect(h.api.iqStartGated()).toBe(false);
+    expect(h.api.sendIqStart()).toBe(true);
+    expect(h.sent).toContain('iq_start:0;');
+    expect(h.state.streamMode).toBe('wan');
+  });
+
+  it('still sends nothing when the bridge did not advertise spectrum caps', () => {
+    const h = makeHarness({ caps: false, streamMode: 'lan', search: '?display_transport=spectrum' });
+    expect(h.api.requestDisplayTransport('test', true)).toBe(false);
+    expect(h.sent).toEqual([]);
+    expect(h.api.iqStartGated()).toBe(false);
+  });
+
+  it('cannot change the RX audio or IQ profile: those depend only on the RX transport mode', () => {
+    expect(template).toContain('_next.buildRxAudioStartCommand(state.streamMode, state.rxVolumeDb)');
+    expect(template).toContain('_next.rxAudioTransportProfile(state.streamMode)');
+    expect(template).toContain('_next.effectiveIqSampleRate(state.sampleRate, state.streamMode)');
+    const overrideAt = template.indexOf('function readDisplayTransportOverride');
+    const overrideEnd = template.indexOf('function displayTransportRequested');
+    const overrideSource = template.slice(overrideAt, overrideEnd);
+    expect(overrideSource).not.toMatch(/streamMode\s*=[^=]/);
+    expect(overrideSource).not.toMatch(/sendTci|iq_samplerate|audio_start/);
+  });
+
+  it('labels the override in the exported display diagnostics', () => {
+    expect(template).toContain('Display transport override: ${displayTransportOverride()}');
+    expect(template).toContain('displayTransportOverride: displayTransportOverride(),');
   });
 });
