@@ -294,13 +294,44 @@ pub(crate) fn tci_nodelay_enabled() -> bool {
 /// A socket whose TCP_NODELAY can be set; `TcpStream` in production.
 pub(crate) trait NoDelaySocket {
     fn set_nodelay(&self, enabled: bool) -> io::Result<()>;
+    /// The option as the kernel reports it for this socket (getsockopt), not as the caller last set it.
+    fn nodelay(&self) -> io::Result<bool>;
 }
 
 impl NoDelaySocket for TcpStream {
     fn set_nodelay(&self, enabled: bool) -> io::Result<()> {
         TcpStream::set_nodelay(self, enabled)
     }
+
+    fn nodelay(&self) -> io::Result<bool> {
+        TcpStream::nodelay(self)
+    }
 }
+
+/// What this Bridge can prove about TCP_NODELAY on the sockets it accepted, published in perf.json beside its PID and
+/// build identity: how many sockets it set and then read back as on, and how many it could not. Totals since the Bridge
+/// started. The evidence is the kernel's own answer for each accepted socket, so it is production evidence tied to the
+/// serving process, not a log line from a test harness.
+pub(crate) struct NodelayStats {
+    confirmed: AtomicU64,
+    failed: AtomicU64,
+}
+
+impl NodelayStats {
+    pub(crate) const fn new() -> Self {
+        Self { confirmed: AtomicU64::new(0), failed: AtomicU64::new(0) }
+    }
+
+    pub(crate) fn confirmed(&self) -> u64 {
+        self.confirmed.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn failed(&self) -> u64 {
+        self.failed.load(Ordering::Relaxed)
+    }
+}
+
+pub(crate) static NODELAY_STATS: NodelayStats = NodelayStats::new();
 
 /// Sets TCP_NODELAY on an accepted client socket when `enabled`, and reports
 /// whether it is now on. RX audio frames are small and leave every ~21 ms, so
@@ -308,13 +339,37 @@ impl NoDelaySocket for TcpStream {
 /// refuses the option is logged and still served: this is a tuning option, not
 /// a reason to drop a client. Whether it improves listening on a real link is
 /// not established.
-pub(crate) fn apply_nodelay(socket: &impl NoDelaySocket, addr: SocketAddr, enabled: bool) -> bool {
+///
+/// "On" means the kernel read it back as on. A set that succeeds but reads back off, or cannot be read back, counts as
+/// a failure in `stats`, never as a confirmation. Nothing is counted when the setting is off.
+pub(crate) fn apply_nodelay(
+    socket: &impl NoDelaySocket,
+    addr: SocketAddr,
+    enabled: bool,
+    stats: &NodelayStats,
+) -> bool {
     if !enabled {
         return false;
     }
     match socket.set_nodelay(true) {
-        Ok(()) => true,
+        Ok(()) => match socket.nodelay() {
+            Ok(true) => {
+                stats.confirmed.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Ok(false) => {
+                stats.failed.fetch_add(1, Ordering::Relaxed);
+                eprintln!("saturn-bridge: TCI websocket from {addr}: TCP_NODELAY was set but reads back off, serving without it");
+                false
+            }
+            Err(error) => {
+                stats.failed.fetch_add(1, Ordering::Relaxed);
+                eprintln!("saturn-bridge: TCI websocket from {addr}: could not read TCP_NODELAY back, not counting it as confirmed: {error}");
+                false
+            }
+        },
         Err(error) => {
+            stats.failed.fetch_add(1, Ordering::Relaxed);
             eprintln!(
                 "saturn-bridge: TCI websocket from {addr}: could not set TCP_NODELAY, serving without it: {error}"
             );
@@ -339,7 +394,7 @@ pub(crate) fn handle_client(
     satp_advertisement: (bool, u16),
     display: &DisplayTransport,
 ) {
-    apply_nodelay(&stream, addr, tci_nodelay_enabled());
+    apply_nodelay(&stream, addr, tci_nodelay_enabled(), &NODELAY_STATS);
     // Without nonblocking mode the handshake could block with no deadline, so
     // a socket that cannot be switched is dropped rather than served.
     if let Err(error) = stream.set_nonblocking(true) {

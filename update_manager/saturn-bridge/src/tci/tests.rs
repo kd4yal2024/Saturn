@@ -4640,9 +4640,24 @@ fn an_unrecognized_nodelay_value_stays_on_and_warns() {
     }
 }
 
+/// What the kernel says when asked for the option back.
+#[derive(Clone, Copy)]
+enum ReadBack {
+    On,
+    Off,
+    Error,
+}
+
 struct FakeSocket {
     refuse: bool,
+    readback: ReadBack,
     calls: std::cell::Cell<u32>,
+}
+
+impl FakeSocket {
+    fn new(refuse: bool, readback: ReadBack) -> Self {
+        Self { refuse, readback, calls: std::cell::Cell::new(0) }
+    }
 }
 
 impl NoDelaySocket for FakeSocket {
@@ -4655,24 +4670,37 @@ impl NoDelaySocket for FakeSocket {
             Ok(())
         }
     }
+
+    fn nodelay(&self) -> io::Result<bool> {
+        match self.readback {
+            ReadBack::On => Ok(true),
+            ReadBack::Off => Ok(false),
+            ReadBack::Error => Err(io::Error::new(io::ErrorKind::Other, "getsockopt failed in the test")),
+        }
+    }
 }
 
 #[test]
 fn a_socket_that_refuses_nodelay_is_reported_not_fatal() {
     let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
-    let refusing = FakeSocket { refuse: true, calls: std::cell::Cell::new(0) };
-    assert!(!apply_nodelay(&refusing, addr, true), "a refused option was reported as set");
+    let stats = NodelayStats::new();
+    let refusing = FakeSocket::new(true, ReadBack::On);
+    assert!(!apply_nodelay(&refusing, addr, true, &stats), "a refused option was reported as set");
     assert_eq!(refusing.calls.get(), 1);
-    let accepting = FakeSocket { refuse: false, calls: std::cell::Cell::new(0) };
-    assert!(apply_nodelay(&accepting, addr, true));
+    assert_eq!((stats.confirmed(), stats.failed()), (0, 1));
+    let accepting = FakeSocket::new(false, ReadBack::On);
+    assert!(apply_nodelay(&accepting, addr, true, &stats));
+    assert_eq!((stats.confirmed(), stats.failed()), (1, 1));
 }
 
 #[test]
 fn a_disabled_nodelay_setting_never_touches_the_socket() {
     let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
-    let socket = FakeSocket { refuse: false, calls: std::cell::Cell::new(0) };
-    assert!(!apply_nodelay(&socket, addr, false));
+    let stats = NodelayStats::new();
+    let socket = FakeSocket::new(false, ReadBack::On);
+    assert!(!apply_nodelay(&socket, addr, false, &stats));
     assert_eq!(socket.calls.get(), 0);
+    assert_eq!((stats.confirmed(), stats.failed()), (0, 0), "nothing is counted when the setting is off");
 }
 
 /// The production `handle_client` on a real accepted loopback socket: the same
@@ -4720,6 +4748,66 @@ fn the_production_accept_path_sets_tcp_nodelay_on_the_accepted_socket() {
         expected,
         "the accepted socket's TCP_NODELAY does not match the setting ({TCI_NODELAY_ENV})"
     );
+    drop(peer);
+    worker.join().unwrap();
+}
+
+#[test]
+fn a_set_that_the_kernel_reads_back_as_off_is_a_failure_not_a_confirmation() {
+    let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let stats = NodelayStats::new();
+    let socket = FakeSocket::new(false, ReadBack::Off);
+    assert!(!apply_nodelay(&socket, addr, true, &stats));
+    assert_eq!((stats.confirmed(), stats.failed()), (0, 1));
+}
+
+#[test]
+fn a_read_back_that_fails_is_a_failure_not_a_confirmation() {
+    let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let stats = NodelayStats::new();
+    let socket = FakeSocket::new(false, ReadBack::Error);
+    assert!(!apply_nodelay(&socket, addr, true, &stats));
+    assert_eq!((stats.confirmed(), stats.failed()), (0, 1));
+}
+
+#[test]
+fn each_confirmed_socket_is_counted_once() {
+    let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let stats = NodelayStats::new();
+    for _ in 0..3 {
+        assert!(apply_nodelay(&FakeSocket::new(false, ReadBack::On), addr, true, &stats));
+    }
+    assert_eq!((stats.confirmed(), stats.failed()), (3, 0));
+}
+
+/// The real accepted-socket path publishes its evidence: after the production `handle_client` has run on a real
+/// socket, the Bridge-wide confirmed total has gone up, and the snapshot that feeds perf.json carries it.
+#[test]
+fn the_production_accept_path_counts_a_confirmed_socket() {
+    let (expected, _) = parse_nodelay_setting(std::env::var(TCI_NODELAY_ENV).ok().as_deref());
+    let before = NODELAY_STATS.confirmed();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (socket, addr) = listener.accept().unwrap();
+    let probe = socket.try_clone().unwrap();
+    let worker = thread::spawn(move || {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        let (commands, _rx) = mpsc::channel();
+        handle_client(
+            socket, addr, 1, &commands, &clients,
+            &Arc::new(AtomicU64::new(0)), &Arc::new(Mutex::new(None)),
+            &Arc::new(Mutex::new(RadioModel::new(6, 7_215_000, 0, 384, 24, 2048, true, 4096, true))),
+            &Arc::new(AtomicU64::new(0)), &Arc::new(FullRateIqTransportStats::default()),
+            false, TxCodecRuntimeFlags::default(), (false, 50100), &DisplayTransport::default(),
+        );
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while probe.nodelay().unwrap() != expected && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(probe.nodelay().unwrap(), expected);
+    // Other tests also accept sockets, so the total can only be said to have risen by at least one.
+    assert_eq!(NODELAY_STATS.confirmed() > before, expected, "confirmed total did not follow the setting");
     drop(peer);
     worker.join().unwrap();
 }

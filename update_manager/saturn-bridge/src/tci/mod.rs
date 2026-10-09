@@ -112,6 +112,11 @@ pub struct TciClientSnapshot {
     pub command_arm_cancelled: u64,
     pub command_mic_cancelled: u64,
     pub non_finite_controls_rejected: u64,
+    /// TCP_NODELAY on accepted TCI sockets: the setting, and how many sockets the kernel read back as on or the Bridge
+    /// could not set or read back (totals since the Bridge started).
+    pub nodelay_enabled: bool,
+    pub nodelay_confirmed_total: u64,
+    pub nodelay_failed_total: u64,
     pub split_control_clients: u64,
     pub split_media_clients: u64,
     pub split_paired_sessions: u64,
@@ -493,6 +498,9 @@ impl TciFrontend {
             command_arm_cancelled: command_queue.arm_cancelled,
             command_mic_cancelled: command_queue.mic_cancelled,
             non_finite_controls_rejected: non_finite_controls_rejected_total(),
+            nodelay_enabled: tci_nodelay_enabled(),
+            nodelay_confirmed_total: NODELAY_STATS.confirmed(),
+            nodelay_failed_total: NODELAY_STATS.failed(),
             split_control_clients: split_lane_client_count(&clients, SplitSocketKind::Control),
             split_media_clients: split_lane_client_count(&clients, SplitSocketKind::Media),
             split_paired_sessions: split_paired_session_count(&clients),

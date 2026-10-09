@@ -1906,6 +1906,21 @@ fn write_performance(
                 "non_finite_controls_rejected",
                 TelemetryValue::number(client.non_finite_controls_rejected),
             ),
+            // TCP_NODELAY on accepted TCI sockets, as the kernel reports it: the setting (1 on, 0 off) and totals
+            // since the Bridge started. They sit in the same document as "pid" and the build identity, so they are
+            // evidence about this serving process.
+            (
+                "tci_nodelay_enabled",
+                TelemetryValue::number(u64::from(client.nodelay_enabled)),
+            ),
+            (
+                "tci_nodelay_confirmed_total",
+                TelemetryValue::number(client.nodelay_confirmed_total),
+            ),
+            (
+                "tci_nodelay_failed_total",
+                TelemetryValue::number(client.nodelay_failed_total),
+            ),
             (
                 "audio_dropped_s",
                 TelemetryValue::number(client.audio_dropped_per_sec),

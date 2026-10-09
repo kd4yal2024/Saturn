@@ -192,7 +192,27 @@ fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), S
         .lines()
         .filter(|line| line.contains("TCP_NODELAY FAILED") || (line.contains("Bridge setsockopt(TCP_NODELAY") && line.contains("-> FAILED")))
         .count();
-    let verdict = if failed != 0 {
+    // The Bridge's own account, from the same perf.json that carries its PID: the setting and the sockets the kernel
+    // read back as on. This is what a production run can retain; the shim's lines above are replay-only.
+    let own = replay.perf();
+    let own_number = |key: &str| own.as_ref().and_then(|perf| perf.number(key));
+    let own_enabled = own_number("tci_nodelay_enabled");
+    let own_confirmed = own_number("tci_nodelay_confirmed_total");
+    let own_failed = own_number("tci_nodelay_failed_total");
+    let own_problem = if own_enabled != Some(if bridge_off { 0.0 } else { 1.0 }) {
+        Some(format!("the Bridge reports TCP_NODELAY enabled = {own_enabled:?}, expected {}", if bridge_off { 0 } else { 1 }))
+    } else if own_failed != Some(0.0) {
+        Some(format!("the Bridge reports {own_failed:?} failed TCP_NODELAY calls"))
+    } else if bridge_off && own_confirmed != Some(0.0) {
+        Some(format!("the Bridge reports {own_confirmed:?} confirmed sockets with the setting off"))
+    } else if !bridge_off && own_confirmed.map_or(true, |confirmed| confirmed < connections as f64) {
+        Some(format!("the Bridge reports {own_confirmed:?} confirmed sockets, expected at least {connections}"))
+    } else {
+        None
+    };
+    let verdict = if let Some(problem) = own_problem {
+        Err(problem)
+    } else if failed != 0 {
         Err(format!("{failed} TCP_NODELAY call(s) failed"))
     } else if shim_requested && shim_set < connections {
         Err(format!("the shim's TCP_NODELAY was requested but confirmed on {shim_set} of {connections} accepted sockets"))
@@ -207,7 +227,8 @@ fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), S
     };
     let text = format!(
         "TCP_NODELAY: Bridge setting {}, set by the Bridge on {bridge_set} accepted sockets; \
-         shim hook requested: {shim_requested}, confirmed on {shim_set}; failures: {failed}",
+         shim hook requested: {shim_requested}, confirmed on {shim_set}; failures: {failed}; \
+         the Bridge's own perf.json: enabled {own_enabled:?}, confirmed {own_confirmed:?}, failed {own_failed:?}",
         if bridge_off { "off" } else { "on" }
     );
     (text, verdict)

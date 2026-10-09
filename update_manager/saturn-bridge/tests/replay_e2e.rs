@@ -146,6 +146,13 @@ fn replayed_stream_reaches_a_client_as_iq_spectrum_rows_and_audio() {
     for guard in ["command_arm_cancelled", "command_mic_cancelled", "non_finite_controls_rejected"] {
         assert!(perf.number(guard).is_some(), "perf.json lacks {guard}");
     }
+    // TCP_NODELAY evidence from the serving process itself: the setting, and the sockets the kernel read back as on.
+    let nodelay_off = std::env::var("SATURN_BRIDGE_TCI_NODELAY")
+        .is_ok_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"));
+    assert_eq!(perf.number("tci_nodelay_enabled"), Some(if nodelay_off { 0.0 } else { 1.0 }));
+    assert_eq!(perf.number("tci_nodelay_failed_total"), Some(0.0), "a TCP_NODELAY call failed");
+    let confirmed = perf.number("tci_nodelay_confirmed_total").expect("perf.json lacks tci_nodelay_confirmed_total");
+    assert_eq!(confirmed >= 1.0, !nodelay_off, "confirmed sockets {confirmed} with the setting {}", if nodelay_off { "off" } else { "on" });
 
     // A SIGTERM sent to the running Bridge is a clean, receive-safe shutdown:
     // it must exit with status 0. A crash signal, a nonzero exit, or an exit
