@@ -1032,7 +1032,20 @@ build_dir() {
   local dir="$3"
   local nproc="$4"
   local required="${5:-1}"
+  local binary_name removed
   [[ -d "$dir" ]] || die "$label directory missing: $dir"
+  binary_name="${dir##*/}"
+  [[ "$binary_name" == "P2_app" ]] && binary_name="p2app"
+  # An interrupted write can leave a zero-byte object or executable newer
+  # than its source. Make then treats it as current and may link or install it.
+  removed="$(run_as_user "$saturn_home" find "$dir" -maxdepth 1 -type f -empty \
+    \( -name '*.o' -o -name '*.a' -o -name '*.so*' -o -name '*.d' \
+       -o -name "$binary_name" \) -print -delete)" \
+    || die "Could not remove empty build artifacts for $label"
+  if [[ -n "$removed" ]]; then
+    log "Removed empty build artifacts for $label before rebuilding:"
+    printf '%s\n' "$removed" >&2
+  fi
   log "Building $label ($dir)"
   if ! run_as_user "$saturn_home" make -C "$dir" -j"$nproc"; then
     if bool_true "$required"; then
