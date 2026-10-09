@@ -39,13 +39,16 @@ release manifest; it adds the candidate identity and Bridge policy. Bridge
 recognizes `0x53460004` for direct-XDMA runtime/receive, but does **not**
 qualify its RF TX. P2 still accepts major-1 firmware and its existing TX
 policy is unchanged: during initial P2 receive testing, do not key the radio.
-Both owners probe the RXC1 register bank and report unsupported, failed,
-reset, or stale acquisition as unavailable rather than zero loss.
-Both owners accept `SATURN_RXC1_POLL_ENABLED=0` at process startup. This
-suppresses only RXC1 register transactions; IQ acquisition and other
-telemetry continue. Their RXC1 JSON and the existing diagnostics page show
-`disabled` / `unavailable`, with null counters. Unset the variable (or use
-`1`) and restart the selected owner to resume five-second RXC1 polling.
+Both owners leave RXC1 polling disabled by default. Neither probes the RXC1
+register bank on the working `0x53460003` image, even if polling is requested:
+an absent AXI-Lite register cannot be safely discovered by reading it. On an
+identified `0x53460004` candidate only, set
+`SATURN_RXC1_POLL_ENABLED=1` at process startup to opt in to five-second
+polling. An unknown or baseline build reports RXC1 `unsupported`; an unset,
+`0`, or unrecognized setting reports `disabled`. In all inactive cases the
+RXC1 counters are null, while IQ acquisition and other telemetry continue.
+Read, reset, and stale acquisition failures on an enabled candidate are
+reported as unavailable rather than zero loss.
 
 ## Inactive build and deployment gate
 
@@ -116,14 +119,17 @@ part of preparation.
    loss solely from a browser pause. Keep TX disabled during this receive
    gate, and do not claim RF TX qualification from the identity allowlist.
 
-For that comparison, put `Environment=SATURN_RXC1_POLL_ENABLED=0` in a
+For that comparison on the approved candidate only, put
+`Environment=SATURN_RXC1_POLL_ENABLED=1` in a
 separate root-owned systemd drop-in for **only the selected FPGA owner**
 (`saturn-bridge.service` for `xdma`, `p2app.service` for `p2`), reload systemd
 and restart that owner through its controlled owner path. In P2-client mode,
 the Bridge can remain active but must report runtime backend `p2`; it must not
-poll the FPGA RXC1 register bank directly. Verify IQ reception resumes, non-RXC1 telemetry continues,
-and RXC1 is explicitly `disabled` / `unavailable` with null counters. Remove
-the drop-in, reload and restart the same owner to re-enable polling. Allow
+poll the FPGA RXC1 register bank directly. Verify IQ reception and non-RXC1
+telemetry continue, then compare against polling disabled (`0` or no
+override), where RXC1 is explicitly `disabled` / `unavailable` with null
+counters. Remove the opt-in drop-in, reload and restart the same owner to
+return to the safe disabled default. Allow
 startup to settle before comparing equal-length receive windows; record
 backend, rate, DDC, data width, firmware ID and owner PID for each window.
 

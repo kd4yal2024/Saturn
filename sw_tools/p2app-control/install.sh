@@ -424,6 +424,7 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=SATURN_P23_SELECTED_APP=p2
 Environment=SATURN_P23_STARTUP_MODE=service-default
 Environment=SATURN_FRONT_PANEL_MODE=${P2APP_PANEL_MODE}
+Environment=SATURN_RXC1_POLL_ENABLED=0
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=p2app

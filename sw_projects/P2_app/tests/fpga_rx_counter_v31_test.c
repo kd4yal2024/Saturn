@@ -125,7 +125,7 @@ static void ResetFake(EMode NewMode)
   FailedRequestToken = 0;
   AckFailuresRemaining = AckAttempts = 0;
   RegisterReads = RegisterWrites = 0;
-  RXC1Init();
+  RXC1Init(0x53460004U);
 }
 
 static void TestPollingDisabled(void)
@@ -135,7 +135,7 @@ static void TestPollingDisabled(void)
   char Buffer[8192];
   size_t Length;
   unsigned int Receiver;
-  assert(setenv("SATURN_RXC1_POLL_ENABLED", "0", 1) == 0);
+  assert(unsetenv("SATURN_RXC1_POLL_ENABLED") == 0);
   ResetFake(Normal);
   RXC1Sample();
   RXC1MaybeSample();
@@ -153,8 +153,21 @@ static void TestPollingDisabled(void)
   fclose(File);
   assert(strstr(Buffer, "\"status\":\"disabled\"") != NULL);
   assert(strstr(Buffer, "\"refused_pre_fir_pair_candidates\":null") != NULL);
-  assert(unsetenv("SATURN_RXC1_POLL_ENABLED") == 0);
+  assert(setenv("SATURN_RXC1_POLL_ENABLED", "0", 1) == 0);
   ResetFake(Normal);
+  RXC1Sample();
+  assert(RegisterReads == 0 && RegisterWrites == 0);
+
+  assert(setenv("SATURN_RXC1_POLL_ENABLED", "1", 1) == 0);
+  ResetFake(Normal);
+  RXC1Init(0x53460003U); /* installed baseline: no RXC1 BAR access */
+  RXC1Sample();
+  RXC1MaybeSample();
+  RXC1GetSnapshot(&Snapshot);
+  assert(RegisterReads == 0 && RegisterWrites == 0);
+  assert(Snapshot.DDC[0].Status == eRXC1Unsupported);
+
+  ResetFake(Normal); /* candidate identity plus explicit opt-in */
   RXC1Sample();
   assert(RegisterReads != 0 && RegisterWrites != 0);
 }
@@ -180,7 +193,7 @@ static void TestNormalAndRestart(void)
   FirstToken = Snapshot.DDC[0].HostToken;
   assert(FirstToken != 0);
   assert(RegisterWriteChecked(0x8004U, 0x80000000U)); /* old pending snapshot */
-  RXC1Init(); /* new acquisition owner, same hardware */
+  RXC1Init(0x53460004U); /* new acquisition owner, same hardware */
   RXC1Sample();
   RXC1GetSnapshot(&Snapshot);
   assert(Snapshot.DDC[0].Status == eRXC1Valid);
@@ -371,6 +384,7 @@ static void TestSaturation(void)
 
 int main(void)
 {
+  assert(setenv("SATURN_RXC1_POLL_ENABLED", "1", 1) == 0);
   TestNormalAndRestart();
   TestCorruptions();
   TestEveryCounterOracle();

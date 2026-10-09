@@ -11,6 +11,7 @@
 
 #define RXC1_BASE 0x8000U
 #define RXC1_MAGIC 0x52584331U
+#define RXC1_CANDIDATE_BUILD_ID 0x53460004U
 #define RXC1_REQUEST 0x80000000U
 #define RXC1_ACK 0x40000000U
 #define RXC1_VALID 0x01U
@@ -25,7 +26,7 @@ static uint32_t g_session;
 static bool g_bound;
 static time_t g_last_sample_second;
 static uint32_t g_token_sequence;
-static bool g_poll_enabled = true;
+static bool g_poll_enabled;
 
 static uint64_t NowMs(void)
 {
@@ -76,15 +77,20 @@ static void Invalidate(TRXC1DDC *DDC, unsigned int Receiver, ERXC1Status Status)
   DDC->Status = Status;
 }
 
-void RXC1Init(void)
+void RXC1Init(uint32_t FpgaBuildId)
 {
   unsigned int Receiver;
   const char *PollEnabled = getenv("SATURN_RXC1_POLL_ENABLED");
-  g_poll_enabled = PollEnabled == NULL || strcmp(PollEnabled, "0") != 0;
+  bool PollRequested = PollEnabled != NULL && strcmp(PollEnabled, "1") == 0;
+  ERXC1Status InitialStatus;
+  /* An RXC1 BAR read on an image without that register bank may not complete.
+   * Never probe the known 0x53460003 baseline or an unidentified image. */
+  g_poll_enabled = PollRequested && FpgaBuildId == RXC1_CANDIDATE_BUILD_ID;
+  InitialStatus = g_poll_enabled ? eRXC1Unavailable :
+                  PollRequested ? eRXC1Unsupported : eRXC1Disabled;
   memset(&g_snapshot, 0, sizeof(g_snapshot));
   for (Receiver = 0; Receiver < RXC1_DDC_COUNT; Receiver++)
-    Invalidate(&g_snapshot.DDC[Receiver], Receiver,
-               g_poll_enabled ? eRXC1Unavailable : eRXC1Disabled);
+    Invalidate(&g_snapshot.DDC[Receiver], Receiver, InitialStatus);
   g_bound = false;
   g_token = 0;
   g_session = 0;

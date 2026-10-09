@@ -51,7 +51,8 @@ typedef struct
   TRXC1DDC DDC[RXC1_DDC_COUNT];
 } TRXC1Snapshot;
 
-void RXC1Init(void);
+/* RXC1 must not touch the register bank on the 0x53460003 baseline image. */
+void RXC1Init(uint32_t FpgaBuildId);
 void RXC1Sample(void);
 void RXC1MaybeSample(void);
 void RXC1GetSnapshot(TRXC1Snapshot *Snapshot);

@@ -1263,6 +1263,7 @@ impl OperationalRxSession {
             )
         };
         let fifo_policy = FifoStatusPolicy::for_identity(&identity);
+        let rx_counter_v31 = rx_counter_v31::Owner::for_build_id(identity.user_version);
         let dma = OpenOptions::new()
             .read(true)
             .open(&ddc_path)
@@ -1291,7 +1292,7 @@ impl OperationalRxSession {
             fifo_v29_telemetry,
             adc_v30_telemetry,
             per_ddc_almost_full_telemetry: PerDdcAlmostFullTelemetry::default(),
-            rx_counter_v31: rx_counter_v31::Owner::default(),
+            rx_counter_v31,
             fifo_monitor_threshold_words: 0,
             fifo_policy,
             last_dma_sequence: None,

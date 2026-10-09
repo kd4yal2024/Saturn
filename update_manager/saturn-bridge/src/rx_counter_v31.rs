@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const BASE: u64 = 0x8000;
 const MAGIC: u32 = 0x5258_4331;
+const CANDIDATE_BUILD_ID: u32 = 0x5346_0004;
 const REQUEST: u32 = 1 << 31;
 const ACK: u32 = 1 << 30;
 const VALID: u32 = 1;
@@ -78,29 +79,46 @@ pub(crate) struct Owner {
     last_poll: Option<Instant>,
 }
 
-impl Default for Owner {
-    fn default() -> Self {
-        Self::with_polling(std::env::var("SATURN_RXC1_POLL_ENABLED").as_deref() != Ok("0"))
-    }
-}
-
 impl Owner {
+    pub(crate) fn for_build_id(build_id: u32) -> Self {
+        let setting = std::env::var("SATURN_RXC1_POLL_ENABLED").ok();
+        Self::with_config(build_id, setting.as_deref())
+    }
+
+    fn with_config(build_id: u32, setting: Option<&str>) -> Self {
+        // The 0x53460003 baseline has no safe RXC1 bank. Never probe a BAR
+        // register merely to discover that it is absent.
+        let requested = setting == Some("1");
+        let enabled = requested && build_id == CANDIDATE_BUILD_ID;
+        let status = if enabled {
+            "unavailable"
+        } else if requested {
+            "unsupported"
+        } else {
+            "disabled"
+        };
+        Self::with_status(enabled, status)
+    }
+
+    #[cfg(test)]
     fn with_polling(poll_enabled: bool) -> Self {
+        Self::with_status(
+            poll_enabled,
+            if poll_enabled {
+                "unavailable"
+            } else {
+                "disabled"
+            },
+        )
+    }
+
+    fn with_status(poll_enabled: bool, status: &'static str) -> Self {
         Self {
             poll_enabled,
             token: 0,
             session: None,
             readings: (0..DDC_COUNT)
-                .map(|receiver| {
-                    Reading::invalid(
-                        receiver,
-                        if poll_enabled {
-                            "unavailable"
-                        } else {
-                            "disabled"
-                        },
-                    )
-                })
+                .map(|receiver| Reading::invalid(receiver, status))
                 .collect(),
             failures: 0,
             sampled_at_ms: 0,
@@ -461,6 +479,36 @@ mod tests {
         assert!(json.contains("\"refused_pre_fir_pair_candidates\":null"));
     }
 
+    #[test]
+    fn baseline_and_default_never_probe_rx_counter_bank() {
+        struct NoAccess;
+        impl Registers for NoAccess {
+            fn read(&self, _: u64) -> Result<u32, String> {
+                panic!("unsafe RXC1 read on baseline or default configuration")
+            }
+            fn write(&self, _: u64, _: u32) -> Result<(), String> {
+                panic!("unsafe RXC1 write on baseline or default configuration")
+            }
+        }
+        for (build_id, setting, expected) in [
+            (CANDIDATE_BUILD_ID, None, "disabled"),
+            (CANDIDATE_BUILD_ID, Some("0"), "disabled"),
+            (CANDIDATE_BUILD_ID, Some("true"), "disabled"),
+            (0x5346_0003, Some("1"), "unsupported"),
+            (0, Some("1"), "unsupported"),
+        ] {
+            let mut owner = Owner::with_config(build_id, setting);
+            owner.maybe_sample(&NoAccess);
+            assert!(!owner.is_enabled());
+            assert!(owner
+                .readings
+                .iter()
+                .all(|reading| reading.status == expected));
+            assert_eq!(owner.failures, 0);
+        }
+        assert!(Owner::with_config(CANDIDATE_BUILD_ID, Some("1")).is_enabled());
+    }
+
     // The expected values are the independently scripted snapshot-boundary
     // oracle. The fake bank may corrupt its readback without changing these.
     const EXPECTED: [[u64; 5]; DDC_COUNT] = [
@@ -654,7 +702,7 @@ mod tests {
     }
 
     fn sample(fake: &impl Registers) -> Owner {
-        let mut owner = Owner::default();
+        let mut owner = Owner::with_polling(true);
         owner.maybe_sample(fake);
         owner
     }
