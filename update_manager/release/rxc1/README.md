@@ -1,5 +1,8 @@
 # RXC1 1.31.002 release candidate — preparation, not deployment approval
 
+This is the historical pre-deployment plan. The later operator TX qualification
+decision is recorded in [tx-qualification-20261009.md](tx-qualification-20261009.md).
+
 The G2 must keep its working 1.31.001 image until an explicit combined
 firmware/host deployment decision. The candidate primary-slot image was made
 from the reviewed revision-4 *post-route* checkpoint with only

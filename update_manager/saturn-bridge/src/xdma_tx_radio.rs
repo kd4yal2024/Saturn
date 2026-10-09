@@ -4,11 +4,11 @@
 //! The runtime owns a separate register descriptor and H2C0 descriptor, but
 //! shares their proven FIFO geometry, sample packing, register ordering, and
 //! fail-safe receive cleanup. Primary PCB2 firmware 1.27 through 1.30 is
-//! permitted by the production firmware policy. Firmware 1.31.001 is admitted
-//! for RX and RF TX only when its verified USR_ACCESS ID matches. This host
-//! policy does not substitute for supervised hardware TX validation. The
-//! RXC1 candidate (1.31.002) is receive-compatible but RF TX remains held
-//! until that separately reviewed image is qualified on a dummy load.
+//! permitted by the production firmware policy. Firmware 1.31.001 and RXC1
+//! 1.31.002 are admitted for RX and RF TX only when their verified USR_ACCESS
+//! IDs match. The 1.31.002 RF policy reflects operator qualification of the
+//! exact 0x53460004 image; this allowlist is not a substitute for hardware
+//! power, SWR, and spectral measurements.
 
 use crate::radio_model::RadioModel;
 use crate::tx_thread::{TxRadio, TxRadioResult};
@@ -858,7 +858,11 @@ fn direct_rf_tx_is_qualified(identity: &SaturnIdentity) -> bool {
     // Host firmware allowlist only; this does not certify on-air RF behavior.
     direct_runtime_is_supported(identity)
         && (identity.firmware_minor != IDENTIFIED_FIRMWARE_131_MINOR
-            || identity.user_version == IDENTIFIED_FIRMWARE_131_BUILD_ID)
+            || [
+                IDENTIFIED_FIRMWARE_131_BUILD_ID,
+                IDENTIFIED_FIRMWARE_131_RXC1_BUILD_ID,
+            ]
+            .contains(&identity.user_version))
 }
 
 fn steady_state_fifo_fault(snapshot: FifoSnapshot, underflow_is_fault: bool) -> bool {
@@ -1236,7 +1240,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_rf_tx_policy_accepts_baseline_and_only_identified_v31_image() {
+    fn direct_rf_tx_policy_accepts_baseline_and_both_identified_v31_images() {
         for firmware_minor in 27..=30 {
             assert!(direct_rf_tx_is_qualified(&primary_pcb2_identity(
                 firmware_minor
@@ -1255,7 +1259,7 @@ mod tests {
         assert!(!direct_rf_tx_is_qualified(&image_131));
         image_131.user_version = IDENTIFIED_FIRMWARE_131_RXC1_BUILD_ID;
         assert!(direct_runtime_is_supported(&image_131));
-        assert!(!direct_rf_tx_is_qualified(&image_131));
+        assert!(direct_rf_tx_is_qualified(&image_131));
         image_131.user_version = 0x5346_0005;
         assert!(!direct_rf_tx_is_qualified(&image_131));
         let mut identity = primary_pcb2_identity(30);
