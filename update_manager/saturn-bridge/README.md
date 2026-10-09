@@ -186,6 +186,13 @@ changes RX Transport, the IQ rate or the audio profile; it still needs the
 `saturn_display_caps:spectrum_u8;` advertisement, and the exported display
 diagnostics name it.
 
+With `?display_transport=spectrum`, RX Measure still gets raw IQ: starting a
+capture explicitly asks the bridge for `saturn_display:iq;`, waits for the echo
+and fresh IQ frames, and captures. When the capture finishes, is stopped, fails
+to start, or the connection drops, the page asks for the rows again (a lease
+that cannot be confirmed within 3 s is released and nothing is captured). Without
+the override RX Measure behaves exactly as before.
+
 ## Same-Host P2 Port Map
 
 | Traffic              | Direction        | Port  |

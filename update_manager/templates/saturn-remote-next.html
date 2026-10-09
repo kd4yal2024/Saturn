@@ -10695,6 +10695,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       stopRxSpectrumTimer();
       $("rx-spectrum-start-btn").disabled = false;
       $("rx-spectrum-status").textContent = `Capture stopped: ${reason}. No comparison file was saved.`;
+      releaseRawIqLease("capture stopped");
     }
 
     function finishRxSpectrumCapture() {
@@ -10716,6 +10717,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         rxSpectrumAccumulator = null;
         stopRxSpectrumTimer();
         $("rx-spectrum-start-btn").disabled = false;
+        releaseRawIqLease("capture finished");
       }
     }
 
@@ -10744,12 +10746,35 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     async function startRxSpectrumCapture() {
       if (rxSpectrumAccumulator) return;
+      // Only when the measurement override is what holds the page on server
+      // rows: borrow raw IQ for this capture and hand the display back after.
+      // Without the override nothing changes: RX Measure still needs the raw
+      // IQ path to be running already.
+      let leased = false;
+      if (displayTransportOverride() === "spectrum" && state.mode !== "WFM" && !rxSpectrumSourceReady()) {
+        $("rx-spectrum-start-btn").disabled = true;
+        $("rx-spectrum-status").textContent = "Switching the display to raw RX IQ for the capture...";
+        leased = await acquireRawIqLease(
+          () => rxSpectrumSourceReady() && performance.now() - state.lastFrameAt <= 1500
+        );
+        if (!leased) {
+          $("rx-spectrum-start-btn").disabled = false;
+          $("rx-spectrum-status").textContent =
+            "The bridge did not deliver raw RX IQ in time; the display was put back. Nothing was captured.";
+          return;
+        }
+      }
       if (!rxSpectrumSourceReady() || performance.now() - state.lastFrameAt > 1500) {
         $("rx-spectrum-status").textContent = "Start RX IQ on the raw IQ display path before capturing.";
+        if (leased) {
+          $("rx-spectrum-start-btn").disabled = false;
+          releaseRawIqLease("could not start");
+        }
         return;
       }
       if (state.mode === "WFM") {
         $("rx-spectrum-status").textContent = "RX Measure currently supports narrowband RX modes.";
+        if (leased) releaseRawIqLease("could not start");
         return;
       }
       const durationMs = Number($("rx-spectrum-duration").value) * 1000;
@@ -10788,6 +10813,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         rxSpectrumAccumulator = null;
         $("rx-spectrum-start-btn").disabled = false;
         $("rx-spectrum-status").textContent = `Cannot start capture: ${error.message || error}`;
+        releaseRawIqLease("could not start");
       }
     }
 
@@ -16027,6 +16053,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function displayTransportRequested() {
       if (!state.displayCapsSpectrum) return false;
+      // RX Measure is borrowing raw IQ (see the lease below).
+      if (state.displayIqLease) return false;
       const override = displayTransportOverride();
       if (override === "spectrum") return true;
       if (override === "iq") return false;
@@ -16148,6 +16176,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.displayServerAckSeq = 0;
       state.displayServerLastReceivedSeq = 0;
       state.displayIqStartDeferred = false;
+      state.displayIqLease = false;
       updateWsDiagMarker(`Display transport reset (${reason})`, 1000);
     }
 
@@ -16266,6 +16295,52 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           requestDisplayTransport("pairing", true);
         }
       }
+    }
+
+    // ---- RX Measure raw-IQ lease ----
+    // RX Measure reads raw IQ, which the bridge does not send while the page is
+    // on server rows. When the measurement override holds the page on rows, RX
+    // Measure borrows raw IQ for one capture and the page then asks for the rows
+    // again. The lease only changes what is requested: `isReady` decides when
+    // raw IQ has really arrived (the echo and fresh frames), and a lease that
+    // cannot be confirmed is released and the prior mode requested again. A
+    // disconnect clears it (resetDisplayTransport). It never touches the RX
+    // transport mode, the IQ rate or the RX audio profile.
+    function acquireRawIqLease(isReady, timeoutMs = 3000, pollMs = 100) {
+      if (!state.connected || !state.bridgeReady || !state.displayCapsSpectrum) {
+        return Promise.resolve(false);
+      }
+      state.displayIqLease = true;
+      requestDisplayTransport("RX Measure raw IQ", true);
+      const attempts = Math.max(1, Math.ceil(timeoutMs / pollMs));
+      return new Promise((resolve) => {
+        let tries = 0;
+        const poll = () => {
+          if (!state.displayIqLease) {
+            resolve(false);
+            return;
+          }
+          if (isReady()) {
+            resolve(true);
+            return;
+          }
+          tries += 1;
+          if (tries >= attempts) {
+            releaseRawIqLease("raw IQ not confirmed");
+            resolve(false);
+            return;
+          }
+          window.setTimeout(poll, pollMs);
+        };
+        poll();
+      });
+    }
+
+    function releaseRawIqLease(reason = "capture ended") {
+      if (!state.displayIqLease) return false;
+      state.displayIqLease = false;
+      requestDisplayTransport(`RX Measure ${reason}`, true);
+      return true;
     }
     // ---- end WAN display transport ----
 

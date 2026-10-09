@@ -13,6 +13,8 @@ const TRANSPORT_START = '    // ---- WAN display transport: server spectrum rows
 const TRANSPORT_END = '    // ---- end WAN display transport ----';
 const BINARY_START = '    function handleBinaryFrame(buffer) {';
 const BINARY_END = '    function adoptWsDiagSocket(socket) {';
+const MEASURE_START = '    let rxSpectrumAccumulator = null;';
+const MEASURE_END = '    function sampleRxSpectrum(bins, now) {';
 const DRAW_START = '    function drawDisplayBins(bins, now, waterfallEnabled, phoneWanLite, centerShiftHz = 0) {';
 const DRAW_END = '    function animationLoop(now) {';
 
@@ -63,6 +65,16 @@ type HarnessApi = {
   resetDisplayTransport: (reason?: string) => void;
   readDisplayTransportOverride: (search: string) => string;
   displayTransportOverride: () => string;
+  displayTransportRequested: () => boolean;
+  acquireRawIqLease: (isReady: () => boolean, timeoutMs?: number, pollMs?: number) => Promise<boolean>;
+  releaseRawIqLease: (reason?: string) => boolean;
+};
+
+type MeasureApi = {
+  startRxSpectrumCapture: () => Promise<void>;
+  finishRxSpectrumCapture: () => void;
+  abortRxSpectrumCapture: (reason: string) => void;
+  rxSpectrumSourceReady: () => boolean;
 };
 
 function makeHarness(options: {
@@ -74,6 +86,8 @@ function makeHarness(options: {
   echoTimeoutMs?: number;
   dds?: number;
   search?: string;
+  /** Also load the RX Measure functions, with fast timers and a fake accumulator. */
+  measure?: { identityFails?: boolean; mode?: string };
 } = {}) {
   const sent: string[] = [];
   const logs: string[] = [];
@@ -118,6 +132,10 @@ function makeHarness(options: {
       displayServerByteRate: 0,
       displayIqStartDeferred: false,
       displayIqSource: 'rx',
+      displayIqLease: false,
+      iqStreaming: true,
+      displayPaused: false,
+      mode: options.measure?.mode ?? 'USB',
       dds: options.dds ?? 14_200_000,
       sampleRate: 192_000,
       lastFrameAt: 0,
@@ -129,7 +147,17 @@ function makeHarness(options: {
     updateWsDiagMarker: () => {},
     scheduleUiRefresh: () => {},
     performance: { now: () => 1000 },
-    window: { setTimeout, clearTimeout, location: { search: options.search ?? '' } },
+    window: {
+      // RX Measure's 100 ms polling runs on fast timers so its 3 s wait takes
+      // milliseconds; the page's own 1 s echo-fallback timer keeps its real delay.
+      setTimeout: options.measure
+        ? (fn: () => void, ms?: number) => setTimeout(fn, (ms ?? 0) >= 500 ? ms : 1)
+        : setTimeout,
+      clearTimeout,
+      setInterval,
+      clearInterval,
+      location: { search: options.search ?? '' },
+    },
     displayFftTargetSize: () => options.targetFftSize ?? 2048,
     displayRenderIntervalMs: () => options.intervalMs ?? 50,
     DISPLAY_ECHO_TIMEOUT_MS: options.echoTimeoutMs ?? 1000,
@@ -153,14 +181,70 @@ function makeHarness(options: {
     // A browser global the vm context does not provide on its own.
     URLSearchParams,
   };
+  const elements: Record<string, { textContent: string; disabled: boolean; hidden: boolean; value: string }> = {};
+  if (options.measure) {
+    class FakeAccumulator {
+      samples = 0;
+      startedAtMs: number;
+      durationMs: number;
+      settings: unknown;
+      constructor(settings: unknown, _identity: unknown, startedAtMs: number, durationMs: number) {
+        this.settings = settings;
+        this.startedAtMs = startedAtMs;
+        this.durationMs = durationMs;
+      }
+      finish() {
+        return {
+          samples: 1,
+          quality: 'full',
+          summary: { adjacentNoiseFloorMedianDb: 0, passbandExcessMedianDb: 0, widebandBurstRiseDb: 0 },
+        };
+      }
+    }
+    sandbox._next = { ...spectrumRow, RxSpectrumAccumulator: FakeAccumulator, rxSpectrumSettingsMatch: () => true };
+    sandbox.$ = (id: string) =>
+      (elements[id] ??= { textContent: '', disabled: false, hidden: false, value: '30' });
+    sandbox.fftProcessor = { size: 2048 };
+    sandbox.currentRxPassbandHz = () => ({ lowHz: 0, highHz: 0 });
+    sandbox.fetch = async () => {
+      if (options.measure?.identityFails) throw new Error('identity unavailable');
+      return {
+        ok: true,
+        json: async () => ({
+          pid_matches_service: true,
+          age_seconds: 1,
+          fpga: {
+            build_identity_status: 'identified',
+            firmware_display: '1.31',
+            rx_filter: 'test',
+            build_id_raw: 1,
+            build_id_hex: '0x1',
+          },
+        }),
+      };
+    };
+    Object.assign(sandbox.state as Record<string, unknown>, {
+      rxAdc: 0, rxAntenna: 0, rxAttenuationDb: 0, agcMode: 'med', agcGain: 0,
+      rxNoiseReductionMode: 'off', rxNbMode: 'off', filterLow: 0, filterHigh: 0, rxFilterShiftHz: 0,
+    });
+  }
+  const measureSlice = options.measure ? `${slice(MEASURE_START, MEASURE_END)}\n` : '';
   const api = runInNewContext(
-    `${slice(TRANSPORT_START, TRANSPORT_END)}\n${slice(BINARY_START, BINARY_END)}\n` +
+    `${slice(TRANSPORT_START, TRANSPORT_END)}\n${slice(BINARY_START, BINARY_END)}\n${measureSlice}` +
       '({ requestDisplayTransport, applyDisplayEcho, desiredDisplayCommand, iqStartGated, ' +
       'sendIqStart, flushDeferredIqStart, handleSpectrumRow, handleBinaryFrame, scanDisplayTransportText, resetDisplayTransport, ' +
-      'readDisplayTransportOverride, displayTransportOverride })',
+      'readDisplayTransportOverride, displayTransportOverride, displayTransportRequested, ' +
+      'acquireRawIqLease, releaseRawIqLease' +
+      (options.measure
+        ? ', startRxSpectrumCapture, finishRxSpectrumCapture, abortRxSpectrumCapture, rxSpectrumSourceReady'
+        : '') +
+      ' })',
     sandbox,
-  ) as unknown as HarnessApi;
-  return { api, sandbox, sent, logs, audioFrames, opusFrames, iqFrames, state: sandbox.state as Record<string, unknown> };
+  ) as unknown as HarnessApi & MeasureApi;
+  return {
+    api, sandbox, sent, logs, audioFrames, opusFrames, iqFrames, elements,
+    state: sandbox.state as Record<string, unknown>,
+  };
 }
 
 describe('WAN display transport negotiation', () => {
@@ -570,5 +654,196 @@ describe('display transport override for matched measurements', () => {
   it('labels the override in the exported display diagnostics', () => {
     expect(template).toContain('Display transport override: ${displayTransportOverride()}');
     expect(template).toContain('displayTransportOverride: displayTransportOverride(),');
+  });
+});
+
+describe('RX Measure raw-IQ lease under the display override', () => {
+  const ROWS = 'saturn_display:spectrum,2048,50;';
+  const IQ = 'saturn_display:iq;';
+  const SPECTRUM_OVERRIDE = '?display_transport=spectrum';
+
+  /** A LAN page the override holds on server rows: echo received, rows flowing. */
+  function onRows(options: { search?: string; streamMode?: string; measure?: { identityFails?: boolean; mode?: string } } = {}) {
+    const h = makeHarness({
+      search: options.search ?? SPECTRUM_OVERRIDE,
+      streamMode: options.streamMode ?? 'lan',
+      measure: options.measure ?? {},
+    });
+    h.api.requestDisplayTransport('test', true);
+    h.api.applyDisplayEcho(['0', 'spectrum', '2048', '50']);
+    h.state.lastFrameAt = 1000;
+    h.sent.length = 0;
+    return h;
+  }
+  const status = (h: ReturnType<typeof onRows>) => h.elements['rx-spectrum-status']?.textContent ?? '';
+  /** What the bridge does after `saturn_display:iq;`: echo it, then raw IQ frames flow. */
+  const bridgeSwitchesToIq = (h: ReturnType<typeof onRows>) => {
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.state.lastFrameAt = 1000;
+  };
+
+  it('takes raw IQ for the capture, holds it throughout, and puts the rows back at the end', async () => {
+    const h = onRows();
+    expect(h.api.rxSpectrumSourceReady()).toBe(false);
+    const started = h.api.startRxSpectrumCapture();
+    // Explicitly asks for raw IQ, and only for that.
+    expect(h.sent).toEqual([IQ]);
+    expect(h.state.displayIqLease).toBe(true);
+    expect(h.api.displayTransportRequested()).toBe(false);
+    expect(status(h)).toContain('Switching the display to raw RX IQ');
+    // The capture does not begin on the request alone, only once raw IQ is confirmed.
+    expect(h.api.rxSpectrumSourceReady()).toBe(false);
+    bridgeSwitchesToIq(h);
+    await started;
+    expect(status(h)).toContain('Capturing');
+    expect(h.state.displayIqLease).toBe(true);
+    expect(h.sent).toEqual([IQ]);
+    h.api.finishRxSpectrumCapture();
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent).toEqual([IQ, ROWS]);
+    expect(h.api.displayTransportRequested()).toBe(true);
+    // Audio and RX transport settings were never involved.
+    expect(h.state.streamMode).toBe('lan');
+    expect(h.sent.every((command) => command.startsWith('saturn_display:'))).toBe(true);
+  });
+
+  it('puts the rows back when the capture is stopped', async () => {
+    const h = onRows();
+    const started = h.api.startRxSpectrumCapture();
+    bridgeSwitchesToIq(h);
+    await started;
+    h.api.abortRxSpectrumCapture('stream or RX settings changed');
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent).toEqual([IQ, ROWS]);
+    expect(status(h)).toContain('Capture stopped');
+    expect(h.elements['rx-spectrum-start-btn']?.disabled).toBe(false);
+  });
+
+  it('gives the display back when raw IQ never arrives', async () => {
+    const h = onRows();
+    await h.api.startRxSpectrumCapture();
+    expect(h.sent).toEqual([IQ, ROWS]);
+    expect(h.state.displayIqLease).toBe(false);
+    expect(status(h)).toContain('display was put back');
+    expect(h.elements['rx-spectrum-start-btn']?.disabled).toBe(false);
+    expect(h.api.displayTransportRequested()).toBe(true);
+  });
+
+  it('gives the display back when the capture cannot start after raw IQ arrived', async () => {
+    const h = onRows({ measure: { identityFails: true } });
+    const started = h.api.startRxSpectrumCapture();
+    bridgeSwitchesToIq(h);
+    await started;
+    expect(status(h)).toContain('Cannot start capture');
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent).toEqual([IQ, ROWS]);
+    expect(h.elements['rx-spectrum-start-btn']?.disabled).toBe(false);
+  });
+
+  it('leaves everything alone for a mode RX Measure does not support', async () => {
+    const h = onRows({ measure: { mode: 'WFM' } });
+    await h.api.startRxSpectrumCapture();
+    expect(h.sent).toEqual([]);
+    expect(h.state.displayIqLease).toBe(false);
+  });
+
+  it('does not change what RX Measure does without the override', async () => {
+    // WAN rows from the original rule: RX Measure still refuses, and asks for nothing.
+    const wan = onRows({ search: '', streamMode: 'wan' });
+    await wan.api.startRxSpectrumCapture();
+    expect(status(wan)).toContain('Start RX IQ on the raw IQ display path');
+    expect(wan.sent).toEqual([]);
+    expect(wan.state.displayIqLease).toBe(false);
+  });
+
+  it('needs no lease when the page is already on raw IQ', async () => {
+    const h = makeHarness({ search: '?display_transport=iq', streamMode: 'wan', measure: {} });
+    h.api.requestDisplayTransport('test', true);
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.state.lastFrameAt = 1000;
+    h.sent.length = 0;
+    await h.api.startRxSpectrumCapture();
+    expect(status(h)).toContain('Capturing');
+    h.api.finishRxSpectrumCapture();
+    expect(h.sent).toEqual([]);
+    expect(h.state.displayIqLease).toBe(false);
+  });
+
+  it('a disconnect while waiting clears the lease and sends nothing further', async () => {
+    const h = onRows();
+    const started = h.api.startRxSpectrumCapture();
+    expect(h.sent).toEqual([IQ]);
+    h.api.resetDisplayTransport('disconnect');
+    expect(h.state.displayIqLease).toBe(false);
+    h.state.connected = false;
+    await started;
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent).toEqual([IQ]);
+    expect(status(h)).toContain('display was put back');
+  });
+
+  it('a disconnect during the capture ends it without a stale request', async () => {
+    const h = onRows();
+    const started = h.api.startRxSpectrumCapture();
+    bridgeSwitchesToIq(h);
+    await started;
+    h.api.resetDisplayTransport('disconnect');
+    expect(h.state.displayIqLease).toBe(false);
+    h.state.connected = false;
+    h.api.abortRxSpectrumCapture('RX IQ stream stopped');
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent).toEqual([IQ]);
+  });
+
+  it('a lease cannot outlive a disconnect and distort the next connection', async () => {
+    const h = onRows();
+    const started = h.api.startRxSpectrumCapture();
+    bridgeSwitchesToIq(h);
+    await started;
+    // The connection drops mid-capture and comes back before the capture's own
+    // timer notices: the new connection must ask for rows, not raw IQ.
+    h.api.resetDisplayTransport('disconnect');
+    h.sent.length = 0;
+    h.api.scanDisplayTransportText('saturn_display_caps:spectrum_u8;');
+    expect(h.api.requestDisplayTransport('bridge ready', true)).toBe(true);
+    expect(h.sent).toEqual([ROWS]);
+  });
+
+  it('asks for nothing from a bridge that did not advertise spectrum support', async () => {
+    const h = makeHarness({ caps: false, search: SPECTRUM_OVERRIDE, streamMode: 'lan' });
+    expect(await h.api.acquireRawIqLease(() => true)).toBe(false);
+    expect(h.sent).toEqual([]);
+    expect(h.state.displayIqLease).toBe(false);
+  });
+});
+
+describe('display override across reconnect and fallback', () => {
+  it('asks for rows again after a reconnect, and withholds iq_start until the echo', () => {
+    const h = makeHarness({ search: '?display_transport=spectrum', streamMode: 'lan' });
+    h.api.scanDisplayTransportText('saturn_display_caps:spectrum_u8;');
+    h.api.requestDisplayTransport('bridge ready', true);
+    h.api.applyDisplayEcho(['0', 'spectrum', '2048', '50']);
+    h.api.resetDisplayTransport('disconnect');
+    expect(h.state.displayCapsSpectrum).toBe(false);
+    expect(h.api.displayTransportRequested()).toBe(false);
+    h.sent.length = 0;
+    // The new connection's greeting advertises the capability again.
+    h.api.scanDisplayTransportText('saturn_display_caps:spectrum_u8;');
+    expect(h.api.requestDisplayTransport('bridge ready', true)).toBe(true);
+    expect(h.sent).toEqual(['saturn_display:spectrum,2048,50;']);
+    expect(h.api.iqStartGated()).toBe(true);
+    expect(h.api.sendIqStart()).toBe(false);
+    h.api.applyDisplayEcho(['0', 'spectrum', '2048', '50']);
+    expect(h.sent).toContain('iq_start:0;');
+  });
+
+  it('falls back to raw IQ when the echo never arrives, even in a LAN session', async () => {
+    const h = makeHarness({ search: '?display_transport=spectrum', streamMode: 'lan', echoTimeoutMs: 5 });
+    h.api.sendIqStart();
+    expect(h.state.displayIqStartDeferred).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(h.state.displayRenderSource).toBe('iq');
+    expect(h.sent).toContain('iq_start:0;');
+    expect(h.state.streamMode).toBe('lan');
   });
 });
