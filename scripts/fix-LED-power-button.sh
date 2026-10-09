@@ -98,7 +98,9 @@ require_root() {
 require_root
 
 # The privileged copy is installed alongside this shared writer.
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=saturn-boot-config.sh
+# shellcheck disable=SC1091
 source "$(dirname "$SCRIPT_SELF")/saturn-boot-config.sh"
 
 # ----- locate config.txt for Bookworm/Trixie -----

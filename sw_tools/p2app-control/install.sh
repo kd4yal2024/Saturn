@@ -3,7 +3,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source-path=SCRIPTDIR
 # shellcheck source=../../scripts/saturn-p2-install-policy.sh
+# shellcheck disable=SC1091
 source "$REPO_ROOT/scripts/saturn-p2-install-policy.sh"
 SELECTED_BACKEND="$(saturn_p2_selected_backend)"
 
