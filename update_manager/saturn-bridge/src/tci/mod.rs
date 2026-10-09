@@ -210,6 +210,8 @@ impl TciFrontend {
                 Ok(listener)
             })
             .collect::<io::Result<Vec<_>>>()?;
+        // Decide and log the TCP_NODELAY setting now, not at the first client.
+        client::tci_nodelay_enabled();
 
         let (command_tx, command_rx) = tci_command_mailbox();
         let clients = Arc::new(Mutex::new(BTreeMap::new()));

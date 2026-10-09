@@ -4614,3 +4614,112 @@ fn switching_back_to_bridge_gain_resets_codec_and_audio_queue() {
     assert_eq!(client.state.rx_audio_codec, RxAudioCodec::Pcm);
     assert!(client.outbound.queues.lock_unpoisoned().audio.is_empty());
 }
+
+// ---- TCP_NODELAY on accepted TCI sockets
+
+#[test]
+fn nodelay_defaults_on_and_the_switch_turns_it_off() {
+    assert_eq!(parse_nodelay_setting(None), (true, None));
+    assert_eq!(parse_nodelay_setting(Some("")), (true, None));
+    assert_eq!(parse_nodelay_setting(Some("   ")), (true, None));
+    for on in ["1", "true", "TRUE", "on", "yes", " 1 "] {
+        assert_eq!(parse_nodelay_setting(Some(on)), (true, None), "{on:?}");
+    }
+    for off in ["0", "false", "False", "off", "OFF", "no", " 0\n"] {
+        assert_eq!(parse_nodelay_setting(Some(off)), (false, None), "{off:?}");
+    }
+}
+
+#[test]
+fn an_unrecognized_nodelay_value_stays_on_and_warns() {
+    for typo in ["of", "disable", "2", "nope"] {
+        let (enabled, warning) = parse_nodelay_setting(Some(typo));
+        assert!(enabled, "{typo:?} switched TCP_NODELAY off");
+        let warning = warning.unwrap_or_else(|| panic!("{typo:?} gave no warning"));
+        assert!(warning.contains(TCI_NODELAY_ENV) && warning.contains(typo), "{warning}");
+    }
+}
+
+struct FakeSocket {
+    refuse: bool,
+    calls: std::cell::Cell<u32>,
+}
+
+impl NoDelaySocket for FakeSocket {
+    fn set_nodelay(&self, enabled: bool) -> io::Result<()> {
+        assert!(enabled, "the Bridge only ever turns TCP_NODELAY on");
+        self.calls.set(self.calls.get() + 1);
+        if self.refuse {
+            Err(io::Error::new(io::ErrorKind::Unsupported, "refused by the test"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn a_socket_that_refuses_nodelay_is_reported_not_fatal() {
+    let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let refusing = FakeSocket { refuse: true, calls: std::cell::Cell::new(0) };
+    assert!(!apply_nodelay(&refusing, addr, true), "a refused option was reported as set");
+    assert_eq!(refusing.calls.get(), 1);
+    let accepting = FakeSocket { refuse: false, calls: std::cell::Cell::new(0) };
+    assert!(apply_nodelay(&accepting, addr, true));
+}
+
+#[test]
+fn a_disabled_nodelay_setting_never_touches_the_socket() {
+    let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+    let socket = FakeSocket { refuse: false, calls: std::cell::Cell::new(0) };
+    assert!(!apply_nodelay(&socket, addr, false));
+    assert_eq!(socket.calls.get(), 0);
+}
+
+/// The production `handle_client` on a real accepted loopback socket: the same
+/// socket (a duplicate descriptor refers to the same TCP socket) must have
+/// Nagle's algorithm switched off once the handler has started.
+#[test]
+fn the_production_accept_path_sets_tcp_nodelay_on_the_accepted_socket() {
+    let (expected, _) = parse_nodelay_setting(std::env::var(TCI_NODELAY_ENV).ok().as_deref());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (socket, addr) = listener.accept().unwrap();
+    let probe = socket.try_clone().unwrap();
+    assert!(
+        !probe.nodelay().unwrap(),
+        "control: a freshly accepted socket must start with Nagle's algorithm on"
+    );
+    let worker = thread::spawn(move || {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        let (commands, _rx) = mpsc::channel();
+        handle_client(
+            socket,
+            addr,
+            1,
+            &commands,
+            &clients,
+            &Arc::new(AtomicU64::new(0)),
+            &Arc::new(Mutex::new(None)),
+            &Arc::new(Mutex::new(RadioModel::new(
+                6, 7_215_000, 0, 384, 24, 2048, true, 4096, true,
+            ))),
+            &Arc::new(AtomicU64::new(0)),
+            &Arc::new(FullRateIqTransportStats::default()),
+            false,
+            TxCodecRuntimeFlags::default(),
+            (false, 50100),
+            &DisplayTransport::default(),
+        );
+    });
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while probe.nodelay().unwrap() != expected && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        probe.nodelay().unwrap(),
+        expected,
+        "the accepted socket's TCP_NODELAY does not match the setting ({TCI_NODELAY_ENV})"
+    );
+    drop(peer);
+    worker.join().unwrap();
+}

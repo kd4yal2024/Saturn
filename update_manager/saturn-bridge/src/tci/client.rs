@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -250,6 +250,79 @@ pub(crate) fn accept_with_deadline<C: Callback>(
     }
 }
 
+/// Environment switch for TCP_NODELAY on accepted TCI sockets. The option is on
+/// unless this is set to 0, false, off or no. It exists so a matched
+/// comparison can use one binary for both arms.
+pub(crate) const TCI_NODELAY_ENV: &str = "SATURN_BRIDGE_TCI_NODELAY";
+
+/// Reads the TCP_NODELAY setting: `(enabled, warning)`. Unset or empty means
+/// on. A value that is not recognized also means on, with a warning, so a typo
+/// cannot silently switch the option off.
+pub(crate) fn parse_nodelay_setting(value: Option<&str>) -> (bool, Option<String>) {
+    let Some(raw) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return (true, None);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "0" | "false" | "off" | "no" => (false, None),
+        "1" | "true" | "on" | "yes" => (true, None),
+        _ => (
+            true,
+            Some(format!(
+                "{TCI_NODELAY_ENV}={raw:?} is not recognized (use 0 or 1); TCP_NODELAY stays on"
+            )),
+        ),
+    }
+}
+
+/// Whether accepted TCI sockets get TCP_NODELAY, decided once from the
+/// environment and logged the first time it is asked (at start-up).
+pub(crate) fn tci_nodelay_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        let (enabled, warning) = parse_nodelay_setting(std::env::var(TCI_NODELAY_ENV).ok().as_deref());
+        if let Some(warning) = warning {
+            eprintln!("saturn-bridge: {warning}");
+        }
+        println!(
+            "saturn-bridge: TCP_NODELAY on accepted TCI sockets: {}",
+            if enabled { "on" } else { "off" }
+        );
+        enabled
+    })
+}
+
+/// A socket whose TCP_NODELAY can be set; `TcpStream` in production.
+pub(crate) trait NoDelaySocket {
+    fn set_nodelay(&self, enabled: bool) -> io::Result<()>;
+}
+
+impl NoDelaySocket for TcpStream {
+    fn set_nodelay(&self, enabled: bool) -> io::Result<()> {
+        TcpStream::set_nodelay(self, enabled)
+    }
+}
+
+/// Sets TCP_NODELAY on an accepted client socket when `enabled`, and reports
+/// whether it is now on. RX audio frames are small and leave every ~21 ms, so
+/// without it a frame can wait behind the peer's delayed ACK. A socket that
+/// refuses the option is logged and still served: this is a tuning option, not
+/// a reason to drop a client. Whether it improves listening on a real link is
+/// not established.
+pub(crate) fn apply_nodelay(socket: &impl NoDelaySocket, addr: SocketAddr, enabled: bool) -> bool {
+    if !enabled {
+        return false;
+    }
+    match socket.set_nodelay(true) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "saturn-bridge: TCI websocket from {addr}: could not set TCP_NODELAY, serving without it: {error}"
+            );
+            false
+        }
+    }
+}
+
 pub(crate) fn handle_client(
     stream: TcpStream,
     addr: SocketAddr,
@@ -266,6 +339,7 @@ pub(crate) fn handle_client(
     satp_advertisement: (bool, u16),
     display: &DisplayTransport,
 ) {
+    apply_nodelay(&stream, addr, tci_nodelay_enabled());
     // Without nonblocking mode the handshake could block with no deadline, so
     // a socket that cannot be switched is dropped rather than served.
     if let Err(error) = stream.set_nonblocking(true) {
