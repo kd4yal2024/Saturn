@@ -146,6 +146,13 @@ and FPGA snapshots. The default DMA minimum remains 4096 bytes. See
 [the RX benchmark and hardware comparison procedure](scripts/benchmark-xdma-rx.md)
 for measurements, metric definitions, and the opt-in 8192/16384-byte experiments.
 
+`perf.json` also reports three command-guard totals, counted since the Bridge
+started: `command_arm_cancelled` and `command_mic_cancelled` (queued PTT arm
+requests and microphone frames removed because a release or disconnect arrived
+after them) and `non_finite_controls_rejected` (numeric TCI controls refused as
+NaN or infinite). An older Bridge omits them; Radio Telemetry & Diagnostics then
+shows them as unavailable rather than zero. They are informational, not faults.
+
 ### WAN display spectrum rows (Direct-XDMA)
 
 Raw display IQ is 12,800 pairs at 30 frames/s, about 24.6 Mbit/s per IQ client.

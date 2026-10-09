@@ -829,6 +829,53 @@ fn bad_float_mic_frames_through_the_message_handler_are_counted_and_recovered_fr
     );
 }
 
+#[test]
+fn command_guard_totals_reach_the_client_snapshot_for_telemetry() {
+    let port = free_loopback_port();
+    let mut config = crate::config::BridgeConfig::default();
+    config.tci_bind_addr = SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port);
+    let model = Arc::new(Mutex::new(RadioModel::new(
+        6, 7_215_000, 0, 384, 24, 2048, true, 4096, true,
+    )));
+    // The receiver is held and never read, so queued commands stay queued.
+    let (tci, _commands) = TciFrontend::bind(&config, model).unwrap();
+    let stream = connect_when_listening(port);
+    let (mut client, _) = tungstenite::client(format!("ws://127.0.0.1:{port}/"), stream)
+        .expect("websocket handshake");
+
+    let before = tci.client_snapshot();
+    // A microphone frame and an arm are queued, then released: both are cancelled.
+    let mic = build_tci_float_frame(0, 48_000, &[0.25, -0.25], 2, 1, 1);
+    client.send(Message::Binary(mic.into())).unwrap();
+    client.send(Message::text("trx:0,true;")).unwrap();
+    client.send(Message::text("trx:0,false;")).unwrap();
+    // A non-finite control is refused.
+    client.send(Message::text("rx_ssql_threshold:0,NaN;")).unwrap();
+
+    let settled = wait_until(Duration::from_secs(3), || {
+        let now = tci.client_snapshot();
+        now.command_arm_cancelled > before.command_arm_cancelled
+            && now.command_mic_cancelled > before.command_mic_cancelled
+            && now.non_finite_controls_rejected > before.non_finite_controls_rejected
+    });
+    let after = tci.client_snapshot();
+    assert!(
+        settled.is_some(),
+        "totals did not move: arm {}→{}, mic {}→{}, non-finite {}→{}",
+        before.command_arm_cancelled,
+        after.command_arm_cancelled,
+        before.command_mic_cancelled,
+        after.command_mic_cancelled,
+        before.non_finite_controls_rejected,
+        after.non_finite_controls_rejected
+    );
+    // This frontend's own queue is exact; the refusal total is process-wide, so
+    // other tests may add to it.
+    assert_eq!(after.command_arm_cancelled, before.command_arm_cancelled + 1);
+    assert_eq!(after.command_mic_cancelled, before.command_mic_cancelled + 1);
+    let _ = client.close(None);
+}
+
 fn opus_wb_runtime_available() -> bool {
     let mut decoder = TxCodecDecoder::new_with_flags(
         TxMicCodec::OpusWb,

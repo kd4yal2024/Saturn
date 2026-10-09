@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -170,13 +170,22 @@ pub(crate) fn tx_codec_decode_fault_message(count: u64, limit: u64) -> String {
     format!("tx_fault:0,codec_decode,count={count},limit={limit};")
 }
 
+/// Numeric controls refused as NaN or infinite since the Bridge started. It is
+/// process-lifetime, unlike the per-client count, which ends with the client.
+static NON_FINITE_CONTROLS_REJECTED: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn non_finite_controls_rejected_total() -> u64 {
+    NON_FINITE_CONTROLS_REJECTED.load(Ordering::Relaxed)
+}
+
 /// Parses a numeric control value. Returns `None` for text that is not a number
-/// and, counting it against the client, for NaN and infinities.
+/// and, counting it against the client and the process, for NaN and infinities.
 fn parse_finite_control(text: &str, clients: &ClientRegistry, client_id: u64) -> Option<f64> {
     let value = text.trim().parse::<f64>().ok()?;
     if value.is_finite() {
         return Some(value);
     }
+    NON_FINITE_CONTROLS_REJECTED.fetch_add(1, Ordering::Relaxed);
     if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
         client.state.non_finite_control_count =
             client.state.non_finite_control_count.saturating_add(1);

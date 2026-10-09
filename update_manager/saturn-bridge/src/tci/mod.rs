@@ -106,6 +106,12 @@ pub struct TciClientSnapshot {
     pub command_control_coalesced: u64,
     pub command_control_dropped: u64,
     pub command_mic_dropped: u64,
+    /// Queued arm requests and microphone frames removed because a release or
+    /// disconnect arrived after them, and numeric controls refused as NaN or
+    /// infinite. All three are totals since the Bridge started.
+    pub command_arm_cancelled: u64,
+    pub command_mic_cancelled: u64,
+    pub non_finite_controls_rejected: u64,
     pub split_control_clients: u64,
     pub split_media_clients: u64,
     pub split_paired_sessions: u64,
@@ -482,6 +488,9 @@ impl TciFrontend {
             command_control_coalesced: command_queue.control_coalesced,
             command_control_dropped: command_queue.control_dropped,
             command_mic_dropped: command_queue.mic_dropped,
+            command_arm_cancelled: command_queue.arm_cancelled,
+            command_mic_cancelled: command_queue.mic_cancelled,
+            non_finite_controls_rejected: non_finite_controls_rejected_total(),
             split_control_clients: split_lane_client_count(&clients, SplitSocketKind::Control),
             split_media_clients: split_lane_client_count(&clients, SplitSocketKind::Media),
             split_paired_sessions: split_paired_session_count(&clients),

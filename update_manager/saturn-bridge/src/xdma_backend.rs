@@ -1892,6 +1892,20 @@ fn write_performance(
                 "command_q_hwm",
                 TelemetryValue::number(client.command_queue_high_watermark),
             ),
+            // Totals since the Bridge started (they restart with it). An older
+            // Bridge omits them, which the Rust server reports as null.
+            (
+                "command_arm_cancelled",
+                TelemetryValue::number(client.command_arm_cancelled),
+            ),
+            (
+                "command_mic_cancelled",
+                TelemetryValue::number(client.command_mic_cancelled),
+            ),
+            (
+                "non_finite_controls_rejected",
+                TelemetryValue::number(client.non_finite_controls_rejected),
+            ),
             (
                 "audio_dropped_s",
                 TelemetryValue::number(client.audio_dropped_per_sec),
