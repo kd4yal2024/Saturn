@@ -187,8 +187,11 @@ changes RX Transport, the IQ rate or the audio profile; it still needs the
 diagnostics name it.
 
 With `?display_transport=spectrum`, RX Measure still gets raw IQ: starting a
-capture explicitly asks the bridge for `saturn_display:iq;`, waits for the echo
-and fresh IQ frames, and captures. When the capture finishes, is stopped, fails
+capture explicitly asks the bridge for `saturn_display:iq;` and begins only
+when the bridge has acknowledged it *and* a new raw RX IQ frame has been decoded
+after that acknowledgement, on the same connection. Spectrum rows, TX IQ, raw IQ
+received before the request or before the acknowledgement, and the page's
+display fallback do not count; IQ kept from before the lease is discarded. When the capture finishes, is stopped, fails
 to start, or the connection drops, the page asks for the rows again (a lease
 that cannot be confirmed within 3 s is released and nothing is captured). Without
 the override RX Measure behaves exactly as before.

@@ -9483,6 +9483,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     state.displayIqSource = "rx";
     state.txDisplaySettleFrames = 0;
     state.iqFrameVersion = 0;
+    // Valid RX IQ frames only (spectrum rows and TX IQ never count), for RX Measure.
+    state.rxIqFrameVersion = 0;
+    state.lastRxIqFrameAt = 0;
     state.lastRenderedIqFrameVersion = -1;
     state.lastRenderedServerRowVersion = -1;
     state.lastWaterfallLineAt = 0;
@@ -10750,21 +10753,30 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       // rows: borrow raw IQ for this capture and hand the display back after.
       // Without the override nothing changes: RX Measure still needs the raw
       // IQ path to be running already.
+      const session = state.displaySessionGeneration || 0;
       let leased = false;
       if (displayTransportOverride() === "spectrum" && state.mode !== "WFM" && !rxSpectrumSourceReady()) {
         $("rx-spectrum-start-btn").disabled = true;
         $("rx-spectrum-status").textContent = "Switching the display to raw RX IQ for the capture...";
-        leased = await acquireRawIqLease(
-          () => rxSpectrumSourceReady() && performance.now() - state.lastFrameAt <= 1500
-        );
+        leased = await acquireRawIqLease(() => rxSpectrumSourceReady());
         if (!leased) {
+          if ((state.displaySessionGeneration || 0) !== session) {
+            // The connection this start belonged to is gone. A capture on the new
+            // connection owns the controls now; only free them if nothing is running.
+            if (!rxSpectrumAccumulator) {
+              $("rx-spectrum-start-btn").disabled = false;
+              $("rx-spectrum-status").textContent =
+                "The connection changed before raw RX IQ was confirmed. Nothing was captured.";
+            }
+            return;
+          }
           $("rx-spectrum-start-btn").disabled = false;
           $("rx-spectrum-status").textContent =
             "The bridge did not deliver raw RX IQ in time; the display was put back. Nothing was captured.";
           return;
         }
       }
-      if (!rxSpectrumSourceReady() || performance.now() - state.lastFrameAt > 1500) {
+      if (!rxSpectrumSourceReady() || !rxIqFresh()) {
         $("rx-spectrum-status").textContent = "Start RX IQ on the raw IQ display path before capturing.";
         if (leased) {
           $("rx-spectrum-start-btn").disabled = false;
@@ -10782,7 +10794,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("rx-spectrum-status").textContent = "Reading the running FPGA identity...";
       try {
         const identity = await rxSpectrumLiveIdentity();
-        if (!rxSpectrumSourceReady() || performance.now() - state.lastFrameAt > 1500) {
+        if ((state.displaySessionGeneration || 0) !== session || (leased && !state.displayIqLease)) {
+          throw new Error("The connection changed while reading FPGA identity");
+        }
+        if (!rxSpectrumSourceReady() || !rxIqFresh()) {
           throw new Error("Raw RX IQ stream stopped while reading FPGA identity");
         }
         rxSpectrumAccumulator = new _next.RxSpectrumAccumulator(
@@ -10810,6 +10825,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           }
         }, 250);
       } catch (error) {
+        if ((state.displaySessionGeneration || 0) !== session) {
+          // A start from a connection that is gone must not touch what the new
+          // connection is doing: not its accumulator, not its lease.
+          if (!rxSpectrumAccumulator) {
+            $("rx-spectrum-start-btn").disabled = false;
+            $("rx-spectrum-status").textContent = `Cannot start capture: ${error.message || error}`;
+          }
+          return;
+        }
         rxSpectrumAccumulator = null;
         $("rx-spectrum-start-btn").disabled = false;
         $("rx-spectrum-status").textContent = `Cannot start capture: ${error.message || error}`;
@@ -16153,6 +16177,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.displayServerBins = null;
         state.displayServerFftSize = 0;
         state.displayServerCenterHz = 0;
+        if (state.displayIqLease && !state.displayIqLeaseEchoed) {
+          // The bridge's own acknowledgement of the raw IQ request. Only this
+          // sets the flag; a display fallback does not. Raw IQ received from
+          // here on counts, anything older does not, and IQ kept from before
+          // the lease is dropped so it cannot be mixed into a measurement.
+          state.displayIqLeaseEchoed = true;
+          state.displayIqLeaseEchoBaseline = state.rxIqFrameVersion || 0;
+          state.iqPackets = [];
+        }
       }
       flushDeferredIqStart();
       scheduleUiRefresh();
@@ -16177,6 +16210,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.displayServerLastReceivedSeq = 0;
       state.displayIqStartDeferred = false;
       state.displayIqLease = false;
+      state.displayIqLeaseEchoed = false;
+      state.displayIqLeaseGeneration = (state.displayIqLeaseGeneration || 0) + 1;
+      // Anything started before this point belongs to a connection that is gone.
+      state.displaySessionGeneration = (state.displaySessionGeneration || 0) + 1;
       updateWsDiagMarker(`Display transport reset (${reason})`, 1000);
     }
 
@@ -16301,26 +16338,52 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // RX Measure reads raw IQ, which the bridge does not send while the page is
     // on server rows. When the measurement override holds the page on rows, RX
     // Measure borrows raw IQ for one capture and the page then asks for the rows
-    // again. The lease only changes what is requested: `isReady` decides when
-    // raw IQ has really arrived (the echo and fresh frames), and a lease that
-    // cannot be confirmed is released and the prior mode requested again. A
-    // disconnect clears it (resetDisplayTransport). It never touches the RX
-    // transport mode, the IQ rate or the RX audio profile.
-    function acquireRawIqLease(isReady, timeoutMs = 3000, pollMs = 100) {
+    // again. The lease only changes what is requested; it is *confirmed* only
+    // when both of these have happened, in this connection, after the request:
+    //   1. the bridge acknowledged it (`saturn_display:0,iq;`), and
+    //   2. a new valid raw RX IQ frame was decoded after that acknowledgement.
+    // Spectrum rows, TX IQ, IQ received before the lease, and the display
+    // fallback (which gives up on negotiating and shows raw IQ) confirm nothing.
+    // A lease that cannot be confirmed is released and the rows are requested
+    // again. A disconnect clears it, and work that began before a disconnect
+    // cannot go on to start a capture (the session and lease generations).
+    // It never touches the RX transport mode, the IQ rate or the RX audio profile.
+    const RX_IQ_FRESH_MS = 1500;
+
+    function rxIqFresh(now = performance.now()) {
+      return (state.rxIqFrameVersion || 0) > 0 && now - (state.lastRxIqFrameAt || 0) <= RX_IQ_FRESH_MS;
+    }
+
+    function rawIqLeaseConfirmed() {
+      return Boolean(state.displayIqLease) &&
+        state.displayIqLeaseEchoed === true &&
+        (state.rxIqFrameVersion || 0) > (state.displayIqLeaseEchoBaseline || 0) &&
+        rxIqFresh();
+    }
+
+    function acquireRawIqLease(isReady = () => true, timeoutMs = 3000, pollMs = 100) {
       if (!state.connected || !state.bridgeReady || !state.displayCapsSpectrum) {
         return Promise.resolve(false);
       }
+      state.displayIqLeaseGeneration = (state.displayIqLeaseGeneration || 0) + 1;
+      const generation = state.displayIqLeaseGeneration;
+      const session = state.displaySessionGeneration || 0;
       state.displayIqLease = true;
+      state.displayIqLeaseEchoed = false;
+      state.displayIqLeaseEchoBaseline = 0;
       requestDisplayTransport("RX Measure raw IQ", true);
       const attempts = Math.max(1, Math.ceil(timeoutMs / pollMs));
       return new Promise((resolve) => {
         let tries = 0;
         const poll = () => {
-          if (!state.displayIqLease) {
+          if (!state.displayIqLease ||
+              state.displayIqLeaseGeneration !== generation ||
+              (state.displaySessionGeneration || 0) !== session) {
+            // Released, replaced, or the connection changed: not this caller's lease any more.
             resolve(false);
             return;
           }
-          if (isReady()) {
+          if (rawIqLeaseConfirmed() && isReady()) {
             resolve(true);
             return;
           }
@@ -16339,6 +16402,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function releaseRawIqLease(reason = "capture ended") {
       if (!state.displayIqLease) return false;
       state.displayIqLease = false;
+      state.displayIqLeaseEchoed = false;
+      state.displayIqLeaseGeneration = (state.displayIqLeaseGeneration || 0) + 1;
       requestDisplayTransport(`RX Measure ${reason}`, true);
       return true;
     }
@@ -21012,6 +21077,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.lastFrameAt = performance.now();
       if (displayFirstIqAt === null) displayFirstIqAt = state.lastFrameAt;
       state.iqFrameVersion = (state.iqFrameVersion || 0) + 1;
+      if (sourceKind === "rx") {
+        state.rxIqFrameVersion = (state.rxIqFrameVersion || 0) + 1;
+        state.lastRxIqFrameAt = state.lastFrameAt;
+      }
       state.frameCounter += 1;
       state.displayCaption = sourceKind === "tx"
         ? `Live TX IQ: ${samplePairs} samples at ${Math.round(sampleRate / 1000)} kHz, display ±${Math.round(TX_DISPLAY_SPAN_HZ / 2000)} kHz`

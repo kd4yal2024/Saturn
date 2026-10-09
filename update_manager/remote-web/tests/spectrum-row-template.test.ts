@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as spectrumRow from '../src/transport/spectrum-row';
 import { displaySpanHz, shiftBinsHorizontally, visibleBinsForDisplay } from '../src/dsp/display';
 
@@ -15,6 +15,8 @@ const BINARY_START = '    function handleBinaryFrame(buffer) {';
 const BINARY_END = '    function adoptWsDiagSocket(socket) {';
 const MEASURE_START = '    let rxSpectrumAccumulator = null;';
 const MEASURE_END = '    function sampleRxSpectrum(bins, now) {';
+const IQ_HANDLER_START = '    let lastIqUiRefreshAt = -Infinity;';
+const IQ_HANDLER_END = '    function renderIdleFrame(now) {';
 const DRAW_START = '    function drawDisplayBins(bins, now, waterfallEnabled, phoneWanLite, centerShiftHz = 0) {';
 const DRAW_END = '    function animationLoop(now) {';
 
@@ -49,6 +51,16 @@ function buildRow(options: RowOptions = {}): ArrayBuffer {
   view.setUint32(36, centerHz >>> 0, true);
   view.setFloat32(44, -160, true);
   view.setFloat32(48, 0.625, true);
+  return buffer;
+}
+
+/** A decoded-looking IQ frame: stream type 0 is RX IQ, 3 is TX IQ. */
+function iqFrame(streamType = 0, floats = 128): ArrayBuffer {
+  const buffer = new ArrayBuffer(64 + floats * 4);
+  const view = new DataView(buffer);
+  view.setUint32(4, 384_000, true);
+  view.setUint32(20, floats, true);
+  view.setUint32(24, streamType, true);
   return buffer;
 }
 
@@ -87,7 +99,13 @@ function makeHarness(options: {
   dds?: number;
   search?: string;
   /** Also load the RX Measure functions, with fast timers and a fake accumulator. */
-  measure?: { identityFails?: boolean; mode?: string };
+  measure?: {
+    identityFails?: boolean;
+    mode?: string;
+    identityGate?: Promise<void>;
+    /** Per call of the identity request (0, 1, ...): a promise to wait for, or none. */
+    identityGateFor?: (call: number) => Promise<void> | undefined;
+  };
 } = {}) {
   const sent: string[] = [];
   const logs: string[] = [];
@@ -133,6 +151,14 @@ function makeHarness(options: {
       displayIqStartDeferred: false,
       displayIqSource: 'rx',
       displayIqLease: false,
+      displayIqLeaseEchoed: false,
+      displayIqLeaseEchoBaseline: 0,
+      displayIqLeaseGeneration: 0,
+      displaySessionGeneration: 0,
+      iqFrameVersion: 0,
+      rxIqFrameVersion: 0,
+      lastRxIqFrameAt: 0,
+      iqPackets: [],
       iqStreaming: true,
       displayPaused: false,
       mode: options.measure?.mode ?? 'USB',
@@ -206,7 +232,13 @@ function makeHarness(options: {
       (elements[id] ??= { textContent: '', disabled: false, hidden: false, value: '30' });
     sandbox.fftProcessor = { size: 2048 };
     sandbox.currentRxPassbandHz = () => ({ lowHz: 0, highHz: 0 });
+    let identityCalls = 0;
     sandbox.fetch = async () => {
+      const call = identityCalls;
+      identityCalls += 1;
+      const gate = options.measure?.identityGateFor?.(call);
+      if (gate) await gate;
+      if (options.measure?.identityGate) await options.measure.identityGate;
       if (options.measure?.identityFails) throw new Error('identity unavailable');
       return {
         ok: true,
@@ -241,6 +273,20 @@ function makeHarness(options: {
       ' })',
     sandbox,
   ) as unknown as HarnessApi & MeasureApi;
+  if (options.measure) {
+    // The page's own IQ-frame handler, not a stub: RX Measure's freshness rests on
+    // what it records. Only drawing and history collaborators are replaced.
+    const s = sandbox.state as Record<string, unknown> & { iqPackets: Float32Array[] };
+    Object.assign(sandbox, {
+      displaySampleRateHz: () => s.sampleRate,
+      resetDisplayHistory: () => { s.iqPackets = []; s.displayIqSource = 'rx'; },
+      appendIqPacket: (iq: Float32Array) => { s.iqPackets.push(iq); },
+      displayIqForSource: (iq: Float32Array) => iq,
+      TX_DISPLAY_SETTLE_SKIP_FRAMES: 0,
+      TX_DISPLAY_SPAN_HZ: 96_000,
+    });
+    runInNewContext(slice(IQ_HANDLER_START, IQ_HANDLER_END), sandbox);
+  }
   return {
     api, sandbox, sent, logs, audioFrames, opusFrames, iqFrames, elements,
     state: sandbox.state as Record<string, unknown>,
@@ -671,15 +717,16 @@ describe('RX Measure raw-IQ lease under the display override', () => {
     });
     h.api.requestDisplayTransport('test', true);
     h.api.applyDisplayEcho(['0', 'spectrum', '2048', '50']);
-    h.state.lastFrameAt = 1000;
+    // Rows are flowing: a genuine row, which refreshes the shared frame timestamp.
+    h.api.handleSpectrumRow(buildRow());
     h.sent.length = 0;
     return h;
   }
   const status = (h: ReturnType<typeof onRows>) => h.elements['rx-spectrum-status']?.textContent ?? '';
-  /** What the bridge does after `saturn_display:iq;`: echo it, then raw IQ frames flow. */
+  /** What the bridge does after `saturn_display:iq;`: echo it, then raw RX IQ frames flow. */
   const bridgeSwitchesToIq = (h: ReturnType<typeof onRows>) => {
     h.api.applyDisplayEcho(['0', 'iq']);
-    h.state.lastFrameAt = 1000;
+    h.api.handleBinaryFrame(iqFrame(0));
   };
 
   it('takes raw IQ for the capture, holds it throughout, and puts the rows back at the end', async () => {
@@ -760,7 +807,7 @@ describe('RX Measure raw-IQ lease under the display override', () => {
     const h = makeHarness({ search: '?display_transport=iq', streamMode: 'wan', measure: {} });
     h.api.requestDisplayTransport('test', true);
     h.api.applyDisplayEcho(['0', 'iq']);
-    h.state.lastFrameAt = 1000;
+    h.api.handleBinaryFrame(iqFrame(0));
     h.sent.length = 0;
     await h.api.startRxSpectrumCapture();
     expect(status(h)).toContain('Capturing');
@@ -779,7 +826,7 @@ describe('RX Measure raw-IQ lease under the display override', () => {
     await started;
     expect(h.state.displayIqLease).toBe(false);
     expect(h.sent).toEqual([IQ]);
-    expect(status(h)).toContain('display was put back');
+    expect(status(h)).toContain('connection changed');
   });
 
   it('a disconnect during the capture ends it without a stale request', async () => {
@@ -845,5 +892,276 @@ describe('display override across reconnect and fallback', () => {
     expect(h.state.displayRenderSource).toBe('iq');
     expect(h.sent).toContain('iq_start:0;');
     expect(h.state.streamMode).toBe('lan');
+  });
+});
+
+// The three probes marked "review probe" come from DarkOverLord's review of
+// dea989e (R1), ported onto this file's shared harness with the same behavioral
+// contract. Original file: review-raw-iq-freshness.test.ts in that review package.
+describe('RX Measure readiness needs fresh raw RX IQ from this connection', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const ROWS = 'saturn_display:spectrum,2048,50;';
+  const IQ = 'saturn_display:iq;';
+
+  /** A fake clock, so the page's own 1 s display fallback and the 3 s lease timeout both play out. */
+  function timed(measure: { identityGate?: Promise<void>; identityGateFor?: (call: number) => Promise<void> | undefined; identityFails?: boolean; mode?: string } = {}, search = '?display_transport=spectrum') {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const h = makeHarness({ streamMode: 'lan', search, measure });
+    Object.assign(h.sandbox.window as object, { setTimeout, clearTimeout, setInterval, clearInterval });
+    h.sandbox.performance = { now: () => Date.now() };
+    h.api.requestDisplayTransport('setup', true);
+    h.api.applyDisplayEcho(['0', 'spectrum', '2048', '50']);
+    h.api.handleSpectrumRow(buildRow()); // a genuine row: it refreshes the shared lastFrameAt
+    h.sent.length = 0;
+    return h;
+  }
+  type Timed = ReturnType<typeof timed>;
+  const status = (h: Timed) => h.elements['rx-spectrum-status']?.textContent ?? '';
+  const settle = (ms: number) => vi.advanceTimersByTimeAsync(ms);
+  const cleanup = async (h: Timed, pending: Promise<void>) => {
+    h.api.finishRxSpectrumCapture();
+    h.api.resetDisplayTransport();
+    await settle(3500);
+    await pending;
+  };
+
+  it('review probe, positive control: the IQ echo plus a newly decoded RX IQ frame starts a capture', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(100);
+    await pending;
+    try {
+      expect(h.state.rxIqFrameVersion).toBe(1);
+      expect(status(h)).toContain('Capturing');
+    } finally {
+      h.api.finishRxSpectrumCapture();
+      h.api.resetDisplayTransport();
+    }
+  });
+
+  it('review probe: the echo alone does not start a capture, and the lease times out and gives the rows back', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    await settle(100);
+    expect(h.state.rxIqFrameVersion).toBe(0);
+    expect(status(h)).not.toContain('Capturing');
+    await settle(3500);
+    await pending;
+    expect(status(h)).not.toContain('Capturing');
+    expect(status(h)).toContain('display was put back');
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent).toEqual([IQ, ROWS]);
+  });
+
+  it('review probe: the display fallback with no echo and no raw IQ does not start a capture', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    // The page gives up negotiating at 1000 ms, before the lease's 3000 ms timeout.
+    await settle(1100);
+    expect(h.state.displayRenderSource).toBe('iq');
+    expect(h.state.rxIqFrameVersion).toBe(0);
+    expect(status(h)).not.toContain('Capturing');
+    await settle(3000);
+    await pending;
+    expect(status(h)).not.toContain('Capturing');
+    expect(status(h)).toContain('display was put back');
+    expect(h.sent.at(-1)).toBe(ROWS);
+  });
+
+  it('spectrum rows arriving all the while confirm nothing', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    for (let i = 0; i < 25; i += 1) {
+      h.api.handleSpectrumRow(buildRow({ sequence: 2 + i }));
+      await settle(100);
+    }
+    await settle(1000);
+    await pending;
+    expect(status(h)).not.toContain('Capturing');
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent.at(-1)).toBe(ROWS);
+  });
+
+  it('raw IQ that arrived before the request does not count, and neither does IQ before the echo', async () => {
+    const h = timed();
+    h.api.handleBinaryFrame(iqFrame(0)); // old: before the lease
+    h.state.iqPackets = [new Float32Array(8)]; // IQ kept from before the lease
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.handleBinaryFrame(iqFrame(0)); // in flight, after the request but before the echo
+    h.api.applyDisplayEcho(['0', 'iq']);
+    await settle(300);
+    expect(h.state.rxIqFrameVersion).toBe(2);
+    expect(status(h)).not.toContain('Capturing');
+    // Whatever was kept from before is gone: the window starts at the acknowledgement.
+    expect(h.state.iqPackets).toEqual([]);
+    h.api.handleBinaryFrame(iqFrame(0)); // the first frame after the acknowledgement
+    await settle(100);
+    await pending;
+    expect(status(h)).toContain('Capturing');
+    expect((h.state.iqPackets as unknown[]).length).toBe(1);
+    await cleanup(h, Promise.resolve());
+  });
+
+  it('TX IQ does not confirm a raw RX IQ lease', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(3));
+    h.api.handleBinaryFrame(iqFrame(3));
+    await settle(300);
+    expect(h.state.iqFrameVersion).toBe(2);
+    expect(h.state.rxIqFrameVersion).toBe(0);
+    expect(status(h)).not.toContain('Capturing');
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(100);
+    await pending;
+    expect(status(h)).toContain('Capturing');
+    await cleanup(h, Promise.resolve());
+  });
+
+  it('a reconnect while waiting cannot start a capture on the new connection', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.resetDisplayTransport('disconnect');
+    h.state.connected = false;
+    await settle(200);
+    // The connection comes back, negotiates rows again, and raw IQ then flows.
+    h.state.connected = true;
+    h.api.scanDisplayTransportText('saturn_display_caps:spectrum_u8;');
+    h.api.requestDisplayTransport('bridge ready', true);
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(3500);
+    await pending;
+    expect(status(h)).not.toContain('Capturing');
+    expect(h.state.displayIqLease).toBe(false);
+  });
+
+  it('a disconnect while the FPGA identity is being read cannot start a later capture', async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    const h = timed({ identityGate: gate });
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(100); // confirmed; the start now waits on the identity request
+    expect(status(h)).not.toContain('Capturing');
+    h.api.resetDisplayTransport('disconnect');
+    h.state.connected = true; // reconnected before the old request answers
+    h.api.handleBinaryFrame(iqFrame(0)); // and raw IQ is flowing again
+    open();
+    await settle(100);
+    await pending;
+    expect(status(h)).toContain('connection changed');
+    expect(status(h)).not.toContain('Capturing');
+    expect(h.elements['rx-spectrum-start-btn']?.disabled).toBe(false);
+  });
+
+  it('the display fallback followed by raw IQ is still not an acknowledgement', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    await settle(1100); // the page gave up waiting for the echo and fell back to raw IQ
+    expect(h.state.displayRenderSource).toBe('iq');
+    for (let i = 0; i < 10; i += 1) {
+      h.api.handleBinaryFrame(iqFrame(0)); // raw IQ is flowing, but the bridge never echoed
+      await settle(100);
+    }
+    expect(status(h)).not.toContain('Capturing');
+    await settle(3000);
+    await pending;
+    expect(status(h)).not.toContain('Capturing');
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent.at(-1)).toBe(ROWS);
+  });
+
+  it('a stale raw RX IQ frame is not fresh', async () => {
+    const h = timed({}, '?display_transport=iq');
+    h.api.requestDisplayTransport('setup', true);
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(2000); // the raw IQ stream then goes quiet
+    await h.api.startRxSpectrumCapture();
+    expect(status(h)).toContain('Start RX IQ on the raw IQ display path');
+    h.api.handleBinaryFrame(iqFrame(0));
+    await h.api.startRxSpectrumCapture();
+    expect(status(h)).toContain('Capturing');
+    await cleanup(h, Promise.resolve());
+  });
+
+  it('a start from a dead connection cannot disturb the capture running on the new one', async () => {
+    let open!: () => void;
+    const firstGate = new Promise<void>((resolve) => { open = resolve; });
+    const h = timed({ identityGateFor: (call) => (call === 0 ? firstGate : undefined) });
+    const first = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(100); // start #1 is confirmed and now waits on its identity request
+    // The connection drops and comes back; rows are negotiated again.
+    h.api.resetDisplayTransport('disconnect');
+    h.state.connected = true;
+    h.api.scanDisplayTransportText('saturn_display_caps:spectrum_u8;');
+    h.api.requestDisplayTransport('bridge ready', true);
+    h.api.applyDisplayEcho(['0', 'spectrum', '2048', '50']);
+    h.api.handleSpectrumRow(buildRow({ sequence: 9 }));
+    h.sent.length = 0;
+    // A new capture on the new connection gets raw IQ and starts.
+    const second = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(100);
+    await second;
+    expect(status(h)).toContain('Capturing');
+    expect(h.state.displayIqLease).toBe(true);
+    const sentBefore = h.sent.slice();
+    // Now the old start's identity request answers.
+    open();
+    await settle(100);
+    await first;
+    expect(status(h)).toContain('Capturing'); // not overwritten
+    expect(h.state.displayIqLease).toBe(true); // not released by the old start
+    expect(h.sent).toEqual(sentBefore); // and it asked the bridge for nothing
+    h.api.finishRxSpectrumCapture(); // the new capture is still there to finish
+    expect(status(h)).toContain('raw IQ spectra captured');
+    expect(h.state.displayIqLease).toBe(false);
+    h.api.resetDisplayTransport();
+  });
+
+  it('without a lease, old or TX IQ does not make the raw IQ path look ready either', async () => {
+    const h = timed({}, '?display_transport=iq');
+    h.api.requestDisplayTransport('setup', true);
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.sent.length = 0;
+    // Only the shared timestamp is fresh (a row would do that): no RX IQ frame was ever decoded.
+    h.state.lastFrameAt = Date.now();
+    await h.api.startRxSpectrumCapture();
+    expect(status(h)).toContain('Start RX IQ on the raw IQ display path');
+    h.api.handleBinaryFrame(iqFrame(3));
+    await h.api.startRxSpectrumCapture();
+    expect(status(h)).toContain('Start RX IQ on the raw IQ display path');
+    h.api.handleBinaryFrame(iqFrame(0));
+    await h.api.startRxSpectrumCapture();
+    expect(status(h)).toContain('Capturing');
+    expect(h.sent).toEqual([]);
+    await cleanup(h, Promise.resolve());
+  });
+
+  it('puts the rows back after a successful capture that began on confirmed raw IQ', async () => {
+    const h = timed();
+    const pending = h.api.startRxSpectrumCapture();
+    h.api.applyDisplayEcho(['0', 'iq']);
+    h.api.handleBinaryFrame(iqFrame(0));
+    await settle(100);
+    await pending;
+    expect(status(h)).toContain('Capturing');
+    h.api.finishRxSpectrumCapture();
+    expect(h.state.displayIqLease).toBe(false);
+    expect(h.sent).toEqual([IQ, ROWS]);
+    h.api.resetDisplayTransport();
   });
 });
