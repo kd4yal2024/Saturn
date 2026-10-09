@@ -146,3 +146,24 @@ feedback attenuation, zero gaps across more than 10,000 synchronized feedback
 packets, and `maxTx` near the configured 0.6121 hardware peak. The ADC overflow
 status remained clear. This validates the tested hardware path but does not
 replace per-radio dummy-load validation after installation.
+
+## Pin manifest
+
+`scripts/wdsp-pin-manifest.py` records exactly which WDSP a build contains, so
+two builds (a developer PC, a cross build, the G2's staged build) can be
+compared without trusting a version string. It reads the commits the installer
+pins, the commits actually checked out, a SHA-256 for every upstream source file
+and every patched file the archive was compiled from, the compile options,
+compiler and FFTW version, and `libwdsp.a` with each object's hash, its machine
+type, and whether every symbol the installer requires is defined. It exits 1 on
+a pin mismatch or a missing symbol.
+
+```sh
+python3 scripts/wdsp-pin-manifest.py \
+  --native-src target/native-src --build-dir target/wdsp2-linux-arm \
+  --bridge target/release/saturn-bridge --output wdsp-pin-manifest.json
+```
+
+Source hashes are comparable between any two builds. The archive and object
+hashes only match between builds made with the same compiler and flags, so a G2
+build is compared with another G2 build, not with a cross build.
