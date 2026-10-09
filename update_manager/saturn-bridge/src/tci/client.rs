@@ -7,9 +7,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tungstenite::error::Error as WsError;
-use tungstenite::handshake::server::{Request, Response};
+use tungstenite::handshake::server::{Callback, Request, Response};
 use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{accept_hdr_with_config, Message};
+use tungstenite::{accept_hdr_with_config, HandshakeError, Message, WebSocket};
 
 use crate::radio_model::{NoiseReductionMode, RadioModel};
 use crate::sync_ext::MutexExt;
@@ -197,6 +197,56 @@ pub(crate) const TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT: u64 = 10;
 
 pub(crate) const TX_CODEC_DECODE_ERROR_WINDOW: Duration = Duration::from_secs(1);
 
+/// How long a connection may take to deliver a complete upgrade request. A
+/// connection holds one of the `MAX_TCI_CONNECTIONS` slots from accept until
+/// `handle_client` returns, so this also bounds how long an idle or partial
+/// connection can occupy a slot. Browsers and the local proxy send the whole
+/// request in one write; this only has to cover TCP splitting it.
+pub(crate) const TCI_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(2);
+const TCI_HANDSHAKE_POLL: Duration = Duration::from_millis(2);
+
+#[derive(Debug)]
+pub(crate) enum AcceptError {
+    Failed(WsError),
+    TimedOut,
+}
+
+impl std::fmt::Display for AcceptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Failed(error) => write!(f, "{error}"),
+            Self::TimedOut => write!(f, "upgrade request incomplete at the handshake deadline"),
+        }
+    }
+}
+
+/// Performs the server side of the WebSocket upgrade on a nonblocking socket.
+/// A request that arrives in several pieces interrupts the handshake with
+/// `WouldBlock`; the retained handshake state is resumed until the request is
+/// complete, the peer fails it, or `timeout` has passed.
+pub(crate) fn accept_with_deadline<C: Callback>(
+    stream: TcpStream,
+    callback: C,
+    config: WebSocketConfig,
+    timeout: Duration,
+) -> Result<WebSocket<TcpStream>, AcceptError> {
+    let deadline = Instant::now() + timeout;
+    let mut attempt = accept_hdr_with_config(stream, callback, Some(config));
+    loop {
+        match attempt {
+            Ok(websocket) => return Ok(websocket),
+            Err(HandshakeError::Failure(error)) => return Err(AcceptError::Failed(error)),
+            Err(HandshakeError::Interrupted(pending)) => {
+                if Instant::now() >= deadline {
+                    return Err(AcceptError::TimedOut);
+                }
+                thread::sleep(TCI_HANDSHAKE_POLL);
+                attempt = pending.handshake();
+            }
+        }
+    }
+}
+
 pub(crate) fn handle_client(
     stream: TcpStream,
     addr: SocketAddr,
@@ -213,15 +263,21 @@ pub(crate) fn handle_client(
     satp_advertisement: (bool, u16),
     display: &DisplayTransport,
 ) {
-    let _ = stream.set_nonblocking(true);
+    // Without nonblocking mode the handshake could block with no deadline, so
+    // a socket that cannot be switched is dropped rather than served.
+    if let Err(error) = stream.set_nonblocking(true) {
+        eprintln!("saturn-bridge: TCI websocket from {addr} dropped: cannot set nonblocking: {error}");
+        return;
+    }
     let mut connect_lane_hint = None;
-    let accept_result = accept_hdr_with_config(
+    let accept_result = accept_with_deadline(
         stream,
         |request: &Request, response: Response| {
             connect_lane_hint = lane_hint_for_request_path(request.uri().path());
             Ok(response)
         },
-        Some(tci_websocket_config()),
+        tci_websocket_config(),
+        TCI_HANDSHAKE_TIMEOUT,
     );
     match accept_result {
         Ok(mut websocket) => {

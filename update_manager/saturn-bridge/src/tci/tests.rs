@@ -88,6 +88,183 @@ fn client_disconnect_cancels_a_queued_arm() {
     assert!(rx.try_recv().is_err(), "a stale arm survived the disconnect");
 }
 
+const HANDSHAKE_REQUEST: &[u8] = b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+
+struct HandshakeProbe {
+    upgraded: bool,
+    handler_ran_for: Duration,
+}
+
+/// Connects a loopback peer to the production `handle_client`, writes
+/// `pieces` (bytes, milliseconds to wait before writing them), optionally
+/// closes the peer, and reports whether the server upgraded the connection
+/// and how long the handler ran.
+fn handshake_probe(pieces: &[(&[u8], u64)], close_after_writing: bool) -> HandshakeProbe {
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpStream};
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (socket, addr) = listener.accept().unwrap();
+    let worker = thread::spawn(move || {
+        let started = Instant::now();
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        let (commands, _rx) = mpsc::channel();
+        handle_client(
+            socket,
+            addr,
+            1,
+            &commands,
+            &clients,
+            &Arc::new(AtomicU64::new(0)),
+            &Arc::new(Mutex::new(None)),
+            &Arc::new(Mutex::new(RadioModel::new(
+                6, 7_215_000, 0, 384, 24, 2048, true, 4096, true,
+            ))),
+            &Arc::new(AtomicU64::new(0)),
+            &Arc::new(FullRateIqTransportStats::default()),
+            false,
+            TxCodecRuntimeFlags::default(),
+            (false, 50100),
+            &DisplayTransport::default(),
+        );
+        started.elapsed()
+    });
+    for (bytes, delay_ms) in pieces {
+        thread::sleep(Duration::from_millis(*delay_ms));
+        // A server that has already given up may reset the connection.
+        let _ = peer.write_all(bytes);
+    }
+    if close_after_writing {
+        let _ = peer.shutdown(Shutdown::Write);
+    }
+    peer.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    let mut response = Vec::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        match peer.read(&mut buffer) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                response.extend_from_slice(&buffer[..n]);
+                if response.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+        }
+    }
+    let upgraded = response.starts_with(b"HTTP/1.1 101");
+    let _ = peer.shutdown(Shutdown::Both);
+    drop(peer);
+    HandshakeProbe {
+        upgraded,
+        handler_ran_for: worker.join().unwrap(),
+    }
+}
+
+#[test]
+fn complete_upgrade_request_is_accepted() {
+    assert!(handshake_probe(&[(HANDSHAKE_REQUEST, 0)], false).upgraded);
+}
+
+#[test]
+fn upgrade_request_split_at_any_position_is_accepted() {
+    let len = HANDSHAKE_REQUEST.len();
+    for split in [1, 32, len / 2, len - 4, len - 2, len - 1] {
+        let (first, rest) = HANDSHAKE_REQUEST.split_at(split);
+        let probe = handshake_probe(&[(first, 0), (rest, 40)], false);
+        assert!(probe.upgraded, "request split after {split} of {len} bytes was dropped");
+    }
+}
+
+#[test]
+fn upgrade_request_in_several_slow_pieces_is_accepted() {
+    let len = HANDSHAKE_REQUEST.len();
+    let probe = handshake_probe(
+        &[
+            (&HANDSHAKE_REQUEST[..10], 0),
+            (&HANDSHAKE_REQUEST[10..len / 2], 60),
+            (&HANDSHAKE_REQUEST[len / 2..], 60),
+        ],
+        false,
+    );
+    assert!(probe.upgraded);
+}
+
+#[test]
+fn upgrade_request_that_starts_late_is_accepted() {
+    // The connection is accepted before the first byte is on the socket.
+    let probe = handshake_probe(&[(HANDSHAKE_REQUEST, 80)], false);
+    assert!(probe.upgraded);
+}
+
+#[test]
+fn incomplete_upgrade_requests_release_their_slot_at_the_deadline() {
+    let deadline = super::client::TCI_HANDSHAKE_TIMEOUT;
+    let partial = thread::spawn(|| handshake_probe(&[(&HANDSHAKE_REQUEST[..32], 0)], false));
+    let silent = thread::spawn(|| handshake_probe(&[], false));
+    for probe in [partial.join().unwrap(), silent.join().unwrap()] {
+        assert!(!probe.upgraded);
+        assert!(
+            probe.handler_ran_for >= deadline - Duration::from_millis(100),
+            "gave up after {:?}, before the {:?} deadline",
+            probe.handler_ran_for,
+            deadline
+        );
+        assert!(
+            probe.handler_ran_for < deadline + Duration::from_millis(1500),
+            "still held the connection after {:?}",
+            probe.handler_ran_for
+        );
+    }
+}
+
+#[test]
+fn peer_that_closes_mid_handshake_releases_its_slot_promptly() {
+    let probe = handshake_probe(&[(&HANDSHAKE_REQUEST[..32], 0)], true);
+    assert!(!probe.upgraded);
+    assert!(
+        probe.handler_ran_for < Duration::from_millis(1000),
+        "waited {:?} for a peer that had already closed",
+        probe.handler_ran_for
+    );
+}
+
+#[test]
+fn malformed_upgrade_request_is_rejected_without_waiting_for_the_deadline() {
+    let probe = handshake_probe(&[(b"NOT HTTP AT ALL\r\n\r\n", 0)], false);
+    assert!(!probe.upgraded);
+    assert!(
+        probe.handler_ran_for < Duration::from_millis(1000),
+        "took {:?} to reject malformed input",
+        probe.handler_ran_for
+    );
+}
+
+#[test]
+fn handshake_resumption_stops_at_the_timeout_it_is_given() {
+    use std::io::Write;
+    use std::net::TcpStream;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (socket, _) = listener.accept().unwrap();
+    socket.set_nonblocking(true).unwrap();
+    peer.write_all(&HANDSHAKE_REQUEST[..32]).unwrap();
+
+    let started = Instant::now();
+    let result = super::client::accept_with_deadline(
+        socket,
+        |_: &tungstenite::handshake::server::Request,
+         response: tungstenite::handshake::server::Response| Ok(response),
+        tci_websocket_config(),
+        Duration::from_millis(150),
+    );
+    let elapsed = started.elapsed();
+    assert!(matches!(result, Err(super::client::AcceptError::TimedOut)));
+    assert!(elapsed >= Duration::from_millis(150), "returned after {elapsed:?}");
+    assert!(elapsed < Duration::from_millis(1000), "returned after {elapsed:?}");
+}
+
 fn opus_wb_runtime_available() -> bool {
     let mut decoder = TxCodecDecoder::new_with_flags(
         TxMicCodec::OpusWb,
