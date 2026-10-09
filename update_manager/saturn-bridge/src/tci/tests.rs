@@ -622,6 +622,213 @@ fn a_bad_float_mic_frame_does_not_poison_the_next_good_one() {
     assert_eq!(parse_tci_mic_frame(&good).unwrap().samples, vec![0.25, -0.5]);
 }
 
+fn free_loopback_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn connect_when_listening(port: u16) -> std::net::TcpStream {
+    for _ in 0..100 {
+        if let Ok(stream) = std::net::TcpStream::connect(("127.0.0.1", port)) {
+            return stream;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    panic!("TCI frontend never listened on {port}");
+}
+
+fn wait_until(limit: Duration, mut condition: impl FnMut() -> bool) -> Option<Duration> {
+    let started = Instant::now();
+    while started.elapsed() < limit {
+        if condition() {
+            return Some(started.elapsed());
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    None
+}
+
+#[test]
+fn incomplete_handshakes_release_their_connection_slots_in_the_real_accept_loop() {
+    use std::io::Write;
+
+    let port = free_loopback_port();
+    let mut config = crate::config::BridgeConfig::default();
+    config.tci_bind_addr = SocketAddr::new(std::net::Ipv4Addr::LOCALHOST.into(), port);
+    let model = Arc::new(Mutex::new(RadioModel::new(
+        6, 7_215_000, 0, 384, 24, 2048, true, 4096, true,
+    )));
+    let (tci, _commands) = TciFrontend::bind(&config, model).unwrap();
+    let active = || tci.client_snapshot().active_connections;
+    let rejected = || tci.client_snapshot().rejected_connections;
+
+    // A peer that sends part of a request and disconnects frees its slot at once.
+    let mut partial = connect_when_listening(port);
+    partial.write_all(&HANDSHAKE_REQUEST[..32]).unwrap();
+    assert!(wait_until(Duration::from_secs(1), || active() == 1).is_some());
+    drop(partial);
+    let freed = wait_until(Duration::from_secs(1), || active() == 0);
+    assert!(freed.is_some(), "a closed partial handshake kept its slot");
+
+    // Silent peers fill every slot, and the next connection is refused.
+    let silent: Vec<_> = (0..MAX_TCI_CONNECTIONS)
+        .map(|_| connect_when_listening(port))
+        .collect();
+    assert!(wait_until(Duration::from_secs(1), || active() == MAX_TCI_CONNECTIONS).is_some());
+    let _refused = connect_when_listening(port);
+    assert!(wait_until(Duration::from_secs(1), || rejected() == 1).is_some());
+
+    // The deadline, not a disconnect, frees them: the peers are still open.
+    let deadline = super::client::TCI_HANDSHAKE_TIMEOUT;
+    let waited = wait_until(deadline + Duration::from_secs(2), || active() == 0)
+        .expect("silent connections never released their slots");
+    assert!(
+        waited + Duration::from_millis(200) >= deadline,
+        "slots freed after {waited:?}, before the {deadline:?} deadline"
+    );
+    drop(silent);
+
+    // And a real client can connect afterwards.
+    let stream = connect_when_listening(port);
+    let (mut client, _) = tungstenite::client(format!("ws://127.0.0.1:{port}/"), stream)
+        .expect("a valid client connects once the slots are free");
+    assert!(wait_until(Duration::from_secs(1), || active() == 1).is_some());
+    let _ = client.close(None);
+}
+
+#[test]
+fn outbound_byte_total_stays_exact_through_every_queue_operation() {
+    let outbound = ClientOutbound::new();
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut random = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let mut in_hand: Option<QueuedOutbound> = None;
+    for step in 0..30_000u32 {
+        match random() % 9 {
+            0 => {
+                outbound.enqueue(OutboundMessage::Text(format!("vfo:0,0,{};", random() % 50_000_000)));
+            }
+            1 => {
+                let size = 1 + (random() % 140_000) as usize;
+                outbound.enqueue(OutboundMessage::Text("x".repeat(size)));
+            }
+            2 => {
+                outbound.enqueue(OutboundMessage::SafetyText(format!("trx:0,{};", random() % 2 == 0)));
+            }
+            3 => {
+                outbound.enqueue(OutboundMessage::OpusAudioFrame {
+                    receiver: 0,
+                    sample_rate: 48_000,
+                    channels: 1,
+                    packet: vec![0; 20 + (random() % 200) as usize],
+                    sequence: 0,
+                });
+            }
+            4 => {
+                outbound.enqueue(raw_iq_frame());
+            }
+            5 => {
+                outbound.enqueue(OutboundMessage::IqFrame {
+                    receiver: 0,
+                    sample_rate: 384_000,
+                    iq_samples: vec![0.0; 1 + (random() % 60_000) as usize],
+                });
+            }
+            6 => {
+                if let Some(item) = outbound.next_message(random() % 3 != 0) {
+                    in_hand = Some(item);
+                }
+            }
+            7 => {
+                if let Some(item) = in_hand.take() {
+                    outbound.requeue_front(item);
+                }
+            }
+            _ => outbound.clear_audio(),
+        }
+        let queues = outbound.queues.lock_unpoisoned();
+        assert_eq!(
+            queues.queued_bytes,
+            outbound_byte_total(&queues),
+            "byte total drifted at step {step}"
+        );
+        let control: usize = queues.control.iter().map(|item| item.estimated_bytes).sum();
+        assert!(control <= MAX_CONTROL_QUEUE_BYTES, "control holds {control} at step {step}");
+        assert!(queues.control.len() <= MAX_CONTROL_QUEUE_MESSAGES);
+        assert!(queues.full_rate_iq.len() <= MAX_FULL_RATE_IQ_QUEUE_MESSAGES);
+    }
+
+    // Draining everything returns the total to exactly zero.
+    drop(in_hand);
+    while outbound.next_message(true).is_some() {
+        let queues = outbound.queues.lock_unpoisoned();
+        assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
+    }
+    let queues = outbound.queues.lock_unpoisoned();
+    assert_eq!(queues.queued_bytes, 0);
+    assert_eq!(outbound_byte_total(&queues), 0);
+}
+
+#[test]
+fn bad_float_mic_frames_through_the_message_handler_are_counted_and_recovered_from() {
+    let (tx, rx) = mpsc::channel();
+    let clients = test_client_registry(71);
+    let operator_client_id = Arc::new(AtomicU64::new(71));
+    let operator_control_at = Arc::new(Mutex::new(None));
+    let decode_errors = |clients: &ClientRegistry| {
+        clients
+            .lock_unpoisoned()
+            .get(&71)
+            .unwrap()
+            .state
+            .tx_codec_decode_error_count
+    };
+    let send = |samples: &[f32], sequence: u32| {
+        let frame = build_tci_float_frame(0, 48_000, samples, 2, 1, sequence);
+        assert!(handle_incoming_message(
+            Message::Binary(frame.into()),
+            &tx,
+            &clients,
+            &operator_client_id,
+            &operator_control_at,
+            71,
+        ));
+    };
+
+    // A frame with a non-finite sample is counted once and delivers nothing.
+    send(&[0.25, f32::NAN], 5);
+    assert!(rx.try_recv().is_err(), "a bad frame produced a command");
+    assert_eq!(decode_errors(&clients), 1);
+
+    // The next valid frame is delivered unchanged and does not add to the count.
+    send(&[0.25, -0.25], 6);
+    match rx.try_recv().unwrap() {
+        TciCommand::MicAudioFrame(frame) => {
+            assert_eq!(frame.sequence, 6);
+            assert_eq!(frame.samples, vec![0.25, -0.25]);
+        }
+        other => panic!("unexpected command: {other:?}"),
+    }
+    assert_eq!(decode_errors(&clients), 1);
+
+    // Persistent bad frames reach the existing limit and force the radio to RX.
+    for sequence in 7..(7 + TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT as u32) {
+        send(&[f32::INFINITY, 0.5], sequence);
+    }
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|command| matches!(command, TciCommand::SetTxEnabled(false))),
+        "persistent invalid audio did not force RX"
+    );
+}
+
 fn opus_wb_runtime_available() -> bool {
     let mut decoder = TxCodecDecoder::new_with_flags(
         TxMicCodec::OpusWb,
