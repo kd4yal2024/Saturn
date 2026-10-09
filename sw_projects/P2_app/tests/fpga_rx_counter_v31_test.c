@@ -42,12 +42,18 @@ static void TrialPath(char *Path, size_t Size, const char *Name)
 static void ArmTrial(void)
 {
   char Path[sizeof(TrialDirectory) + 16U];
+  struct timespec FreshTime[2];
   FILE *File;
   TrialPath(Path, sizeof(Path), "armed");
   File = fopen(Path, "w");
   assert(File != NULL);
   assert(fputs("RXC1-TRIAL-0x53460004\n", File) >= 0);
   assert(fclose(File) == 0);
+  /* Give the fixture a one-second clock-boundary margin while keeping the
+   * production one-use arm's age and fail-closed checks unchanged. */
+  FreshTime[0].tv_sec = FreshTime[1].tv_sec = time(NULL) - 1;
+  FreshTime[0].tv_nsec = FreshTime[1].tv_nsec = 0;
+  assert(utimensat(AT_FDCWD, Path, FreshTime, 0) == 0);
 }
 
 bool RegisterReadChecked(uint32_t Address, uint32_t *Value)
