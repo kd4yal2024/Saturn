@@ -9,9 +9,13 @@ separate things for every window:
              channels did not change; delivery matched the arm at every interval; counters
              never went backwards; the window had the planned length; and the Bridge's
              TCP_NODELAY state, checked against the retained Bridge logs, matches the label.
-  PERFORMANCE  What the audio did: underruns, overflows, drops, sequence gaps, queue lead.
-             This is reported, never used to reject a window. A valid window with real
-             underruns is a result, not an error.
+  PERFORMANCE  What the transport and the audio did: throughput, display stalls, slow or stopped
+             delivery, underruns, overflows, drops, sequence gaps, queue lead. Reported, never used
+             to reject a window. A display pause, a slow stream or a window full of underruns is
+             exactly what is being measured, so once the subscription, the selected mode and the
+             start are established it is a RESULT. Only a wrong transport, a failed setup or missing
+             measurement evidence makes a window invalid. A transport that disconnects is kept and
+             reported as its own outcome (it cannot support a matched comparison).
 
 Nothing is averaged over what is left after discarding bad samples: a window with any invalid
 sample is INVALID, and its record is kept exactly as it was (this tool only reads the input).
@@ -20,8 +24,9 @@ Exit status
   0  every window is valid and the TCP_NODELAY state of every window is VERIFIED
   1  invalid evidence: a failed window, a failed set-level rule, or a contradicted label
   2  usage error or unreadable input
-  3  every window is valid but TCP_NODELAY is UNVERIFIED for at least one (logs not retained);
-     0 instead if --allow-unverified-nodelay is given (the report still says UNVERIFIED)
+  3  every window is valid but TCP_NODELAY (logs not retained) or, in the live profile, telemetry freshness
+     (no Pi-side source age) is UNVERIFIED for at least one window; 0 instead if --allow-unverified-nodelay /
+     --allow-unverified-freshness is given (the report still says UNVERIFIED)
 
 Limits are fixed here, before any live window is evaluated, in PROFILES. `rehearsal` is the
 30-second local rehearsal; `live` is the planned ten-minute window. Nothing is tuned per run.
@@ -29,6 +34,7 @@ Limits are fixed here, before any live window is evaluated, in PROFILES. `rehear
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import statistics
@@ -45,8 +51,11 @@ HOLE_S = 3.0                    # any gap longer than this is a hole in the reco
 MAX_UNCHANGED_BRIDGE = 2        # at most this many consecutive samples with an identical Bridge timestamp
 BRIDGE_AGE_MAX_MS = 3000        # same-clock profiles only: sample time minus the Bridge's update time
 BRIDGE_AGE_MIN_MS = -1000
-DISPLAY_FPS = (24.0, 36.0)      # display frames or rows per second when the arm shows one (cap is 30)
-AUDIO_FLOOR_FPS = 10.0          # below this audio is not running: not an audio measurement at all
+PI_AGE_MIN_MS = -50             # live profile: age computed on the Pi (read time minus the document's own update time)
+DISPLAY_FPS = (24.0, 36.0)      # expected display frames or rows per second (cap is 30): only a performance flag
+AUDIO_NOMINAL_FPS = 46.9        # 1024-sample frames at 48 kHz
+AUDIO_SLOW_FRACTION = 0.8       # below this share of nominal, audio is flagged slow: only a performance flag
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 C_DRAIN_MIN_MS = 3000           # arm C: IQ stopped at least this long before the first sample
 
 ORDER = ["C", "A-off", "B-off", "B-on", "A-on", "A-on", "B-on", "B-off", "A-off", "C"]
@@ -63,6 +72,7 @@ PAGE_NUM = ["t", "iq", "rxIq", "rows", "opusFrames", "pcmFrames", "audioPlayed",
 PAGE_BOOL = ["connected", "iqStreaming"]
 PAGE_STR = ["codec", "renderSource", "echoMode", "worklet", "override"]
 PAGE_OPTIONAL_NUM = ["jitterP50", "jitterP95", "jitterP99"]   # may legitimately be null early on
+BRIDGE_CUMULATIVE = ["rows_written", "outbound_drops"]   # cumulative counters; the *_s fields are rates and are not monotonic
 PAGE_MONOTONIC = ["iq", "rxIq", "rows", "opusFrames", "pcmFrames", "audioPlayed", "lastAudioSeq", "audioGaps",
                   "audioResyncs", "decodeErrors", "lateDrops", "underruns", "overflows", "drops"]
 BRIDGE_NUM = ["updatedAtMs", "iq", "audio", "connections", "iq_tci_frames_s", "rx_audio_frames_s", "rows_written",
@@ -72,7 +82,32 @@ TOP_KEYS = ["meta", "mode", "url", "atConnect", "atWarm", "start", "samples", "f
 
 
 def is_num(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """A real, finite number. NaN and infinity (including 1e999) are not measurements."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def non_finite_paths(obj, path="$", limit=5):
+    """Paths of NaN/infinite floats anywhere in a record."""
+    found = []
+
+    def walk(o, p):
+        if len(found) >= limit:
+            return
+        if isinstance(o, float) and not math.isfinite(o):
+            found.append(p)
+        elif isinstance(o, dict):
+            for k, v in o.items():
+                walk(v, f"{p}.{k}")
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                walk(v, f"{p}[{i}]")
+
+    walk(obj, path)
+    return found
+
+
+def _reject_constant(name):
+    raise ValueError(f"non-finite JSON constant {name} is not a measurement")
 
 
 class Checks:
@@ -120,25 +155,33 @@ def validate_sample(s):
         for k in BRIDGE_NUM:
             if not is_num(bridge.get(k)):
                 problems.append(f"bridge.{k} missing or not a number")
+        if "piSourceAgeMs" in bridge and not is_num(bridge["piSourceAgeMs"]):
+            problems.append("bridge.piSourceAgeMs is not a finite number")
     return problems
 
 
 def check_window(w, prof, nodelay_state):
-    """All checks of one window. Returns (Checks, performance dict, startup dict, delivery dict)."""
+    """All checks of one window. Returns (Checks, performance, startup counters, delivery, info), where info holds
+    the window's reported outcomes (for example a disconnect) and the status of its freshness evidence."""
     r = Checks()
     perf, startup, delivery = {}, {}, {}
+    info = {"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "not evaluated"}}
     # A record whose driver failed carries a `failure`: whatever it recorded is kept, but it is never a measurement.
     r.add("record.no_failure", "failure" not in w, f"the window driver failed: {str(w.get('failure', {}).get('message', ''))[:200]}" if "failure" in w else "")
+    bad_numbers = non_finite_paths(w)
+    r.add("record.finite_numbers", not bad_numbers, f"non-finite numbers at {bad_numbers}" if bad_numbers else "")
     missing = [k for k in TOP_KEYS if k not in w]
     if not r.add("record.top_level_fields", not missing, f"missing: {missing}" if missing else ""):
-        return r, perf, startup, delivery
+        return r, perf, startup, delivery, info
     meta = w["meta"]
     missing_meta = [k for k in META_KEYS if k not in meta]
     if not r.add("record.meta_fields", not missing_meta, f"missing: {missing_meta}" if missing_meta else ""):
-        return r, perf, startup, delivery
+        return r, perf, startup, delivery, info
+    r.add("record.bridge_sha256_valid", isinstance(meta["bridgeSha256"], str) and SHA256_RE.match(meta["bridgeSha256"]) is not None,
+          f"bridgeSha256 {meta['bridgeSha256']!r} is not a 64-hex SHA-256")
     arm = ARMS.get(meta["arm"])
     if not r.add("record.known_arm", arm is not None, f"arm {meta['arm']!r}"):
-        return r, perf, startup, delivery
+        return r, perf, startup, delivery, info
     if prof.get("require_rxc1"):
         # The acquisition owner's record of the actual RXC1 polling state for this window: not the environment flag.
         rx = meta.get("rxc1")
@@ -147,7 +190,7 @@ def check_window(w, prof, nodelay_state):
     samples = w["samples"]
     if not r.add("record.samples_present", isinstance(samples, list) and len(samples) >= 2,
                  f"{len(samples) if isinstance(samples, list) else 'no'} samples"):
-        return r, perf, startup, delivery
+        return r, perf, startup, delivery, info
 
     # --- every sample, structurally
     bad = {}
@@ -162,7 +205,7 @@ def check_window(w, prof, nodelay_state):
         pass
     good = [(i, s) for i, s in enumerate(samples) if i not in bad]
     if len(good) < 2:
-        return r, perf, startup, delivery
+        return r, perf, startup, delivery, info
     pages = [(i, s["page"]) for i, s in good]
     bridges = [(i, s["bridge"]) for i, s in good]
 
@@ -198,10 +241,28 @@ def check_window(w, prof, nodelay_state):
             ages = [(i, p["t"] - b["updatedAtMs"]) for (i, p), (_, b) in zip(pages, bridges)]
             old = [i for i, a in ages if not (BRIDGE_AGE_MIN_MS <= a <= BRIDGE_AGE_MAX_MS)]
             r.add("bridge.age_every_sample", not old, f"Bridge telemetry age outside {BRIDGE_AGE_MIN_MS}..{BRIDGE_AGE_MAX_MS} ms at samples {indices(old)}")
+            info["freshness"] = {"status": "VERIFIED", "why": "one clock: sample time minus the Bridge's update time"}
+        else:
+            # Two computers: advancing timestamps cannot prove a feed fresh (a clock offset and an old replay look the same).
+            # Only an age computed on the Pi, from its own clock and the cached document's own update time, can.
+            pi_ages = [b.get("piSourceAgeMs") for _, b in bridges]
+            have = [a is not None for a in pi_ages]
+            if all(have):
+                stale = [i for (i, _), a in zip(bridges, pi_ages) if not (PI_AGE_MIN_MS <= a <= BRIDGE_AGE_MAX_MS)]
+                r.add("bridge.pi_source_age_every_sample", not stale, f"Pi-side source age outside {PI_AGE_MIN_MS}..{BRIDGE_AGE_MAX_MS} ms at samples {indices(stale)}")
+                info["freshness"] = {"status": "VERIFIED" if not stale else "CONTRADICTED",
+                                     "why": f"Pi-side source age {min(pi_ages):.0f}..{max(pi_ages):.0f} ms" if not stale else f"stale at samples {indices(stale)}"}
+            elif any(have):
+                r.add("bridge.pi_source_age_every_sample", False, "Pi-side source age present in only some samples")
+                info["freshness"] = {"status": "CONTRADICTED", "why": "Pi-side source age present in only some samples"}
+            else:
+                info["freshness"] = {"status": "UNVERIFIED", "why": "no Pi-side source-age evidence (bridge.piSourceAgeMs): advancing timestamps alone cannot prove freshness across two computers"}
 
     # --- browser connection and the audio format, per sample
-    r.add("page.connected_every_sample", all(p["connected"] for _, p in pages),
-          f"disconnected at samples {indices(i for i, p in pages if not p['connected'])}")
+    gone = [i for i, p in pages if not p["connected"]]
+    r.add("page.connected_every_sample", not gone, f"disconnected at samples {indices(gone)}")
+    if gone:
+        info["outcomes"].append(f"transport disconnected at samples {indices(gone)}: kept and reported, not usable for a matched comparison")
     expect_codec = prof.get("expect_codec", "opus")
     r.add("audio.codec_every_sample", all(p["codec"] == expect_codec for _, p in pages),
           f"wire codec not {expect_codec!r} at samples {indices(i for i, p in pages if p['codec'] != expect_codec)}")
@@ -216,37 +277,36 @@ def check_window(w, prof, nodelay_state):
         series = [p[key] for _, p in pages]
         back = [pages[k + 1][0] for k in range(len(series) - 1) if series[k + 1] < series[k]]
         r.add(f"counters.{key}_monotonic", not back, f"{key} decreased before samples {indices(back)}")
+    for key in BRIDGE_CUMULATIVE:
+        series = [b[key] for _, b in bridges if key in b]
+        if len(series) == len(bridges):
+            back = [k + 1 for k in range(len(series) - 1) if series[k + 1] < series[k]]
+            r.add(f"counters.bridge_{key}_monotonic", not back, f"Bridge {key} decreased before samples {indices(back)}")
     rw = [b["rows_written"] for _, b in bridges if "rows_written" in b]
-    if len(rw) == len(bridges):
-        back = [k + 1 for k in range(len(rw) - 1) if rw[k + 1] < rw[k]]
-        r.add("counters.bridge_rows_written_monotonic", not back, f"decreased before samples {indices(back)}")
 
-    # --- delivery matched the arm at every interval, not just at the ends
+    # --- the transport is the arm's: the right mode and subscriptions at every sample, and nothing of the wrong kind.
+    # How much of the right kind arrived (throughput, stalls) is PERFORMANCE and is reported below, never judged here.
     def deltas(key):
         return [pages[k + 1][1][key] - pages[k][1][key] for k in range(len(pages) - 1)]
 
     secs = span if span > 0 else 1.0
     d_rx, d_iq, d_rows = deltas("rxIq"), deltas("iq"), deltas("rows")
     kind = arm["kind"]
+    display_deltas = None
     if kind == "A":
         r.add("delivery.render_source", all(p["renderSource"] == "iq" and p["echoMode"] == "iq" for _, p in pages), "render source/echo not iq")
-        r.add("delivery.raw_iq_advances_every_interval", all(d > 0 for d in d_rx), f"no raw RX IQ in intervals {indices(i for i, d in enumerate(d_rx, 1) if d <= 0)}")
-        rate = (pages[-1][1]["rxIq"] - pages[0][1]["rxIq"]) / secs
-        r.add("delivery.raw_iq_rate", DISPLAY_FPS[0] <= rate <= DISPLAY_FPS[1], f"{rate:.1f} frames/s, required {DISPLAY_FPS[0]:.0f}-{DISPLAY_FPS[1]:.0f}")
+        display_deltas = d_rx
         r.add("delivery.no_rows", all(d == 0 for d in d_rows), "spectrum rows arrived in a raw IQ window")
         r.add("delivery.page_streaming", all(p["iqStreaming"] for _, p in pages), "page not streaming IQ")
         r.add("delivery.bridge_subscriptions", all(b["iq"] == 1 and b["audio"] == 1 for _, b in bridges if "iq" in b), "Bridge IQ/audio subscription not 1/1")
-        delivery["rate"] = rate
     elif kind == "B":
         r.add("delivery.render_source", all(p["renderSource"] == "server" and p["echoMode"] == "spectrum" for _, p in pages), "render source/echo not server/spectrum")
-        r.add("delivery.rows_advance_every_interval", all(d > 0 for d in d_rows), f"no rows in intervals {indices(i for i, d in enumerate(d_rows, 1) if d <= 0)}")
-        rate = (pages[-1][1]["rows"] - pages[0][1]["rows"]) / secs
-        r.add("delivery.row_rate", DISPLAY_FPS[0] <= rate <= DISPLAY_FPS[1], f"{rate:.1f} rows/s, required {DISPLAY_FPS[0]:.0f}-{DISPLAY_FPS[1]:.0f}")
+        display_deltas = d_rows
         r.add("delivery.no_raw_iq", all(d == 0 for d in d_rx) and all(d == 0 for d in d_iq), "raw IQ arrived in a rows window")
         r.add("delivery.page_streaming", all(p["iqStreaming"] for _, p in pages), "page not streaming")
         r.add("delivery.bridge_subscriptions", all(b["iq"] == 1 and b["audio"] == 1 for _, b in bridges if "iq" in b), "Bridge IQ/audio subscription not 1/1")
-        delivery["rate"] = rate
     else:  # C: audio only
+        display_deltas = None
         r.add("delivery.no_raw_iq_or_rows", all(d == 0 for d in d_rx) and all(d == 0 for d in d_iq) and all(d == 0 for d in d_rows),
               "raw RX IQ, IQ or spectrum rows arrived in an audio-only window")
         r.add("delivery.page_not_streaming_iq", all(not p["iqStreaming"] for _, p in pages), "page reports IQ streaming")
@@ -268,11 +328,18 @@ def check_window(w, prof, nodelay_state):
     r.add("record.mode_matches_arm", w["mode"] == arm["mode"], f"mode {w['mode']!r}, expected {arm['mode']!r}")
     r.add("record.url_names_display_transport", f"display_transport={arm['override']}" in w["url"], f"url {w['url']!r}")
 
-    # --- audio is running at all (a window with no audio is not an audio measurement)
+    # --- audio was started (cumulative frames since page load). How fast it then played is performance, not validity:
+    # a window whose audio slowed or stopped is a result, but audio that never started is a failed setup.
     played = (pages[-1][1]["audioPlayed"] - pages[0][1]["audioPlayed"]) / secs
     opus = (pages[-1][1]["opusFrames"] - pages[0][1]["opusFrames"]) / secs
-    r.add("audio.running", played >= AUDIO_FLOOR_FPS and opus >= AUDIO_FLOOR_FPS,
-          f"played {played:.1f}/s, Opus frames {opus:.1f}/s, required at least {AUDIO_FLOOR_FPS:.0f}/s")
+    wire_key, other_key = ("opusFrames", "pcmFrames") if expect_codec == "opus" else ("pcmFrames", "opusFrames")
+    r.add("audio.started", pages[-1][1][wire_key] > 0 and pages[-1][1]["audioPlayed"] > 0,
+          f"no {expect_codec} frames and no played audio were ever counted: audio never started")
+    # The decoded-frame counters must agree with the declared wire codec: a startup count of the other codec is harmless,
+    # but new frames of the other codec in a measured interval contradict the label.
+    contra = [pages[k + 1][0] for k in range(len(pages) - 1) if pages[k + 1][1][other_key] > pages[k][1][other_key]]
+    r.add("audio.no_frames_of_the_other_codec", not contra,
+          f"{other_key} advanced in a window declared {expect_codec} (intervals ending at samples {indices(contra)})")
     delivery["played"] = played
 
     # --- TCP_NODELAY: label, arm, and the retained Bridge log must all agree
@@ -293,17 +360,26 @@ def check_window(w, prof, nodelay_state):
         "late_drops": last["lateDrops"] - first["lateDrops"],
         "played_per_s": round(played, 1),
         "stalled_seconds": sum(1 for d in deltas("audioPlayed") if d == 0),
+        "audio_slow": played < AUDIO_SLOW_FRACTION * AUDIO_NOMINAL_FPS,
+        "opus_per_s": round(opus, 1),
         "queue_ms_min_med_max": [round(min(q)), round(statistics.median(q)), round(max(q))] if q else None,
         "bridge_audio_dropped_s_max": max((b["audio_dropped_s"] for _, b in bridges if "audio_dropped_s" in b), default=None),
         "bridge_outbound_drops_delta": (bridges[-1][1].get("outbound_drops", 0) - bridges[0][1].get("outbound_drops", 0)) if "outbound_drops" in bridges[0][1] else None,
         "jitter_p95_ms_last": last.get("jitterP95"),
     }
+    if display_deltas is not None:
+        total = sum(display_deltas)
+        rate = total / secs
+        perf["display_per_s"] = round(rate, 1)
+        perf["display_stalled_seconds"] = sum(1 for d in display_deltas if d <= 0)
+        perf["display_delivered_nothing"] = total == 0
+        perf["display_rate_outside_expected_band"] = not (DISPLAY_FPS[0] <= rate <= DISPLAY_FPS[1])
     sp = w["start"].get("page", {}) if isinstance(w.get("start"), dict) else {}
     startup = {k: sp.get(k) for k in ("underruns", "overflows", "drops")}
     delivery.update(render=last["renderSource"], codec=last["codec"], format=[last["codec"], last["rate"], last["channels"], last["worklet"]], rows_s=round((last["rows"] - first["rows"]) / secs, 1),
                     rx_iq_s=round((last["rxIq"] - first["rxIq"]) / secs, 1))
     delivery["bridge_iq_audio"] = f'{bridges[-1][1].get("iq")}/{bridges[-1][1].get("audio")}'
-    return r, perf, startup, delivery
+    return r, perf, startup, delivery, info
 
 
 def read_nodelay_evidence(restart_number, windows_served, label, log_dirs):
@@ -349,7 +425,8 @@ def load_windows(directory):
         if not m:
             continue
         try:
-            out.append((int(m.group(1)), m.group(2), f, json.load(open(f))))
+            with open(f) as fh:
+                out.append((int(m.group(1)), m.group(2), f, json.load(fh, parse_constant=_reject_constant)))
         except (OSError, ValueError) as e:
             out.append((int(m.group(1)), m.group(2), f, {"_unreadable": str(e)}))
     return sorted(out, key=lambda x: x[0])
@@ -363,6 +440,7 @@ def main(argv=None):
     ap.add_argument("--bridge-logs", action="append", default=[], help="directory with bridge_<N>.out/.err (repeatable)")
     ap.add_argument("--report-dir", help="where to write order_check.json and order_summary.txt (default: <windows_dir>/check_report)")
     ap.add_argument("--allow-unverified-nodelay", action="store_true", help="exit 0 when only TCP_NODELAY is UNVERIFIED (still reported)")
+    ap.add_argument("--allow-unverified-freshness", action="store_true", help="exit 0 when only live telemetry freshness is UNVERIFIED (still reported)")
     ap.add_argument("--expect-codec", default="opus")
     ap.add_argument("--require-rxc1", action="store_true", help="require a recorded RXC1 state per window (always on in the live profile)")
     ap.add_argument("--order", default=",".join(ORDER), help="comma-separated planned arm order (order mode)")
@@ -389,14 +467,15 @@ def main(argv=None):
         if "_unreadable" in w:
             c = Checks()
             c.add("record.readable", False, w["_unreadable"])
-            results.append(dict(n=idx, arm=arm_name, file=os.path.basename(path), checks=c, perf={}, startup={}, delivery={}, nodelay={"status": "UNVERIFIED", "why": "unreadable record"}))
+            results.append(dict(n=idx, arm=arm_name, file=os.path.basename(path), checks=c, perf={}, startup={}, delivery={}, nodelay={"status": "UNVERIFIED", "why": "unreadable record"},
+                                info={"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "unreadable record"}}))
             continue
         meta = w.get("meta", {})
         nd = read_nodelay_evidence(meta.get("bridgeRestartNumber"), served.get(meta.get("bridgeRestartNumber"), 1), meta.get("bridgeNoDelay"), log_dirs) \
             if all(k in meta for k in ("bridgeRestartNumber", "bridgeNoDelay")) else {"status": "UNVERIFIED", "why": "meta lacks restart number or label", "logged": None}
-        c, perf, startup, delivery = check_window(w, prof, nd)
+        c, perf, startup, delivery, info = check_window(w, prof, nd)
         c.add("record.file_name_matches_meta", meta.get("arm") == arm_name and meta.get("index") == idx, f"file w{idx}_{arm_name} vs meta {meta.get('index')}/{meta.get('arm')}")
-        results.append(dict(n=idx, arm=arm_name, file=os.path.basename(path), checks=c, perf=perf, startup=startup, delivery=delivery, nodelay=nd, meta=meta))
+        results.append(dict(n=idx, arm=arm_name, file=os.path.basename(path), checks=c, perf=perf, startup=startup, delivery=delivery, nodelay=nd, info=info, meta=meta))
 
     if args.mode == "order":
         planned = [a.strip() for a in args.order.split(",") if a.strip()]
@@ -409,7 +488,8 @@ def main(argv=None):
         set_checks.add("set.no_missing_windows", not missing, f"missing windows {missing}")
         metas = [r.get("meta", {}) for r in results if r.get("meta")]
         shas = {m.get("bridgeSha256") for m in metas}
-        set_checks.add("set.one_bridge_binary", len(shas) == 1 and None not in shas, f"Bridge binary hashes {sorted(map(str, shas))}")
+        set_checks.add("set.one_bridge_binary", len(shas) == 1 and all(isinstance(s, str) and SHA256_RE.match(s) for s in shas),
+                       f"Bridge binary hashes {sorted(map(str, shas))} (one valid 64-hex SHA-256 required)")
         restarts = [m.get("bridgeRestartNumber") for m in metas]
         set_checks.add("set.restart_numbers_nondecreasing", all(b >= a for a, b in zip(restarts, restarts[1:])) if restarts else False, f"restart numbers {restarts}")
         by_inst = {}
@@ -427,7 +507,9 @@ def main(argv=None):
         set_checks.add("set.arm_c_has_nodelay_on_at_both_ends", c_nd == {1} if c_nd else False, f"arm C labels {c_nd}")
 
     any_invalid = bool(set_checks.failed()) or any(r["checks"].failed() for r in results)
-    any_unverified = any(r["nodelay"]["status"] == "UNVERIFIED" for r in results)
+    nodelay_unverified = any(r["nodelay"]["status"] == "UNVERIFIED" for r in results)
+    fresh_unverified = any(r["info"]["freshness"]["status"] == "UNVERIFIED" for r in results)
+    any_unverified = (nodelay_unverified and not args.allow_unverified_nodelay) or (fresh_unverified and not args.allow_unverified_freshness)
 
     # --- report
     rows = []
@@ -435,7 +517,7 @@ def main(argv=None):
         failed = r["checks"].failed()
         p, d, st = r["perf"], r["delivery"], r["startup"]
         rows.append({
-            "n": r["n"], "arm": r["arm"], "evidence": "INVALID" if failed else "valid", "nodelay": r["nodelay"]["status"],
+            "n": r["n"], "arm": r["arm"], "evidence": "INVALID" if failed else "valid", "nodelay": r["nodelay"]["status"], "fresh": r["info"]["freshness"]["status"],
             "render": d.get("render", "-"), "rows/s": d.get("rows_s", "-"), "rxIQ/s": d.get("rx_iq_s", "-"), "codec": d.get("codec", "-"),
             "played/s": p.get("played_per_s", "-"),
             "underruns": p.get("underruns", "-"), "overflows": p.get("overflows", "-"), "drops": p.get("drops", "-"), "gaps": p.get("audio_gaps", "-"),
@@ -453,11 +535,19 @@ def main(argv=None):
             notes.append(f"window {r['n']} ({r['arm']}) FAILED {c['check']}: {c['detail']}")
         if r["nodelay"]["status"] != "VERIFIED":
             notes.append(f"window {r['n']} ({r['arm']}) TCP_NODELAY {r['nodelay']['status']}: {r['nodelay']['why']}")
+        if r["info"]["freshness"]["status"] != "VERIFIED":
+            notes.append(f"window {r['n']} ({r['arm']}) telemetry freshness {r['info']['freshness']['status']}: {r['info']['freshness']['why']}")
+        for o in r["info"]["outcomes"]:
+            notes.append(f"window {r['n']} ({r['arm']}) OUTCOME: {o}")
     for c in set_checks.failed():
         notes.append(f"SET FAILED {c['check']}: {c['detail']}")
-    verdict = "INVALID EVIDENCE" if any_invalid else ("VALID, TCP_NODELAY UNVERIFIED" if any_unverified else "VALID, TCP_NODELAY VERIFIED")
-    perf_flags = [f"window {r['n']} ({r['arm']}): " + ", ".join(f"{k} {v}" for k, v in r["perf"].items() if k in ("underruns", "overflows", "drops", "audio_gaps", "audio_resyncs", "decode_errors", "late_drops") and v)
-                  for r in results if r["perf"] and any(r["perf"].get(k) for k in ("underruns", "overflows", "drops", "audio_gaps", "audio_resyncs", "decode_errors", "late_drops"))]
+    verdict = "INVALID EVIDENCE" if any_invalid else ("VALID, TCP_NODELAY UNVERIFIED" if nodelay_unverified else "VALID, TCP_NODELAY VERIFIED")
+    if not any_invalid and fresh_unverified:
+        verdict += ", FRESHNESS UNVERIFIED"
+    event_keys = ("underruns", "overflows", "drops", "audio_gaps", "audio_resyncs", "decode_errors", "late_drops", "stalled_seconds",
+                  "display_stalled_seconds", "display_delivered_nothing", "audio_slow", "display_rate_outside_expected_band")
+    perf_flags = [f"window {r['n']} ({r['arm']}): " + ", ".join(f"{k} {v}" for k, v in r["perf"].items() if k in event_keys and v)
+                  for r in results if r["perf"] and any(r["perf"].get(k) for k in event_keys)]
     out_text = text + "\n\n" + "\n".join(notes) + ("\n" if notes else "") + \
         ("performance events in valid windows (reported, not a reason to reject): " + "; ".join(perf_flags) + "\n" if perf_flags else "") + \
         f"profile {args.profile}, mode {args.mode}: {verdict}\n"
@@ -470,11 +560,12 @@ def main(argv=None):
         json.dump({"verdict": verdict, "profile": args.profile, "mode": args.mode, "limits": {k: v for k, v in prof.items()},
                    "set_checks": set_checks.items,
                    "windows": [{"n": r["n"], "arm": r["arm"], "file": r["file"], "checks": r["checks"].items, "nodelay": r["nodelay"],
-                                "performance": r["perf"], "startup_counters": r["startup"], "delivery": r["delivery"]} for r in results]},
+                                "performance": r["perf"], "startup_counters": r["startup"], "delivery": r["delivery"],
+                                "outcomes": r["info"]["outcomes"], "freshness": r["info"]["freshness"]} for r in results]},
                   fh, indent=1, default=str)
     if any_invalid:
         return 1
-    if any_unverified and not args.allow_unverified_nodelay:
+    if any_unverified:
         return 3
     return 0
 

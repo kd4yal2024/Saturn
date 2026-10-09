@@ -237,14 +237,39 @@ class ConnectionAndAudioFormat(Base):
     def test_a_different_display_override_than_the_arm(self):
         self.assertRejectedOnlyIn(3, {"page.override_matches_arm"}, lambda d: d["samples"][4]["page"].update(override="iq"))
 
-    def test_audio_that_is_not_running_is_not_an_audio_measurement(self):
-        def silent(d):
-            ref = d["samples"][0]["page"]
+    def test_audio_that_never_started_is_a_failed_setup(self):
+        def never(d):
             for s in d["samples"]:
                 for k in ("audioPlayed", "opusFrames", "lastAudioSeq"):
-                    s["page"][k] = ref[k]
-        self.assertRejectedOnlyIn(4, {"audio.running"}, silent)
+                    s["page"][k] = 0
+        self.assertRejectedOnlyIn(4, {"audio.started"}, never)
 
+    def test_audio_that_stops_during_the_window_is_a_result_not_a_rejection(self):
+        def stops(d):
+            frozen = {k: d["samples"][10]["page"][k] for k in ("audioPlayed", "opusFrames", "lastAudioSeq")}
+            for s in d["samples"][10:]:
+                s["page"].update(frozen)
+        self.bench.alter(4, stops)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 4][0]["performance"]
+        self.assertGreaterEqual(perf["stalled_seconds"], 18)
+        self.assertTrue(perf["audio_slow"])
+
+    def test_audio_at_a_fraction_of_the_rate_with_many_underruns_is_a_result(self):
+        def slow(d):
+            first = copy.deepcopy(d["samples"][0]["page"])
+            for i, s in enumerate(d["samples"]):
+                for key in ("opusFrames", "audioPlayed", "lastAudioSeq"):
+                    s["page"][key] = first[key] + 5 * i
+                s["page"]["underruns"] = i
+        self.bench.alter(1, slow)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 1][0]["performance"]
+        self.assertEqual(perf["underruns"], 29)
+        self.assertTrue(perf["audio_slow"])
+        self.assertLess(perf["played_per_s"], 10)
 
 class Counters(Base):
     def test_a_counter_that_goes_backwards_means_a_reset(self):
@@ -287,14 +312,16 @@ class Delivery(Base):
                 s["page"]["rxIq"] += k
         self.assertRejectedOnlyIn(3, {"delivery.no_raw_iq"}, iq)
 
-    def test_raw_iq_that_stalls_for_a_few_seconds(self):
+    def test_raw_iq_that_stalls_for_a_few_seconds_is_a_result_not_a_rejection(self):
         def stall(d):
             ref = d["samples"][10]["page"]["rxIq"]
-            for k, s in enumerate(d["samples"][10:13]):
+            for s in d["samples"][10:13]:
                 s["page"]["rxIq"] = ref
-            for s in d["samples"][13:]:
-                s["page"]["rxIq"] -= 0  # later samples keep their values, so counters stay monotonic
-        self.assertRejectedOnlyIn(2, {"delivery.raw_iq_advances_every_interval"}, stall)
+        self.bench.alter(2, stall)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 2][0]["performance"]
+        self.assertEqual(perf["display_stalled_seconds"], 2)  # samples 11 and 12 repeat sample 10
 
     def test_the_bridge_still_holding_an_iq_subscription_in_audio_only(self):
         self.assertRejectedOnlyIn(10, {"delivery.bridge_iq_subscription_zero"}, lambda d: d["samples"][15]["bridge"].update(iq=1))
@@ -484,29 +511,64 @@ class EveryRuleHasATest(Base):
     def test_a_raw_iq_window_whose_page_stops_streaming(self):
         self.assertRejectedOnlyIn(9, {"delivery.page_streaming"}, lambda d: d["samples"][20]["page"].update(iqStreaming=False))
 
-    def test_a_raw_iq_rate_far_above_the_display_rate(self):
+    def test_a_raw_iq_rate_far_above_the_display_rate_is_flagged_not_rejected(self):
         def fast(d):
             base = d["samples"][0]["page"]["rxIq"]
             for s in d["samples"]:
                 s["page"]["rxIq"] = base + 5 * (s["page"]["rxIq"] - base)
-        self.assertRejectedOnlyIn(2, {"delivery.raw_iq_rate"}, fast)
+        self.bench.alter(2, fast)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 2][0]["performance"]
+        self.assertTrue(perf["display_rate_outside_expected_band"])
+        self.assertGreater(perf["display_per_s"], 100)
 
     def test_a_rows_window_whose_render_source_flips(self):
         self.assertRejectedOnlyIn(3, {"delivery.render_source"}, lambda d: d["samples"][20]["page"].update(echoMode="iq"))
 
-    def test_a_row_rate_far_below_the_display_rate(self):
+    def test_a_row_rate_far_below_the_display_rate_is_flagged_not_rejected(self):
         def slow(d):
             base = d["samples"][0]["page"]["rows"]
             for k, s in enumerate(d["samples"]):
-                s["page"]["rows"] = base + k * 5  # 5 rows/s: advancing every interval, but far too slow
-        self.assertRejectedOnlyIn(3, {"delivery.row_rate"}, slow)
+                s["page"]["rows"] = base + k * 5
+        self.bench.alter(3, slow)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 3][0]["performance"]
+        self.assertTrue(perf["display_rate_outside_expected_band"])
+        self.assertLess(perf["display_per_s"], 10)
 
-    def test_rows_that_stall_for_a_few_seconds(self):
+    def test_rows_that_stall_for_a_few_seconds_are_a_result_not_a_rejection(self):
         def stall(d):
             ref = d["samples"][10]["page"]["rows"]
             for s in d["samples"][10:13]:
                 s["page"]["rows"] = ref
-        self.assertRejectedOnlyIn(3, {"delivery.rows_advance_every_interval"}, stall)
+        self.bench.alter(3, stall)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 3][0]["performance"]
+        self.assertEqual(perf["display_stalled_seconds"], 2)  # samples 11 and 12 repeat sample 10
+
+    def test_a_display_pause_with_catch_up_is_a_result(self):
+        # the reviewer's probe: one frozen interval, the next catching up; mode, subscriptions and telemetry all sound
+        def pause(d):
+            d["samples"][15]["page"]["rows"] = d["samples"][14]["page"]["rows"]
+        self.bench.alter(3, pause)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        self.assertEqual([w for w in report["windows"] if w["n"] == 3][0]["performance"]["display_stalled_seconds"], 1)
+
+    def test_a_display_that_delivered_nothing_with_the_subscription_in_place_is_a_result(self):
+        def nothing(d):
+            ref = d["samples"][0]["page"]["rows"]
+            for s in d["samples"]:
+                s["page"]["rows"] = ref
+        self.bench.alter(3, nothing)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 3][0]["performance"]
+        self.assertTrue(perf["display_delivered_nothing"])
+        self.assertIn("display_delivered_nothing", out)
 
     def test_the_bridge_audio_subscription_dropping_in_audio_only(self):
         self.assertRejectedOnlyIn(1, {"delivery.bridge_audio_subscription_one"}, lambda d: d["samples"][15]["bridge"].update(audio=0))
@@ -616,6 +678,220 @@ class Rxc1(Base):
         self.assertEqual(code, 1, out)
         self.assertIn("set.rxc1_state_constant", set_failures(report))
         self.assertFalse(all_window_failures(report))
+
+
+class DataValidation(Base):
+    """Telemetry and identity that is malformed, contradictory or non-finite is never a measurement."""
+
+    def test_a_nan_counter_in_the_record(self):
+        # Python's json module writes and reads NaN, which is not JSON: the record is rejected as unreadable.
+        self.bench.alter(1, lambda d: d["samples"][15]["page"].update(audioGaps=float("nan")))
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("record.readable", failed_ids(report, 1))
+        self.assertEqual(set(all_window_failures(report)), {1})
+
+    def test_infinity_from_an_oversized_exponent_in_a_sample(self):
+        # Valid JSON syntax that parses to infinity. A marker value is written, then replaced in the text.
+        self.bench.alter(2, lambda d: d["samples"][15]["page"].update(audioGaps=123456789))
+        path = self.bench.path(2)
+        write_text(path, read_text(path).replace('"audioGaps": 123456789', '"audioGaps": 1e999', 1))
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 1, out)
+        self.assertTrue({"record.finite_numbers", "telemetry.every_sample_complete"} <= failed_ids(report, 2))
+        self.assertEqual(set(all_window_failures(report)), {2})
+
+    def test_a_non_finite_number_in_a_field_the_checker_does_not_otherwise_read(self):
+        path = self.bench.path(3)
+        data = read_json(path)
+        data["atWarm"]["page"]["jitterP95"] = 1.0
+        write_json(path, data)
+        write_text(path, read_text(path).replace('"jitterP95": 1.0', '"jitterP95": 1e999', 1))
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("record.finite_numbers", failed_ids(report, 3))
+
+    def test_a_cumulative_bridge_drop_counter_that_decreases(self):
+        def reset(d):
+            for i, s in enumerate(d["samples"]):
+                s["bridge"]["outbound_drops"] = 10 if i < 15 else 0
+        self.assertRejectedOnlyIn(1, {"counters.bridge_outbound_drops_monotonic"}, reset)
+
+    def test_genuine_bridge_drops_that_only_increase_stay_valid(self):
+        def drops(d):
+            for i, s in enumerate(d["samples"]):
+                s["bridge"]["outbound_drops"] = i // 5
+        self.bench.alter(5, drops)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        self.assertEqual([w for w in report["windows"] if w["n"] == 5][0]["performance"]["bridge_outbound_drops_delta"], 5)
+
+    def test_per_second_bridge_rates_are_not_cumulative(self):
+        def rates(d):
+            for i, s in enumerate(d["samples"]):
+                s["bridge"]["audio_dropped_s"] = 5 if i < 10 else 0
+                s["bridge"]["rx_audio_frames_s"] = 47.0 - (i % 3)
+        self.bench.alter(5, rates)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+
+    def test_pcm_frames_advancing_in_a_window_declared_opus(self):
+        def pcm(d):
+            for i, s in enumerate(d["samples"]):
+                s["page"]["pcmFrames"] = 50 * i
+        self.assertRejectedOnlyIn(1, {"audio.no_frames_of_the_other_codec"}, pcm)
+
+    def test_a_nonzero_pcm_startup_count_that_does_not_move_is_harmless(self):
+        def startup(d):
+            for s in d["samples"]:
+                s["page"]["pcmFrames"] = 12
+        self.bench.alter(1, startup)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+
+    def test_opus_frames_advancing_in_a_window_declared_pcm(self):
+        self.bench.alter(1, lambda d: None)
+        code, out, report = self.bench.run("--expect-codec", "pcm")
+        self.assertEqual(code, 1, out)
+        self.assertTrue(all("audio.codec_every_sample" in failed_ids(report, n) for n in range(1, 11)))
+        self.assertTrue(all("audio.no_frames_of_the_other_codec" in failed_ids(report, n) for n in range(1, 11)))
+
+    def test_ten_empty_binary_hashes(self):
+        for n in range(1, 11):
+            self.bench.alter(n, lambda d: d["meta"].update(bridgeSha256=""))
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 1, out)
+        self.assertTrue(all("record.bridge_sha256_valid" in failed_ids(report, n) for n in range(1, 11)))
+        self.assertIn("set.one_bridge_binary", set_failures(report))
+
+    def test_ten_equal_but_malformed_binary_hashes(self):
+        for n in range(1, 11):
+            self.bench.alter(n, lambda d: d["meta"].update(bridgeSha256="bd541874" * 7))  # 56 chars: equal across the set, not a SHA-256
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("set.one_bridge_binary", set_failures(report))
+
+    def test_an_uppercase_or_non_hex_hash_is_not_accepted_as_one(self):
+        for bad in ("BD541874A1B1A1B928A3E141D3B0E972C1D35ECAE90A60F053F227393E738EB2", "z" * 64, 12345):
+            with self.subTest(hash=bad):
+                bench = Bench()
+                self.addCleanup(bench.cleanup)
+                bench.alter(4, lambda d, bad=bad: d["meta"].update(bridgeSha256=bad))
+                code, out, report = bench.run()
+                self.assertEqual(code, 1, out)
+                self.assertIn("record.bridge_sha256_valid", failed_ids(report, 4))
+
+
+class Outcomes(Base):
+    def test_a_disconnect_is_kept_and_reported_as_its_own_outcome(self):
+        self.bench.alter(2, lambda d: d["samples"][15]["page"].update(connected=False))
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 1, out)
+        window = [w for w in report["windows"] if w["n"] == 2][0]
+        self.assertTrue(any("transport disconnected" in o for o in window["outcomes"]))
+        self.assertIn("OUTCOME: transport disconnected", out)
+        # the performance observed in the rest of the window is still reported
+        self.assertIn("underruns", window["performance"])
+
+    def test_no_outcome_is_reported_for_a_sound_window(self):
+        code, out, report = self.bench.run()
+        self.assertTrue(all(not w["outcomes"] for w in report["windows"]))
+        self.assertNotIn("OUTCOME", out)
+
+
+class LiveFreshness(unittest.TestCase):
+    """The live profile, on synthetic 600 s windows built from the real window 1 (arm C).
+
+    Advancing timestamps cannot prove a feed fresh across two computers (a clock offset and an old replay look the same),
+    so freshness there rests only on an age computed on the Pi from its own clock: bridge.piSourceAgeMs.
+    """
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp(prefix="check-order-live-")
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.windows = os.path.join(self.root, "windows")
+        os.makedirs(self.windows)
+
+    def make(self, shift_ms=0, pi_age=None, partial=False):
+        data = read_json(os.path.join(FIX, "windows", "w1_C.json"))
+        first = copy.deepcopy(data["samples"][0])
+        data["samples"] = []
+        for i in range(600):
+            s = copy.deepcopy(first)
+            s["page"]["t"] += i * 1000
+            s["bridge"]["updatedAtMs"] += i * 1000 + shift_ms
+            for key in ("opusFrames", "audioPlayed", "lastAudioSeq"):
+                s["page"][key] += 50 * i
+            if pi_age is not None and not (partial and i % 2):
+                s["bridge"]["piSourceAgeMs"] = pi_age(i) if callable(pi_age) else pi_age
+            data["samples"].append(s)
+        data["meta"]["rxc1"] = {"state": "polling enabled, valid snapshots", "pid": data["meta"]["bridgePid"], "identity": "1.31.002 / 0x53460004"}
+        write_json(os.path.join(self.windows, "w1_C.json"), data)
+
+    def run_live(self, *extra):
+        report = os.path.join(self.root, "report")
+        proc = subprocess.run([sys.executable, CHECKER, self.windows, "--mode", "single", "--profile", "live", "--bridge-logs",
+                               os.path.join(FIX, "bridge-logs"), "--report-dir", report, *extra], capture_output=True, text=True, timeout=60)
+        return proc.returncode, proc.stdout, read_json(os.path.join(report, "order_check.json"))
+
+    def test_a_fresh_pi_side_age_verifies_the_feed(self):
+        self.make(pi_age=lambda i: 300 + (i % 400))
+        code, out, report = self.run_live()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(report["windows"][0]["freshness"]["status"], "VERIFIED")
+        self.assertEqual(report["verdict"], "VALID, TCP_NODELAY VERIFIED")
+
+    def test_a_stale_pi_side_age_is_rejected(self):
+        self.make(pi_age=86_400_000)  # the cached document is a day old on the Pi's own clock
+        code, out, report = self.run_live()
+        self.assertEqual(code, 1, out)
+        self.assertIn("bridge.pi_source_age_every_sample", failed_ids(report, 1))
+        self.assertEqual(report["windows"][0]["freshness"]["status"], "CONTRADICTED")
+
+    def test_one_stale_reading_among_fresh_ones_is_rejected(self):
+        self.make(pi_age=lambda i: 90_000 if i == 300 else 400)
+        code, out, report = self.run_live()
+        self.assertEqual(code, 1, out)
+        self.assertIn("bridge.pi_source_age_every_sample", failed_ids(report, 1))
+
+    def test_a_clock_offset_with_a_fresh_pi_side_age_is_not_stale(self):
+        # Bridge timestamps a day away from the browser's clock: a different computer's clock, not an old feed.
+        self.make(shift_ms=-86_400_000, pi_age=400)
+        code, out, report = self.run_live()
+        self.assertEqual(code, 0, out)
+
+    def test_an_advancing_but_day_old_feed_with_no_age_evidence_is_unverified_not_valid(self):
+        self.make(shift_ms=-86_400_000)
+        code, out, report = self.run_live()
+        self.assertEqual(code, 3, out)
+        self.assertEqual(report["verdict"], "VALID, TCP_NODELAY VERIFIED, FRESHNESS UNVERIFIED")
+        self.assertEqual(report["windows"][0]["freshness"]["status"], "UNVERIFIED")
+        self.assertIn("telemetry freshness UNVERIFIED", out)
+
+    def test_unverified_freshness_can_be_accepted_explicitly_and_is_still_reported(self):
+        self.make()
+        code, out, report = self.run_live("--allow-unverified-freshness")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(report["windows"][0]["freshness"]["status"], "UNVERIFIED")
+        self.assertIn("FRESHNESS UNVERIFIED", report["verdict"])
+
+    def test_age_evidence_present_in_only_some_samples_is_rejected(self):
+        self.make(pi_age=400, partial=True)
+        code, out, report = self.run_live()
+        self.assertEqual(code, 1, out)
+        self.assertIn("bridge.pi_source_age_every_sample", failed_ids(report, 1))
+
+    def test_a_non_finite_pi_side_age_is_rejected(self):
+        self.make(pi_age=400)
+        path = os.path.join(self.windows, "w1_C.json")
+        write_text(path, read_text(path).replace('"piSourceAgeMs": 400', '"piSourceAgeMs": 1e999', 1))
+        code, out, report = self.run_live()
+        self.assertEqual(code, 1, out)
+
+    def test_the_rehearsal_profile_still_uses_the_single_clock_age_rule(self):
+        code, out, report = Bench().run()
+        self.assertEqual(code, 0, out)
+        self.assertTrue(all(w["freshness"]["status"] == "VERIFIED" for w in report["windows"]))
 
 
 class Usage(Base):
