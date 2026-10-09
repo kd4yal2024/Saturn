@@ -97,6 +97,10 @@ require_root() {
 }
 require_root
 
+# The privileged copy is installed alongside this shared writer.
+# shellcheck source=saturn-boot-config.sh
+source "$(dirname "$SCRIPT_SELF")/saturn-boot-config.sh"
+
 # ----- locate config.txt for Bookworm/Trixie -----
 CONFIG_TXT="/boot/firmware/config.txt"
 [ -f "$CONFIG_TXT" ] || CONFIG_TXT="/boot/config.txt"
@@ -143,15 +147,18 @@ ensure_pinctrl() {
 ensure_pinctrl
 
 # ----- optional: set early-boot default so LED is RED before userspace -----
-if [ "$EARLY_DEFAULT" = "1" ]; then
-  if grep -Eq '^\s*gpio=15=' "$CONFIG_TXT"; then
-    # normalize whatever was there to op,dh
-    sed -i 's/^\s*gpio=15=.*/gpio=15=op,dh/' "$CONFIG_TXT"
-    log "normalized existing gpio=15=… → gpio=15=op,dh in $(basename "$CONFIG_TXT")"
+_saturn_write_led_default() {
+  local config="$1"
+  if grep -Eq '^[[:space:]]*gpio=15=' "$config"; then
+    sed -i -E 's/^[[:space:]]*gpio=15=.*/gpio=15=op,dh/' "$config"
   else
-    echo 'gpio=15=op,dh' >> "$CONFIG_TXT"
-    log "appended gpio=15=op,dh to $(basename "$CONFIG_TXT")"
+    printf 'gpio=15=op,dh\n' >>"$config"
   fi
+}
+
+if [ "$EARLY_DEFAULT" = "1" ]; then
+  saturn_boot_config_update "$CONFIG_TXT" _saturn_write_led_default
+  log "ensured gpio=15=op,dh in $(basename "$CONFIG_TXT")"
 else
   log "EARLY_DEFAULT=0: leaving $(basename "$CONFIG_TXT") unchanged"
 fi

@@ -3,6 +3,9 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+# shellcheck source=../../scripts/saturn-p2-install-policy.sh
+source "$REPO_ROOT/scripts/saturn-p2-install-policy.sh"
+SELECTED_BACKEND="$(saturn_p2_selected_backend)"
 
 UNIT_NAME="p2app.service"
 UNIT_PATH="/etc/systemd/system/${UNIT_NAME}"
@@ -102,6 +105,26 @@ TMP_P2_DEPLOY_CONFIG=""
 trap 'rm -f "$TMP_XDMA_READY_UNIT" "$TMP_UNIT" "$TMP_RULE" "$TMP_SUDOERS" "$TMP_AUTOSTART" "$TMP_POSTINST_HOOK" "$TMP_P2_DEPLOY_CONFIG" 2>/dev/null || true' EXIT
 
 echo "[*] Repo root: ${REPO_ROOT}"
+
+install_verified_root() {
+  local source_file="$1" target_file="$2" mode="$3" staged target_dir
+  [[ -s "$source_file" ]] || { echo "[!] ERROR: Empty install source: $source_file" >&2; return 1; }
+  target_dir="$(dirname "$target_file")"
+  if ! sudo test -d "$target_dir"; then
+    sudo install -d -m 0755 "$target_dir" || return 1
+  fi
+  staged="$(sudo mktemp "${target_file}.saturn.XXXXXX")" || return 1
+  if ! sudo install -m "$mode" "$source_file" "$staged" \
+      || ! sudo cmp -s "$source_file" "$staged" \
+      || ! sudo sync -f "$staged" \
+      || ! sudo mv -f "$staged" "$target_file" \
+      || ! sudo sync -f "$target_file" \
+      || ! sudo cmp -s "$source_file" "$target_file"; then
+    sudo rm -f "$staged" || true
+    echo "[!] ERROR: Install verification failed: $target_file" >&2
+    return 1
+  fi
+}
 
 service_is_running() {
   local active_state sub_state
@@ -243,7 +266,7 @@ echo "[*] Building widget..."
 make -C "$HERE"
 
 echo "[*] Installing widget binary -> ${BIN_INSTALL}"
-sudo install -D -m 0755 "$BIN_LOCAL" "$BIN_INSTALL"
+install_verified_root "$BIN_LOCAL" "$BIN_INSTALL" 0755
 
 if [[ ! -f "${ICON_LOCAL}" ]]; then
   echo "[!] ERROR: Expected icon file not found:"
@@ -252,9 +275,9 @@ if [[ ! -f "${ICON_LOCAL}" ]]; then
 fi
 
 echo "[*] Installing p2app-control icon -> ${ICON_PIXMAP_INSTALL}"
-sudo install -D -m 0644 "${ICON_LOCAL}" "${ICON_PIXMAP_INSTALL}"
+install_verified_root "${ICON_LOCAL}" "${ICON_PIXMAP_INSTALL}" 0644
 echo "[*] Installing p2app-control theme icon -> ${ICON_THEME_INSTALL}"
-sudo install -D -m 0644 "${ICON_LOCAL}" "${ICON_THEME_INSTALL}"
+install_verified_root "${ICON_LOCAL}" "${ICON_THEME_INSTALL}" 0644
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   echo "[*] Refreshing icon cache -> ${ICON_THEME_ROOT}"
   sudo gtk-update-icon-cache -f -t "${ICON_THEME_ROOT}" >/dev/null 2>&1 || \
@@ -349,7 +372,7 @@ fi
 echo "[*] Installing root-owned p2app runtime -> ${P2APP_BIN}"
 ensure_radio_service_account
 sudo install -d -m 0755 -o root -g root "${P2APP_RUNTIME_ROOT}/bin"
-sudo install -m 0755 -o root -g root "${P2APP_SOURCE_BIN}" "${P2APP_BIN}"
+install_verified_root "${P2APP_SOURCE_BIN}" "${P2APP_BIN}" 0755
 retire_broken_p23_override
 
 echo "[*] Ensuring XDMA readiness unit exists/updated -> ${XDMA_READY_UNIT_PATH}"
@@ -482,36 +505,40 @@ if [[ ! -f "${SUDOERS_RULE}" ]] || ! sudo cmp -s "$TMP_SUDOERS" "$SUDOERS_RULE";
 fi
 rm -f "$TMP_SUDOERS"
 
-echo "[*] Reloading systemd + enabling service"
+echo "[*] Reloading systemd and applying selected P2 startup policy"
 retire_legacy_p2app_autostarts
-stop_non_service_p2app_owners
 sudo systemctl daemon-reload
-sudo systemctl enable "${UNIT_NAME}" >/dev/null
-
-start_cmd_rc=0
-if sudo systemctl is-active --quiet "${UNIT_NAME}"; then
-  sudo systemctl restart "${UNIT_NAME}" || start_cmd_rc=$?
-else
-  sudo systemctl start "${UNIT_NAME}" || start_cmd_rc=$?
-fi
-
 start_rc=0
-if [[ "${start_cmd_rc}" -ne 0 ]]; then
-  echo "[!] WARN: initial systemctl start for ${UNIT_NAME} returned ${start_cmd_rc}."
-fi
-if ! wait_for_service_running; then
-  echo "[!] WARN: ${UNIT_NAME} did not reach active/running within ${P2APP_START_TIMEOUT_SECONDS}s."
-  if [[ ! -e "${XDMA_REG_DEV}" ]]; then
-    echo "[!] WARN: ${XDMA_REG_DEV} is not present."
-    echo "[!] WARN: XDMA may be loaded but the FPGA/register device is not enumerated yet."
-    echo "[!] WARN: Provisioning will continue; p2app.service will keep retrying in the background."
+if [[ "$SELECTED_BACKEND" == "xdma" ]]; then
+  echo "[*] Direct XDMA is selected; leaving P2 inactive and disabled"
+  sudo systemctl disable --now "${UNIT_NAME}" >/dev/null
+  stop_non_service_p2app_owners
+else
+  stop_non_service_p2app_owners
+  sudo systemctl enable "${UNIT_NAME}" >/dev/null
+  start_cmd_rc=0
+  if sudo systemctl is-active --quiet "${UNIT_NAME}"; then
+    sudo systemctl restart "${UNIT_NAME}" || start_cmd_rc=$?
   else
-    echo "[!] ERROR: ${XDMA_REG_DEV} exists, but ${UNIT_NAME} is still not active."
+    sudo systemctl start "${UNIT_NAME}" || start_cmd_rc=$?
+  fi
+  if [[ "${start_cmd_rc}" -ne 0 ]]; then
+    echo "[!] WARN: initial systemctl start for ${UNIT_NAME} returned ${start_cmd_rc}."
+  fi
+  if ! wait_for_service_running; then
+    echo "[!] WARN: ${UNIT_NAME} did not reach active/running within ${P2APP_START_TIMEOUT_SECONDS}s."
+    if [[ ! -e "${XDMA_REG_DEV}" ]]; then
+      echo "[!] WARN: ${XDMA_REG_DEV} is not present."
+      echo "[!] WARN: XDMA may be loaded but the FPGA/register device is not enumerated yet."
+      echo "[!] WARN: Provisioning will continue; p2app.service will keep retrying in the background."
+    else
+      echo "[!] ERROR: ${XDMA_REG_DEV} exists, but ${UNIT_NAME} is still not active."
+      start_rc=1
+    fi
+  fi
+  if service_is_running && ! verify_single_p2app_owner; then
     start_rc=1
   fi
-fi
-if service_is_running && ! verify_single_p2app_owner; then
-  start_rc=1
 fi
 
 echo "[*] Removing legacy desktop shortcuts (window mode launcher no longer installed)"
@@ -537,7 +564,7 @@ Terminal=false
 Categories=Utility;System;
 X-GNOME-Autostart-enabled=true
 EOF5
-  install -m 0644 "$TMP_AUTOSTART" "$AUTOSTART_FILE"
+  install_verified_root "$TMP_AUTOSTART" "$AUTOSTART_FILE" 0644
   if [[ ${EUID:-$UID} -eq 0 && -n "$TARGET_USER" ]] && id -u "$TARGET_USER" >/dev/null 2>&1; then
     TARGET_GROUP="$(id -gn "$TARGET_USER")"
     chown "$TARGET_USER:$TARGET_GROUP" "$AUTOSTART_DIR" "$AUTOSTART_FILE" || true

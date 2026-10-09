@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include "saturn-provision-ui-state.h"
+
 struct UiState
 {
     GtkWidget *window;
@@ -341,6 +343,7 @@ static gboolean on_tick(gpointer user_data)
     std::string status_message;
     const bool has_status = read_status_line(ui->status_file, &status_state, &status_message);
     const bool has_completion = file_exists(ui->completion_file);
+    const bool current_success = saturn_provision_run_succeeded(has_completion, has_status, status_state);
 
     if (!ui->finished)
     {
@@ -358,7 +361,7 @@ static gboolean on_tick(gpointer user_data)
             set_result(ui, "<span foreground='#f4d35e' weight='bold' size='x-large'>Provisioning skipped</span>");
             set_status(ui, status_message.empty() ? "System already provisioned. No new run executed." : status_message);
         }
-        else if (has_completion || (has_status && status_state == "SUCCESS"))
+        else if (current_success)
         {
             ui->finished = true;
             gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(ui->progress_bar), 1.0);
@@ -391,7 +394,7 @@ static gboolean on_tick(gpointer user_data)
 
     if (ui->finished)
     {
-        if (has_completion || (has_status && status_state == "SUCCESS"))
+        if (current_success)
         {
             maybe_prompt_reboot(ui);
         }

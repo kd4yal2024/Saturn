@@ -821,18 +821,32 @@ get_boot_cmdline_file() {
   return 1
 }
 
+_saturn_write_usb_host_overlay() {
+  local boot_config="$1"
+  if grep -Eq '^[[:space:]]*dtoverlay=dwc2,dr_mode=host([[:space:]]*#.*)?$' "$boot_config"; then
+    return 0
+  elif grep -Eq '^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2,dr_mode=host' "$boot_config"; then
+    sed -i -E 's/^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2,dr_mode=host.*/dtoverlay=dwc2,dr_mode=host/' "$boot_config"
+  else
+    printf '\n# enable USB\ndtoverlay=dwc2,dr_mode=host\n' >>"$boot_config"
+  fi
+}
+
+_saturn_write_mousepoll() {
+  local boot_cmdline="$1" existing_cmdline
+  if grep -Eq '(^|[[:space:]])usbhid\.mousepoll=0([[:space:]]|$)' "$boot_cmdline"; then
+    return 0
+  fi
+  existing_cmdline="$(tr -d '\n' < "$boot_cmdline")"
+  printf '%s usbhid.mousepoll=0\n' "$existing_cmdline" >"$boot_cmdline"
+}
+
 configure_usb_boot_tweaks() {
-  local boot_config boot_cmdline existing_cmdline
+  local boot_config boot_cmdline
 
   boot_config="$(get_boot_config_file 2>/dev/null || true)"
   if [[ -n "$boot_config" ]]; then
-    if grep -Eq '^[[:space:]]*dtoverlay=dwc2,dr_mode=host([[:space:]]*#.*)?$' "$boot_config"; then
-      :
-    elif grep -Eq '^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2,dr_mode=host' "$boot_config"; then
-      sed -i -E 's/^[[:space:]]*#?[[:space:]]*dtoverlay=dwc2,dr_mode=host.*/dtoverlay=dwc2,dr_mode=host/' "$boot_config" || true
-    else
-      printf '\n# enable USB\ndtoverlay=dwc2,dr_mode=host\n' >>"$boot_config"
-    fi
+    saturn_boot_config_update "$boot_config" _saturn_write_usb_host_overlay
     log "Ensured USB host overlay in $boot_config"
   else
     log "WARN: Could not locate /boot/firmware/config.txt or /boot/config.txt for USB overlay setup."
@@ -840,12 +854,7 @@ configure_usb_boot_tweaks() {
 
   boot_cmdline="$(get_boot_cmdline_file 2>/dev/null || true)"
   if [[ -n "$boot_cmdline" ]]; then
-    if grep -Eq '(^|[[:space:]])usbhid\.mousepoll=0([[:space:]]|$)' "$boot_cmdline"; then
-      :
-    else
-      existing_cmdline="$(tr -d '\n' < "$boot_cmdline")"
-      printf '%s usbhid.mousepoll=0\n' "$existing_cmdline" >"$boot_cmdline"
-    fi
+    saturn_boot_config_update "$boot_cmdline" _saturn_write_mousepoll
     log "Ensured usbhid.mousepoll=0 in $boot_cmdline"
   else
     log "WARN: Could not locate /boot/firmware/cmdline.txt or /boot/cmdline.txt for mousepoll tuning."
@@ -897,22 +906,23 @@ install_desktop_dev_tools() {
   fi
 }
 
+_saturn_write_i2c_setting() {
+  local boot_config="$1"
+  if grep -Eq '^[[:space:]]*dtparam=i2c_arm=on([[:space:]]*#.*)?$' "$boot_config"; then
+    return 0
+  elif grep -Eq '^[[:space:]]*#?[[:space:]]*dtparam=i2c_arm=on' "$boot_config"; then
+    sed -i -E 's/^[[:space:]]*#?[[:space:]]*dtparam=i2c_arm=on.*/dtparam=i2c_arm=on/' "$boot_config"
+  else
+    printf '\n# Enabled by Saturn provisioning\ndtparam=i2c_arm=on\n' >>"$boot_config"
+  fi
+}
+
 enable_i2c_fallback() {
   local boot_config
   boot_config="$(get_boot_config_file 2>/dev/null || true)"
 
   if [[ -n "$boot_config" ]]; then
-    if grep -Eq '^[[:space:]]*dtparam=i2c_arm=on([[:space:]]*#.*)?$' "$boot_config"; then
-      :
-    elif grep -Eq '^[[:space:]]*#?[[:space:]]*dtparam=i2c_arm=on' "$boot_config"; then
-      if ! sed -i -E 's/^[[:space:]]*#?[[:space:]]*dtparam=i2c_arm=on.*/dtparam=i2c_arm=on/' "$boot_config"; then
-        log "WARN: Failed to update dtparam=i2c_arm=on in $boot_config"
-      fi
-    else
-      if ! printf '\n# Enabled by Saturn provisioning\ndtparam=i2c_arm=on\n' >>"$boot_config"; then
-        log "WARN: Failed to append dtparam=i2c_arm=on to $boot_config"
-      fi
-    fi
+    saturn_boot_config_update "$boot_config" _saturn_write_i2c_setting
     log "Ensured I2C boot setting in $boot_config"
   else
     log "WARN: Could not locate /boot/firmware/config.txt or /boot/config.txt for I2C boot setting."

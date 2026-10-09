@@ -131,6 +131,23 @@ mark_trusted() {
   gio set "$f" metadata::trusted true 2>/dev/null || true
 }
 
+install_verified_file() {
+  local source_file="$1" target_file="$2" mode="$3" staged
+  [[ -s "$source_file" ]] || { log "ERROR: Empty install source: $source_file"; return 1; }
+  mkdir -p "$(dirname "$target_file")" || return 1
+  staged="$(mktemp "${target_file}.saturn.XXXXXX")" || return 1
+  if ! install -m "$mode" "$source_file" "$staged" \
+      || ! cmp -s "$source_file" "$staged" \
+      || ! sync -f "$staged" \
+      || ! mv -f "$staged" "$target_file" \
+      || ! sync -f "$target_file" \
+      || ! cmp -s "$source_file" "$target_file"; then
+    rm -f "$staged"
+    log "ERROR: Install verification failed: $target_file"
+    return 1
+  fi
+}
+
 find_icon() {
   local stem="$1" icon=""
   if [[ -d "$SHORTCUT_SRC/icons" ]]; then
@@ -163,7 +180,7 @@ install_theme_icons() {
         ;;
     esac
 
-    if ! install -Dm644 "$ic" "$dest"; then
+    if ! install_verified_file "$ic" "$dest" 0644; then
       log "ERROR: Failed to install icon '$ic' to '$dest'"
       return 1
     fi
@@ -271,10 +288,18 @@ install_desktop_file_processed() {
   mkdir -p "$apps_dir" "$desk_dir"
 
   local tmp; tmp="$(mktemp)"
-  add_path_key_if_missing "$src" "$tmp"
+  if ! add_path_key_if_missing "$src" "$tmp" \
+      || [[ ! -s "$tmp" ]] \
+      || ! grep -Fxq '[Desktop Entry]' "$tmp" \
+      || ! grep -q '^Exec=' "$tmp" \
+      || ! grep -q '^Icon=' "$tmp"; then
+    rm -f "$tmp"
+    log "ERROR: Invalid desktop launcher source: $src"
+    return 1
+  fi
 
-  install -Dm644 "$tmp" "$apps_dir/$base"
-  install -Dm644 "$tmp" "$desk_dir/$base"
+  install_verified_file "$tmp" "$apps_dir/$base" 0644 || { rm -f "$tmp"; return 1; }
+  install_verified_file "$tmp" "$desk_dir/$base" 0644 || { rm -f "$tmp"; return 1; }
   rm -f "$tmp"
 
   # Desktop copy: executable + trusted
@@ -307,7 +332,7 @@ repair_existing_saturn_launchers_in_dir() {
         log "Repairing missing Path= in: $d/$base"
         tmp="$(mktemp)"
         add_path_key_if_missing "$f" "$tmp"
-        install -Dm644 "$tmp" "$f"
+        install_verified_file "$tmp" "$f" 0644 || { rm -f "$tmp"; return 1; }
         rm -f "$tmp"
       fi
     fi
@@ -377,7 +402,7 @@ else
       log "Skipping deprecated launcher from repo: $base"
       continue
     fi
-    install_desktop_file_processed "$f" "$base" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
+    install_desktop_file_processed "$f" "$base" "$USER_APPS_DIR" "$USER_DESKTOP_DIR" || exit 1
   done
 fi
 
@@ -391,21 +416,21 @@ ensure_core_launcher() {
   # If repo provides this launcher, prefer it (but still process it so Path= is injected)
   if [[ -f "$SHORTCUT_SRC/$base" ]]; then
     install_desktop_file_processed "$SHORTCUT_SRC/$base" "$base" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
-    return 0
+    return $?
   fi
 
   # Otherwise, generate our own launcher
   local tmp; tmp="$(mktemp)"
   write_launcher "$tmp" "$name" "$bin" "$comment" "$(find_icon "$icon_stem")" "Utility;Engineering;" "false"
-  install_desktop_file_processed "$tmp" "$base" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
+  install_desktop_file_processed "$tmp" "$base" "$USER_APPS_DIR" "$USER_DESKTOP_DIR" || { rm -f "$tmp"; return 1; }
   rm -f "$tmp"
 }
 
-ensure_core_launcher "BiasCheck.desktop"       "Bias Check"        "$APP_BIAS_BIN"   "Run the Saturn Bias Check utility"            "biascheck"
-ensure_core_launcher "AudioTest.desktop"       "Audio Test"        "$APP_AUDIO_BIN"  "Run the Saturn Audio Test utility"            "audiotest"
-ensure_core_launcher "AXIReaderWriter.desktop" "AXI Reader/Writer" "$APP_AXI_BIN"    "Read/write AXI registers on Saturn hardware"  "axi"
-ensure_core_launcher "FlashWriter.desktop"     "Flash Writer"      "$APP_FLASH_BIN"  "Program SPI flash for the FPGA/SoC"           "flashwriter"
-ensure_core_launcher "SaturnLCDSetup.desktop"  "Saturn LCD Setup"  "$APP_LCD_SETUP_BIN" "Inspect and apply Saturn LCD boot profiles"  "saturn-lcd-setup"
+ensure_core_launcher "BiasCheck.desktop"       "Bias Check"        "$APP_BIAS_BIN"   "Run the Saturn Bias Check utility"            "biascheck" || exit 1
+ensure_core_launcher "AudioTest.desktop"       "Audio Test"        "$APP_AUDIO_BIN"  "Run the Saturn Audio Test utility"            "audiotest" || exit 1
+ensure_core_launcher "AXIReaderWriter.desktop" "AXI Reader/Writer" "$APP_AXI_BIN"    "Read/write AXI registers on Saturn hardware"  "axi" || exit 1
+ensure_core_launcher "FlashWriter.desktop"     "Flash Writer"      "$APP_FLASH_BIN"  "Program SPI flash for the FPGA/SoC"           "flashwriter" || exit 1
+ensure_core_launcher "SaturnLCDSetup.desktop"  "Saturn LCD Setup"  "$APP_LCD_SETUP_BIN" "Inspect and apply Saturn LCD boot profiles"  "saturn-lcd-setup" || exit 1
 
 # ---------- Saturn Update Manager web launcher (ALWAYS update) ----------
 hr; echo; log "Ensuring Saturn Update Manager web launcher"; echo; hr
@@ -413,18 +438,18 @@ SATURN_DESKTOP_NAME="SaturnUpdateManager.desktop"
 
 # Prefer repo version if it exists; else generate.
 if [[ -f "$SHORTCUT_SRC/$SATURN_DESKTOP_NAME" ]]; then
-  install_desktop_file_processed "$SHORTCUT_SRC/$SATURN_DESKTOP_NAME" "$SATURN_DESKTOP_NAME" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
+  install_desktop_file_processed "$SHORTCUT_SRC/$SATURN_DESKTOP_NAME" "$SATURN_DESKTOP_NAME" "$USER_APPS_DIR" "$USER_DESKTOP_DIR" || exit 1
 else
   tmp="$(mktemp)"
   write_launcher "$tmp" "Saturn Update Manager" "$(browser_cmd)" "Open the Saturn Update Manager web UI" "$(find_icon saturn-update-manager)" "Utility;Engineering;" "false"
-  install_desktop_file_processed "$tmp" "$SATURN_DESKTOP_NAME" "$USER_APPS_DIR" "$USER_DESKTOP_DIR"
+  install_desktop_file_processed "$tmp" "$SATURN_DESKTOP_NAME" "$USER_APPS_DIR" "$USER_DESKTOP_DIR" || { rm -f "$tmp"; exit 1; }
   rm -f "$tmp"
 fi
 
 # ---------- repair any previously-installed Saturn launchers ----------
 hr; echo; log "Repairing any existing Saturn launchers missing Path="; echo; hr
-repair_existing_saturn_launchers_in_dir "$USER_APPS_DIR"
-repair_existing_saturn_launchers_in_dir "$USER_DESKTOP_DIR"
+repair_existing_saturn_launchers_in_dir "$USER_APPS_DIR" || exit 1
+repair_existing_saturn_launchers_in_dir "$USER_DESKTOP_DIR" || exit 1
 
 # Ensure Desktop launchers are executable + trusted (again, cheap + safe)
 chmod +x "$USER_DESKTOP_DIR"/*.desktop 2>/dev/null || true
@@ -435,8 +460,9 @@ done
 # ---------- system-wide (root) ----------
 if [[ ${EUID:-$UID} -eq 0 ]]; then
   log "Root mode: installing launchers to /usr/share/applications"
-  find "$USER_APPS_DIR" -maxdepth 1 -type f -iname '*.desktop' -print0 \
-    | xargs -0 -I {} install -Dm644 "{}" "/usr/share/applications/$(basename "{}")"
+  while IFS= read -r -d '' launcher; do
+    install_verified_file "$launcher" "/usr/share/applications/$(basename "$launcher")" 0644 || exit 1
+  done < <(find "$USER_APPS_DIR" -maxdepth 1 -type f -iname '*.desktop' -print0)
   if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database /usr/share/applications || true
   fi

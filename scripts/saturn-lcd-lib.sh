@@ -18,6 +18,9 @@
 [[ -n "${_SATURN_LCD_LIB_LOADED:-}" ]] && return 0
 _SATURN_LCD_LIB_LOADED=1
 
+# shellcheck source=saturn-boot-config.sh
+source "$(dirname "${BASH_SOURCE[0]}")/saturn-boot-config.sh"
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -509,6 +512,18 @@ EOF
 # configure_lcd_profile
 # Resolves SATURN_LCD_PROFILE and writes the managed block to config.txt.
 # No-op when SATURN_LCD_DETECT_ONLY=1 or profile is none/unresolvable.
+_saturn_write_lcd_profile() {
+  local boot_config="$1" block="$2"
+  sed -i -E '/^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare(-800x480|-panel,.*)[[:space:]]*$/d' "$boot_config" || return 1
+  sed -i '/^# BEGIN SATURN LCD PROFILE$/,/^# END SATURN LCD PROFILE$/d' "$boot_config" || return 1
+  {
+    printf '\n# BEGIN SATURN LCD PROFILE\n'
+    printf '# Managed by Saturn provisioning (non-destructive append)\n'
+    printf '%s\n' "$block"
+    printf '# END SATURN LCD PROFILE\n'
+  } >>"$boot_config"
+}
+
 configure_lcd_profile() {
   local boot_config profile_raw profile block
 
@@ -532,16 +547,7 @@ configure_lcd_profile() {
     return 0
   fi
 
-  # Remove legacy/foreign panel overlays before applying managed block.
-  sed -i -E '/^[[:space:]]*dtoverlay=vc4-kms-dsi-waveshare(-800x480|-panel,.*)[[:space:]]*$/d' "$boot_config"
-
-  sed -i '/^# BEGIN SATURN LCD PROFILE$/,/^# END SATURN LCD PROFILE$/d' "$boot_config"
-  {
-    printf '\n# BEGIN SATURN LCD PROFILE\n'
-    printf '# Managed by Saturn provisioning (non-destructive append)\n'
-    printf '%s\n' "$block"
-    printf '# END SATURN LCD PROFILE\n'
-  } >>"$boot_config"
+  saturn_boot_config_update "$boot_config" _saturn_write_lcd_profile "$block" || return 1
 
   _saturn_lcd_log "Applied SATURN_LCD_PROFILE='$profile' to $boot_config"
   _saturn_lcd_log "HDMI settings preserved (existing HDMI lines were not removed)."

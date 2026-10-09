@@ -328,6 +328,7 @@ git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
   die "Repo root is not a git checkout: $REPO_ROOT"
 [[ -d "$REPO_ROOT/update_manager" ]] || die "Repo root does not contain update_manager/: $REPO_ROOT"
 EXTRA_PACKAGED_SCRIPTS=(
+  "$REPO_ROOT/scripts/saturn-boot-config.sh"
   "$REPO_ROOT/scripts/fix-LED-power-button.sh"
   "$REPO_ROOT/scripts/install-shutdown-waiter-service.sh"
   "$REPO_ROOT/scripts/shutdown-waiter.sh"

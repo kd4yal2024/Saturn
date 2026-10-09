@@ -430,6 +430,7 @@ PY
   local extra_script
   for extra_script in \
     scripts/fix-LED-power-button.sh \
+    scripts/saturn-boot-config.sh \
     scripts/install-shutdown-waiter-service.sh \
     scripts/shutdown-waiter.sh \
     scripts/setup-eth-fallback.sh

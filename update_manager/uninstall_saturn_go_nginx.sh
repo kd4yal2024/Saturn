@@ -53,6 +53,7 @@ SUDOERS_FILE="/etc/sudoers.d/saturn-go-maintenance"
 PRIVILEGED_HELPERS=(
   "$PRIVILEGED_SCRIPTS_DIR/saturn-appliance-power-root.sh"
   "$PRIVILEGED_SCRIPTS_DIR/fix-LED-power-button.sh"
+  "$PRIVILEGED_SCRIPTS_DIR/saturn-boot-config.sh"
   "$PRIVILEGED_SCRIPTS_DIR/install-shutdown-waiter-service.sh"
   "$PRIVILEGED_SCRIPTS_DIR/shutdown-waiter.sh"
   "$PRIVILEGED_SCRIPTS_DIR/setup-eth-fallback.sh"
