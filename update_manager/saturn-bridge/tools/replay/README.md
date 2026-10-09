@@ -40,7 +40,12 @@ tools/replay/run_replay_bridge.sh \
 
 * `SATURN_REPLAY_TCP_NODELAY=1` in the environment sets `TCP_NODELAY` on every
   socket the Bridge accepts. The Bridge on `main` sets it nowhere, so this runs
-  the "does it help" experiment without changing the Bridge. (An unmerged
+  the "does it help" experiment without changing the Bridge. The shim checks
+  the `setsockopt` result, reads the option back from the socket, and prints
+  one `TCP_NODELAY enabled on accepted fd N (read back 1)` line to the Bridge's
+  stderr per connection (or `TCP_NODELAY FAILED …`). The transport screen reads
+  those lines and fails if the run asked for it and it is not confirmed on every
+  arm's connection, or if it was not asked for and was set. (An unmerged
   `silverforge/rx-smoothness-g2` branch, commit `a90f33a`, adds
   `stream.set_nodelay(true)` to `handle_client`, and its 2026-10-02 trial
   document reports the browser-facing TLS socket result on a real G2.)
@@ -54,6 +59,25 @@ tools/replay/run_replay_bridge.sh \
   That arrangement has not been exercised.
 
 ## Check it
+
+The tests that start the Bridge, `tests/replay_e2e.rs` and
+`tests/replay_transport_screen.rs`, share one harness (`tests/common/mod.rs`)
+with these rules, which `tests/replay_harness.rs` checks with dummy children (no
+Bridge, no WDSP; it runs in the ordinary `cargo test`):
+
+* **Shutdown.** The harness sends SIGTERM to the *running* Bridge and requires it
+  to exit with status 0, which is what the Bridge does (measured 2026-10-09). A
+  nonzero exit, a death by SIGTERM, SIGSEGV, SIGABRT or SIGKILL, or an exit
+  before the harness asked, fails the test.
+* **Logs.** The Bridge's stdout and stderr go to files, never pipes, so a verbose
+  Bridge cannot block on a full pipe while it is being measured.
+* **Evidence.** Each run has its own directory (`$TMPDIR/saturn-replay-<pid>-<n>-<time>/`)
+  with `logs/`, `work/` (perf.json, replay statistics) and, for the transport
+  screen, `results/` (the table, every audio inter-arrival time, the final
+  perf.json, the Bridge's path and SHA-256, the settings). It is deleted only
+  if the test passed. It is kept on any failure, always for the transport
+  screen (its records are the point), and for any run when
+  `SATURN_REPLAY_KEEP=1`. The path is printed.
 
 `tests/replay_e2e.rs` starts the Bridge through this runner and checks what a
 client sees: raw IQ (rate, frame size, carrier level and mirror rejection),

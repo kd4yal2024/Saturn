@@ -367,10 +367,27 @@ int sched_getparam(pid_t pid, struct sched_param *param) {
   return real_getparam(pid, param);
 }
 
+// Sets TCP_NODELAY and says so, on stderr, for every accepted socket. The
+// outcome is checked and read back from the socket, so a run can confirm that
+// the option really is on (a silent failure would make a "NODELAY" arm identical
+// to the default one). errno is preserved for the caller of accept().
 static int with_nodelay(int accepted) {
   if (accepted >= 0 && nodelay_accepted) {
-    int one = 1;
-    setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    int saved_errno = errno;
+    int one = 1, readback = 0;
+    socklen_t length = sizeof(readback);
+    if (setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) != 0) {
+      fprintf(stderr, "xdma_replay_shim: TCP_NODELAY FAILED on accepted fd %d: %s\n", accepted,
+              strerror(errno));
+    } else if (getsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &readback, &length) != 0 ||
+               readback == 0) {
+      fprintf(stderr, "xdma_replay_shim: TCP_NODELAY FAILED to read back as set on accepted fd %d\n",
+              accepted);
+    } else {
+      fprintf(stderr, "xdma_replay_shim: TCP_NODELAY enabled on accepted fd %d (read back %d)\n",
+              accepted, readback);
+    }
+    errno = saved_errno;
   }
   return accepted;
 }

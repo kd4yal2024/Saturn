@@ -15,6 +15,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::fs;
 use std::time::{Duration, Instant};
 
@@ -138,30 +139,83 @@ fn run_arm(replay: &Replay, name: &'static str, display: Display, with_audio: bo
     arm
 }
 
-fn report(arms: &[Arm]) {
-    println!("\nArm  secs  IQ Mbit/s  rows Mbit/s  audio Mbit/s  IQ fps  row fps  audio fps  gaps  audio gap ms p50/p95/p99/max  late(>2x)  Bridge CPU%");
+fn report(arms: &[Arm]) -> String {
+    let mut out = String::new();
+    writeln!(out, "\nArm  secs  IQ Mbit/s  rows Mbit/s  audio Mbit/s  IQ fps  row fps  audio fps  gaps  audio gap ms p50/p95/p99/max  late(>2x)  Bridge CPU%").unwrap();
     for arm in arms {
         let mbit = |bytes: u64| bytes as f64 * 8.0 / arm.seconds / 1e6;
         let mut intervals = arm.audio_intervals_ms.clone();
         intervals.sort_by(f64::total_cmp);
         let late = intervals.iter().filter(|&&v| v > 2.0 * NOMINAL_AUDIO_PERIOD_MS).count();
-        println!(
+        writeln!(
+            out,
             "{:<4} {:>4.0}  {:>9.2}  {:>11.2}  {:>12.2}  {:>6.1}  {:>7.1}  {:>9.1}  {:>4}  {:>7.1}/{:.1}/{:.1}/{:.1}  {:>9}  {:>10.1}",
             arm.name, arm.seconds, mbit(arm.iq_bytes), mbit(arm.row_bytes), mbit(arm.audio_bytes),
             arm.iq_frames as f64 / arm.seconds, arm.row_frames as f64 / arm.seconds,
             arm.audio_frames as f64 / arm.seconds, arm.audio_gaps,
             percentile(&intervals, 0.50), percentile(&intervals, 0.95), percentile(&intervals, 0.99),
             intervals.last().copied().unwrap_or(f64::NAN), late, arm.bridge_cpu_percent
-        );
+        )
+        .unwrap();
     }
-    println!("\nBridge counters after each arm (session values; audio_dropped_s is per second):");
+    writeln!(out, "\nBridge counters after each arm (session values; audio_dropped_s is per second):").unwrap();
     for arm in arms {
         let values: Vec<String> = arm
             .perf
             .iter()
             .map(|(key, value)| format!("{key}={}", value.map_or("n/a".into(), |v| format!("{v:.0}"))))
             .collect();
-        println!("  {:<4} {}", arm.name, values.join("  "));
+        writeln!(out, "  {:<4} {}", arm.name, values.join("  ")).unwrap();
+    }
+    out
+}
+
+/// TCP_NODELAY as the shim reports it for the sockets the Bridge accepted. A run
+/// that asked for it must show it set and read back on every arm's connection;
+/// a run that did not ask must show none. Anything else means the arm is not
+/// what its label says.
+fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), String>) {
+    let requested = std::env::var("SATURN_REPLAY_TCP_NODELAY").is_ok_and(|value| value == "1");
+    let log = replay.log_text("stderr.log");
+    let enabled = log.matches("TCP_NODELAY enabled on accepted fd").count();
+    let failed = log.matches("TCP_NODELAY FAILED").count();
+    let verdict = if failed != 0 {
+        Err("the shim could not set or read back TCP_NODELAY".to_string())
+    } else if requested && enabled < connections {
+        Err(format!("TCP_NODELAY was requested but confirmed on {enabled} of {connections} accepted sockets"))
+    } else if !requested && enabled != 0 {
+        Err("TCP_NODELAY was not requested but was set".to_string())
+    } else {
+        Ok(())
+    };
+    let text = format!(
+        "TCP_NODELAY requested: {requested}; confirmed (set and read back) on {enabled} accepted sockets; failures: {failed}"
+    );
+    (text, verdict)
+}
+
+/// The records a published comparison rests on, kept in the run directory:
+/// the table, every audio inter-arrival time, the Bridge's final perf.json and
+/// the settings of the run.
+fn save_records(replay: &Replay, arms: &[Arm], table: &str, nodelay: &str, window: Duration) {
+    let dir = replay.root().join("results");
+    fs::create_dir_all(&dir).expect("create the results directory");
+    let mut info = String::new();
+    writeln!(info, "bridge: {}", env!("CARGO_BIN_EXE_saturn-bridge")).unwrap();
+    if let Ok(output) = std::process::Command::new("sha256sum").arg(env!("CARGO_BIN_EXE_saturn-bridge")).output() {
+        write!(info, "bridge sha256: {}", String::from_utf8_lossy(&output.stdout)).unwrap();
+    }
+    writeln!(info, "measured window per arm: {} s", window.as_secs()).unwrap();
+    writeln!(info, "{nodelay}").unwrap();
+    writeln!(info, "tones: {TONE_OFFSET_HZ} Hz at -30 dBFS, {SAMPLE_RATE} S/s").unwrap();
+    fs::write(dir.join("run-info.txt"), info).unwrap();
+    fs::write(dir.join("transport-screen.txt"), table).unwrap();
+    for arm in arms {
+        let rows: Vec<String> = arm.audio_intervals_ms.iter().map(|v| format!("{v:.3}")).collect();
+        fs::write(dir.join(format!("arm-{}-audio-intervals-ms.txt", arm.name)), rows.join("\n") + "\n").unwrap();
+    }
+    if let Ok(perf) = fs::read(replay.work.join("perf.json")) {
+        fs::write(dir.join("perf-final.json"), perf).unwrap();
     }
 }
 
@@ -171,6 +225,8 @@ fn transport_screen_of_raw_iq_against_spectrum_rows() {
     let seconds: u64 = std::env::var("SATURN_SCREEN_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
     let window = Duration::from_secs(seconds);
     let mut replay = Replay::start();
+    // This is a measurement: its records are the point, so they are kept.
+    replay.keep();
     replay.wait_ready(Duration::from_secs(300));
 
     let arms = vec![
@@ -179,7 +235,16 @@ fn transport_screen_of_raw_iq_against_spectrum_rows() {
         run_arm(&replay, "A2", Display::RawIq, true, window),
         run_arm(&replay, "C", Display::None, true, window),
     ];
-    report(&arms);
+    let table = report(&arms);
+    print!("{table}");
+    let (nodelay, nodelay_verdict) = nodelay_summary(&replay, arms.len());
+    println!("\n{nodelay}");
+    save_records(&replay, &arms, &table, &nodelay, window);
+    println!("records kept in {}", replay.root().join("results").display());
+    // Judged after the records are saved, so a failure still leaves them.
+    if let Err(why) = nodelay_verdict {
+        panic!("{why}");
+    }
 
     for arm in &arms {
         assert!(arm.audio_frames > 0, "{}: no audio", arm.name);
@@ -193,5 +258,5 @@ fn transport_screen_of_raw_iq_against_spectrum_rows() {
         a1.iq_bytes as f64 / b.row_bytes as f64 > 10.0,
         "rows should cost far less than raw IQ"
     );
-    let _ = replay.stop();
+    replay.stop_clean();
 }
