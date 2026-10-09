@@ -1291,7 +1291,7 @@ fn run(
                         CancellationCheck::Undetermined => {
                             if last_zero_iq_log_at.elapsed() >= TX_ZERO_IQ_LOG_INTERVAL {
                                 eprintln!(
-                                    "saturn-bridge: TX key deferred: more than {MAX_TX_PENDING_COMMANDS} commands are queued behind the arm"
+                                    "saturn-bridge: TX key deferred: command inspection limit ({MAX_TX_PENDING_COMMANDS}) reached behind the arm"
                                 );
                                 last_zero_iq_log_at = Instant::now();
                             }
