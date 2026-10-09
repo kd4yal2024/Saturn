@@ -1019,6 +1019,82 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Outcome of a tuning request against the direct receive path.
+#[derive(Debug, PartialEq, Eq)]
+enum TuningOutcome {
+    Applied,
+    /// The request is outside what the direct receive path supports. The
+    /// model and the registers are exactly as they were before the request.
+    Rejected(String),
+}
+
+/// Applies one tuning command to the model and, through `tune`, to the
+/// hardware. The model is committed only once the receive center has been
+/// accepted, so a rejected or failed request leaves it unchanged. An
+/// unsupported request is a `Rejected` outcome and receive continues; an
+/// error returned by `tune` is a device fault and is propagated.
+fn apply_tuning(
+    model: &mut RadioModel,
+    command: &TciCommand,
+    tune: impl FnOnce(u32) -> Result<(), XdmaError>,
+) -> Result<TuningOutcome, XdmaError> {
+    let saved = tuning_state(model);
+    let center_hz = match command {
+        TciCommand::SetVfoA(frequency_hz) => {
+            model.desired.vfo_a_hz = *frequency_hz;
+            model.sync_vfo_routes();
+            model.desired.iq_center_hz
+        }
+        TciCommand::SetVfoB(frequency_hz) => {
+            model.desired.vfo_b_hz = *frequency_hz;
+            model.sync_vfo_routes();
+            model.desired.iq_center_hz
+        }
+        TciCommand::SetActiveVfo(active) => {
+            model.desired.active_vfo = (*active).min(1);
+            model.sync_vfo_routes();
+            model.desired.iq_center_hz
+        }
+        TciCommand::SetIqCenter(frequency_hz) => *frequency_hz,
+        _ => return Ok(TuningOutcome::Applied),
+    };
+    // Check the capability before touching the hardware. A failure here is
+    // a problem with the request, not with the device.
+    if let Err(error) = crate::xdma_rx::validate_frequency(center_hz) {
+        restore_tuning(model, saved);
+        return Ok(TuningOutcome::Rejected(error.to_string()));
+    }
+    if let Err(error) = tune(center_hz) {
+        restore_tuning(model, saved);
+        return Err(error);
+    }
+    model.desired.iq_center_hz = center_hz;
+    Ok(TuningOutcome::Applied)
+}
+
+/// VFO A, VFO B, active VFO, receive center and transmit frequency.
+type TuningState = (u32, u32, u8, u32, u32);
+
+fn tuning_state(model: &RadioModel) -> TuningState {
+    (
+        model.desired.vfo_a_hz,
+        model.desired.vfo_b_hz,
+        model.desired.active_vfo,
+        model.desired.iq_center_hz,
+        model.desired.tx_frequency_hz,
+    )
+}
+
+fn restore_tuning(model: &mut RadioModel, saved: TuningState) {
+    (
+        model.desired.vfo_a_hz,
+        model.desired.vfo_b_hz,
+        model.desired.active_vfo,
+        model.desired.iq_center_hz,
+        model.desired.tx_frequency_hz,
+    ) = saved;
+}
+
 fn handle_command(
     command: TciCommand,
     radio_model: &Arc<Mutex<RadioModel>>,
@@ -1030,7 +1106,7 @@ fn handle_command(
     remote_tx_rf_enabled: bool,
     tx_audio_ingress: &TxAudioIngress,
 ) -> Result<CommandEffects, Box<dyn Error>> {
-    let effects = command_effects(&command);
+    let mut effects = command_effects(&command);
     let command = match command {
         TciCommand::MicAudioFrame(frame) => {
             if tx_control.requested {
@@ -1065,32 +1141,30 @@ fn handle_command(
         TciCommand::SatpControl { client_id, action } => {
             crate::satp_control::handle(&action, client_id, &mut model, tci, tx_cmd_tx);
         }
-        TciCommand::SetVfoA(frequency_hz) => {
-            model.desired.vfo_a_hz = frequency_hz;
-            model.sync_vfo_routes();
-            rx.tune(model.desired.iq_center_hz)?;
-            let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
-        }
-        TciCommand::SetVfoB(frequency_hz) => {
-            model.desired.vfo_b_hz = frequency_hz;
-            model.sync_vfo_routes();
-            rx.tune(model.desired.iq_center_hz)?;
-            let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
-        }
-        TciCommand::SetActiveVfo(active) => {
-            model.desired.active_vfo = active.min(1);
-            model.sync_vfo_routes();
-            rx.tune(model.desired.iq_center_hz)?;
-            let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+        command @ (TciCommand::SetVfoA(_)
+        | TciCommand::SetVfoB(_)
+        | TciCommand::SetActiveVfo(_)
+        | TciCommand::SetIqCenter(_)) => {
+            match apply_tuning(&mut model, &command, |frequency_hz| rx.tune(frequency_hz))? {
+                TuningOutcome::Applied => {
+                    let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                }
+                TuningOutcome::Rejected(reason) => {
+                    eprintln!(
+                        "saturn-bridge: direct XDMA rejected tuning request {command:?}: {reason}; receive continues at {} Hz",
+                        model.desired.iq_center_hz
+                    );
+                    // Nothing was retuned: skip the IQ packetizer and spectrum
+                    // resets. The radio-state publication that follows still
+                    // returns the unchanged frequencies to the clients.
+                    effects.tuning_dirty = false;
+                }
+            }
         }
         TciCommand::SetSplitEnabled(enabled) => {
             model.desired.split_enabled = enabled;
             model.sync_vfo_routes();
             let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
-        }
-        TciCommand::SetIqCenter(frequency_hz) => {
-            rx.tune(frequency_hz)?;
-            model.desired.iq_center_hz = frequency_hz;
         }
         TciCommand::SetMode(mode) => {
             let mode = if mode == DemodMode::Wfm && !crate::wdsp::wbfm_supported() {
@@ -2333,6 +2407,153 @@ fn write_readiness(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tuning_model() -> RadioModel {
+        let mut model =
+            RadioModel::new(DIRECT_DDC_INDEX as u8, 7_100_000, 0, 384, 24, 2048, true, 4096, true);
+        model.desired.vfo_a_hz = 7_100_000;
+        model.desired.vfo_b_hz = 14_200_000;
+        model.desired.active_vfo = 0;
+        model.sync_vfo_routes();
+        model
+    }
+
+    /// Runs one command and returns the outcome and every tune the fake saw.
+    fn run_tuning(model: &mut RadioModel, command: TciCommand) -> (TuningOutcome, Vec<u32>) {
+        let mut tuned = Vec::new();
+        let outcome = apply_tuning(model, &command, |hz| {
+            tuned.push(hz);
+            Ok(())
+        })
+        .expect("a supported or rejected request is not a device fault");
+        (outcome, tuned)
+    }
+
+    #[test]
+    fn valid_tuning_commands_are_applied_and_tune_the_receive_center() {
+        let mut model = tuning_model();
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetVfoA(7_200_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [7_200_000]);
+        assert_eq!(model.desired.vfo_a_hz, 7_200_000);
+        assert_eq!(model.desired.iq_center_hz, 7_200_000);
+
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetActiveVfo(1));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [14_200_000]);
+        assert_eq!(model.desired.active_vfo, 1);
+        assert_eq!(model.desired.iq_center_hz, 14_200_000);
+
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetVfoB(14_250_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [14_250_000]);
+        assert_eq!(model.desired.vfo_b_hz, 14_250_000);
+
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetIqCenter(3_700_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [3_700_000]);
+        assert_eq!(model.desired.iq_center_hz, 3_700_000);
+    }
+
+    #[test]
+    fn an_inactive_vfo_change_retunes_the_unchanged_receive_center() {
+        let mut model = tuning_model();
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetVfoB(14_250_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [7_100_000]);
+        assert_eq!(model.desired.vfo_b_hz, 14_250_000);
+        assert_eq!(model.desired.iq_center_hz, 7_100_000);
+    }
+
+    #[test]
+    fn the_nyquist_limit_is_the_inclusive_boundary() {
+        let mut model = tuning_model();
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetVfoA(61_440_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [61_440_000]);
+
+        let before = tuning_state(&model);
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetVfoA(61_440_001));
+        assert!(matches!(outcome, TuningOutcome::Rejected(_)));
+        assert!(tuned.is_empty());
+        assert_eq!(tuning_state(&model), before);
+    }
+
+    #[test]
+    fn an_out_of_range_vfo_is_rejected_without_changing_model_or_hardware() {
+        // The TCI parser forwards any u32 frequency; the backend owns the limit.
+        let command = TciCommand::SetVfoA(100_000_000);
+
+        let mut model = tuning_model();
+        let before = tuning_state(&model);
+        let (outcome, tuned) = run_tuning(&mut model, command);
+        assert!(matches!(outcome, TuningOutcome::Rejected(_)));
+        assert!(tuned.is_empty(), "no register write may follow a rejection");
+        assert_eq!(tuning_state(&model), before);
+
+        // The next valid request still works.
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetVfoA(7_150_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [7_150_000]);
+        assert_eq!(model.desired.vfo_a_hz, 7_150_000);
+    }
+
+    #[test]
+    fn activating_an_out_of_range_vfo_is_rejected_and_keeps_the_active_vfo() {
+        let mut model = tuning_model();
+        // Accepted while inactive: nothing is tuned to it yet.
+        let (outcome, _) = run_tuning(&mut model, TciCommand::SetVfoB(100_000_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        let before = tuning_state(&model);
+
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetActiveVfo(1));
+        assert!(matches!(outcome, TuningOutcome::Rejected(_)));
+        assert!(tuned.is_empty());
+        assert_eq!(tuning_state(&model), before);
+        assert_eq!(model.desired.active_vfo, 0);
+        assert_eq!(model.desired.iq_center_hz, 7_100_000);
+    }
+
+    #[test]
+    fn an_out_of_range_iq_center_is_rejected_and_the_next_request_works() {
+        let mut model = tuning_model();
+        let before = tuning_state(&model);
+        for hz in [61_440_001, 100_000_000, u32::MAX] {
+            let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetIqCenter(hz));
+            assert!(matches!(outcome, TuningOutcome::Rejected(_)), "{hz} Hz");
+            assert!(tuned.is_empty());
+            assert_eq!(tuning_state(&model), before);
+        }
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetIqCenter(10_100_000));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert_eq!(tuned, [10_100_000]);
+        assert_eq!(model.desired.iq_center_hz, 10_100_000);
+    }
+
+    #[test]
+    fn a_device_fault_is_propagated_and_does_not_commit_the_request() {
+        let mut model = tuning_model();
+        let before = tuning_state(&model);
+        let error = apply_tuning(&mut model, &TciCommand::SetVfoA(7_200_000), |_| {
+            Err(XdmaError::Io {
+                action: "write DDC frequency register",
+                source: std::io::Error::from(std::io::ErrorKind::BrokenPipe),
+            })
+        })
+        .expect_err("a register write failure is a device fault, not a rejection");
+        assert!(matches!(error, XdmaError::Io { .. }));
+        assert_eq!(tuning_state(&model), before);
+    }
+
+    #[test]
+    fn commands_that_do_not_tune_are_not_touched() {
+        let mut model = tuning_model();
+        let before = tuning_state(&model);
+        let (outcome, tuned) = run_tuning(&mut model, TciCommand::SetSplitEnabled(true));
+        assert_eq!(outcome, TuningOutcome::Applied);
+        assert!(tuned.is_empty());
+        assert_eq!(tuning_state(&model), before);
+    }
 
     fn demand(iq: bool, audio: bool) -> TciMediaDemand {
         TciMediaDemand {

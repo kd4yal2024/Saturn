@@ -1850,7 +1850,7 @@ fn direct_ddc_sample_words() -> usize {
     RATE_CODES_TO_SAMPLE_WORDS[DIRECT_DDC_RATE_CODE as usize]
 }
 
-fn validate_frequency(frequency_hz: u32) -> Result<(), XdmaError> {
+pub(crate) fn validate_frequency(frequency_hz: u32) -> Result<(), XdmaError> {
     if frequency_hz > (ADC_SAMPLE_CLOCK_HZ as u32 / 2) {
         return Err(XdmaError::Incompatible(format!(
             "direct XDMA RX frequency {frequency_hz} Hz exceeds the 61.44 MHz Nyquist limit"
