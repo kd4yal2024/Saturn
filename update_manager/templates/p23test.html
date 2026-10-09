@@ -1639,6 +1639,53 @@ function adcTelemetryOverviewPresentation(perf, p23Status, statusError=''){
   };
 }
 /* FPGA_ADC_V30_PRESENTATION_END */
+/* BRIDGE_COMMAND_GUARDS_PRESENTATION_BEGIN */
+// Direct-XDMA command guards. These count commands the Bridge refused or
+// cancelled on purpose: queued arm requests and microphone frames removed
+// because a release or disconnect arrived after them, and numeric controls
+// refused as NaN or infinite. They are informational, not faults. Totals are
+// since the Bridge started. A missing value means an older Bridge that does not
+// report it, not zero. Deltas exist only between two samples of the same
+// Bridge process; anything else is shown as unavailable.
+function bridgeCommandGuardsPresentation(deltas, session){
+  const finite = (value)=> typeof value === 'number' && Number.isFinite(value);
+  const whole = (value)=> String(Math.round(value));
+  const fields = [
+    { delta: 'arm', total: 'command_arm_cancelled', label: 'queued arms cancelled' },
+    { delta: 'mic', total: 'command_mic_cancelled', label: 'mic frames cancelled' },
+    { delta: 'nonFinite', total: 'non_finite_controls_rejected', label: 'non-finite controls refused' },
+  ];
+  const totals = fields.map((f)=> {
+    const value = session && session[f.total];
+    return finite(value) && value >= 0 ? value : NaN;
+  });
+  const changes = fields.map((f)=> {
+    const value = deltas && deltas[f.delta];
+    return finite(value) && value >= 0 ? value : NaN;
+  });
+  if (!totals.some(finite)){
+    return {
+      state: 'unavailable',
+      summary: 'Not reported',
+      detail: 'This Bridge does not report command-guard totals; they are unavailable, not zero.',
+    };
+  }
+  const totalsText = totals.map((value)=> finite(value) ? whole(value) : 'n/a').join(' / ');
+  const changesText = fields
+    .map((f, i)=> `${f.label} ${finite(changes[i]) ? whole(changes[i]) : 'n/a'}`)
+    .join(' · ');
+  const detail = `Δ ${changesText} | Bridge-session totals ${totalsText}`;
+  if (!changes.some(finite)){
+    return { state: 'collecting', summary: 'Collecting…', detail };
+  }
+  const sum = changes.filter(finite).reduce((a, b)=> a + b, 0);
+  return {
+    state: sum > 0 ? 'activity' : 'quiet',
+    summary: sum > 0 ? `${whole(sum)} guard event(s) this interval` : 'None this interval',
+    detail,
+  };
+}
+/* BRIDGE_COMMAND_GUARDS_PRESENTATION_END */
 function updateAdcTelemetryOverview(statusError=''){
   const presentation = adcTelemetryOverviewPresentation(latestP23Perf, latestP23Status, statusError);
   setAdcSummary(presentation.summary, presentation.error);
@@ -2784,6 +2831,9 @@ function derivePerf(current){
   let directTxFifoFaultDelta = NaN;
   let directWdspResumeDelta = NaN;
   let directWdspResumeFlushFailureDelta = NaN;
+  let directArmCancelledDelta = NaN;
+  let directMicCancelledDelta = NaN;
+  let directNonFiniteControlDelta = NaN;
   if (perfPrevSample && perfPrevSample.pid === c.pid && c.tsMs > perfPrevSample.tsMs){
     dtSec = (c.tsMs - perfPrevSample.tsMs) / 1000;
     const dSys = c.sysTotal - perfPrevSample.sysTotal;
@@ -2906,6 +2956,9 @@ function derivePerf(current){
         directTxFifoFaultDelta = optionalDeltaCounter('duc_fifo_faults');
         directWdspResumeDelta = optionalDeltaCounter('wdsp_resume_events');
         directWdspResumeFlushFailureDelta = optionalDeltaCounter('wdsp_resume_flush_failures');
+        directArmCancelledDelta = optionalDeltaCounter('command_arm_cancelled');
+        directMicCancelledDelta = optionalDeltaCounter('command_mic_cancelled');
+        directNonFiniteControlDelta = optionalDeltaCounter('non_finite_controls_rejected');
       }
     }
   }
@@ -2984,6 +3037,9 @@ function derivePerf(current){
     directTxFifoFaultDelta,
     directWdspResumeDelta,
     directWdspResumeFlushFailureDelta,
+    directArmCancelledDelta,
+    directMicCancelledDelta,
+    directNonFiniteControlDelta,
     memAvailBytes: Number(current?.system?.memory?.available_bytes) || NaN,
     memTotalBytes: Number(current?.system?.memory?.total_bytes) || NaN,
     load1: Number(current?.system?.loadavg?.one),
@@ -3220,6 +3276,12 @@ function renderPerfDashboard(d, perf, alertState, baseline){
   const reliabilityRows = [
     runtimeRow('Overall health', alertState.alerts.length ? alertState.alerts[0] : (activity.active ? 'Healthy · active' : 'Healthy · waiting'), alertState.alerts.slice(1).join(' · ') || (activity.active ? 'All monitored values are within current thresholds.' : 'Idle is a normal operating state and is excluded from XDMA drop alerts.')),
     ...(d.selectedApp === 'xdma' ? [runtimeRow('Direct-XDMA integrity', directIntegrityValues.length ? `${fmtInt(directIntegrityTotal)} event(s) this interval` : 'Collecting…', `Δ header resync ${fmtInt(d.directHeaderResyncDelta)} · buffer drops ${fmtInt(d.directHostBufferDropDelta)} (${fmtBytes(d.directHostBufferDropBytesDelta)}) · discontinuities ${fmtInt(d.directHostDiscontinuityDelta)} · pool starvation ${fmtInt(d.directHostPoolStarvationDelta)} · RX FIFO thresholds ${fmtInt(d.directFifoThresholdDelta)} · V29 almost-full ${fmtInt(d.directFifoAlmostFullDelta)} · seen-empty ${fmtInt(d.directFifoEmptyObservationDelta)} (not DMA underflow) · RX/TX faults ${fmtInt(d.directFifoFaultDelta)} / ${fmtInt(d.directTxFifoFaultDelta)} · WDSP resumes ${fmtInt(d.directWdspResumeDelta)} / failures ${fmtInt(d.directWdspResumeFlushFailureDelta)} | Bridge-session ring HWM ${fmtInt(bridge?.rx_host_ring_hwm)} / 256 · drops ${fmtInt(bridge?.host_buffer_drops)} · discontinuities ${fmtInt(bridge?.host_discontinuities)} · WDSP resume last/max ${fmtInt(bridge?.wdsp_resume_last_us)} / ${fmtInt(bridge?.wdsp_resume_max_us)} µs`)] : []),
+    ...(d.selectedApp === 'xdma' ? (()=>{
+      const guards = bridgeCommandGuardsPresentation(
+        { arm: d.directArmCancelledDelta, mic: d.directMicCancelledDelta, nonFinite: d.directNonFiniteControlDelta },
+        bridge);
+      return [runtimeRow('Command guards', guards.summary, guards.detail)];
+    })() : []),
     runtimeRow('Application events', appErrorValues.length ? `${fmtInt(appErrorTotal)} error event(s)` : 'Collecting…', errorBurst),
     runtimeRow('FIFO events', fifoValues.length ? `${fmtInt(fifoTotal)} event(s)` : 'Collecting…', fifoBurst),
     runtimeRow('Network integrity', Number.isFinite(networkFaults) ? `${fmtInt(networkFaults)} error/drop event(s)` : 'Collecting…', `RX errors ${fmtInt(d.ethRxErrDelta)} · RX drops ${fmtInt(d.ethRxDropDelta)} · TX errors ${fmtInt(d.ethTxErrDelta)} · TX drops ${fmtInt(d.ethTxDropDelta)}`),
