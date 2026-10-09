@@ -39,6 +39,7 @@ touch \
   "$FIXTURE_REPO/update_manager/scripts/saturn-go-deploy-root.sh" \
   "$FIXTURE_REPO/update_manager/scripts/config.json" \
   "$FIXTURE_REPO/update_manager/scripts/themes.json" \
+  "$FIXTURE_REPO/scripts/saturn-boot-config.sh" \
   "$FIXTURE_REPO/scripts/fix-LED-power-button.sh" \
   "$FIXTURE_REPO/scripts/install-shutdown-waiter-service.sh" \
   "$FIXTURE_REPO/scripts/shutdown-waiter.sh" \
