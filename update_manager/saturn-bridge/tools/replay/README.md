@@ -38,6 +38,12 @@ tools/replay/run_replay_bridge.sh \
   --tones 1500:-30 --wisdom ~/.cache/saturn-replay/wisdom
 ```
 
+* `SATURN_REPLAY_TCP_NODELAY=1` in the environment sets `TCP_NODELAY` on every
+  socket the Bridge accepts. The Bridge on `main` sets it nowhere, so this runs
+  the "does it help" experiment without changing the Bridge. (An unmerged
+  `silverforge/rx-smoothness-g2` branch, commit `a90f33a`, adds
+  `stream.set_nodelay(true)` to `handle_client`, and its 2026-10-02 trial
+  document reports the browser-facing TLS socket result on a real G2.)
 * `--work` must be new or empty. The Bridge's `perf.json`, readiness file and
   logs go there.
 * Without `--wisdom` the Bridge plans its FFTs at start, about a minute.

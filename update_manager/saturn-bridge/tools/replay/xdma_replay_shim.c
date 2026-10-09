@@ -13,6 +13,10 @@
 //     and TX threads without it and an unprivileged user cannot have it.
 //     Nothing is actually boosted; thread timing is ordinary.
 //  3. close() clears the per-descriptor cache.
+//  4. Optionally (SATURN_REPLAY_TCP_NODELAY=1) sets TCP_NODELAY on every
+//     accepted socket. The Bridge sets it nowhere; this exists only to run
+//     the experiment "does the audio arrive more evenly with it" without
+//     changing the Bridge. It is independent of the receive replay.
 //
 // Everything else reaches the real libc. No register or DUC behavior is
 // emulated here: the register space is an ordinary file made by
@@ -29,12 +33,16 @@
 //   SATURN_REPLAY_PACING       "realtime" (default) or "free" (as fast as asked)
 //   SATURN_REPLAY_FAKE_RT      "1" (default) to fake the scheduler calls
 //   SATURN_REPLAY_STATS_PATH   write a small JSON summary here at exit
+//   SATURN_REPLAY_TCP_NODELAY  "1" to set TCP_NODELAY on accepted sockets
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
@@ -89,6 +97,9 @@ static const char *stats_path;
 static __thread int fake_policy = SCHED_OTHER;
 static __thread int fake_priority;
 
+static int nodelay_accepted;
+static int (*real_accept4)(int, struct sockaddr *, socklen_t *, int);
+static int (*real_accept)(int, struct sockaddr *, socklen_t *);
 static ssize_t (*real_pread64)(int, void *, size_t, off_t);
 static ssize_t (*real_pread)(int, void *, size_t, off_t);
 static int (*real_close)(int);
@@ -145,6 +156,10 @@ __attribute__((constructor)) static void shim_init(void) {
   real_setscheduler = dlsym(RTLD_NEXT, "sched_setscheduler");
   real_getscheduler = dlsym(RTLD_NEXT, "sched_getscheduler");
   real_getparam = dlsym(RTLD_NEXT, "sched_getparam");
+  real_accept4 = dlsym(RTLD_NEXT, "accept4");
+  real_accept = dlsym(RTLD_NEXT, "accept");
+  const char *nodelay = getenv("SATURN_REPLAY_TCP_NODELAY");
+  nodelay_accepted = nodelay && strcmp(nodelay, "1") == 0;
 
   const char *fake = getenv("SATURN_REPLAY_FAKE_RT");
   fake_rt = !(fake && strcmp(fake, "0") == 0);
@@ -350,4 +365,22 @@ int sched_getparam(pid_t pid, struct sched_param *param) {
   }
   if (!real_getparam) real_getparam = dlsym(RTLD_NEXT, "sched_getparam");
   return real_getparam(pid, param);
+}
+
+static int with_nodelay(int accepted) {
+  if (accepted >= 0 && nodelay_accepted) {
+    int one = 1;
+    setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  }
+  return accepted;
+}
+
+int accept4(int fd, struct sockaddr *addr, socklen_t *len, int flags) {
+  if (!real_accept4) real_accept4 = dlsym(RTLD_NEXT, "accept4");
+  return with_nodelay(real_accept4(fd, addr, len, flags));
+}
+
+int accept(int fd, struct sockaddr *addr, socklen_t *len) {
+  if (!real_accept) real_accept = dlsym(RTLD_NEXT, "accept");
+  return with_nodelay(real_accept(fd, addr, len));
 }
