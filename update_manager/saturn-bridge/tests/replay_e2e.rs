@@ -147,8 +147,9 @@ fn replayed_stream_reaches_a_client_as_iq_spectrum_rows_and_audio() {
         assert!(perf.number(guard).is_some(), "perf.json lacks {guard}");
     }
 
-    // A SIGTERM is a clean, receive-safe shutdown.
+    // A SIGTERM sent to the running Bridge is a clean, receive-safe shutdown:
+    // it must exit with status 0. A crash signal, a nonzero exit, or an exit
+    // before the request all fail the test and keep the logs.
     drop(socket);
-    let status = replay.stop();
-    assert!(status.success() || status.code().is_none(), "exit status {status}");
+    replay.stop_clean();
 }
