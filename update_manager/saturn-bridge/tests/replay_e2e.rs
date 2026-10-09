@@ -18,7 +18,7 @@
 
 mod common;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::*;
 
@@ -150,6 +150,66 @@ fn replayed_stream_reaches_a_client_as_iq_spectrum_rows_and_audio() {
     // A SIGTERM sent to the running Bridge is a clean, receive-safe shutdown:
     // it must exit with status 0. A crash signal, a nonzero exit, or an exit
     // before the request all fail the test and keep the logs.
+    drop(socket);
+    replay.stop_clean();
+}
+
+/// The wire sequence the Remote page's RX Measure uses under the display
+/// override: the stream is on server rows, the page asks for raw IQ explicitly
+/// (`saturn_display:iq;`), captures, then asks for the rows again. On the real
+/// Bridge: rows carry no IQ, the explicit request brings raw IQ back on the
+/// running stream without a new `iq_start`, and the rows return afterwards.
+#[test]
+#[ignore = "needs the real native WDSP and about a minute; see the module docs"]
+fn the_display_switches_from_rows_to_raw_iq_and_back_on_a_live_stream() {
+    let mut replay = Replay::start();
+    replay.wait_ready(Duration::from_secs(300));
+    let mut socket = connect(replay.port);
+    collect(&mut socket, Duration::from_secs(2), |_, _| {});
+
+    // What arrived in a window, ignoring frames already in flight at the switch.
+    fn window(socket: &mut Socket, seconds: u64) -> (usize, usize, Vec<String>) {
+        let (mut iq, mut rows, mut texts) = (0, 0, Vec::new());
+        let settled = Instant::now() + Duration::from_millis(800);
+        collect(socket, Duration::from_secs(seconds), |socket, item| match item {
+            Item::Text(text) if text.contains("saturn_display:") => texts.push(text),
+            Item::Binary(bytes) if bytes.len() >= 64 => match u32_at(&bytes, 24) {
+                STREAM_SPECTRUM_ROW => {
+                    send(socket, &format!("saturn_display_ack:{};", u32_at(&bytes, 32)));
+                    if Instant::now() >= settled {
+                        rows += 1;
+                    }
+                }
+                STREAM_IQ if Instant::now() >= settled => iq += 1,
+                _ => {}
+            },
+            _ => {}
+        });
+        (iq, rows, texts)
+    }
+
+    // Rows first, as the override holds the page, with iq_start after the echo.
+    send(&mut socket, "saturn_display:spectrum,2048,50;");
+    collect(&mut socket, Duration::from_millis(300), |_, _| {});
+    send(&mut socket, "iq_samplerate:384000;iq_start:0;");
+    let (iq, rows, _) = window(&mut socket, 4);
+    println!("rows mode: {rows} rows, {iq} raw IQ frames");
+    assert!(rows >= 60 && iq == 0, "rows mode should carry rows and no raw IQ: {rows} rows, {iq} IQ");
+
+    // RX Measure asks for raw IQ: the echo comes back, raw IQ flows, the rows stop.
+    send(&mut socket, "saturn_display:iq;");
+    let (iq, rows, texts) = window(&mut socket, 4);
+    println!("after saturn_display:iq; {iq} raw IQ frames, {rows} rows, echo {texts:?}");
+    assert!(texts.iter().any(|text| text.contains("iq")), "no echo for the raw IQ request: {texts:?}");
+    assert!(iq >= 60 && rows == 0, "raw IQ should resume on the running stream: {iq} IQ, {rows} rows");
+
+    // The capture is over: the page asks for the rows again.
+    send(&mut socket, "saturn_display:spectrum,2048,50;");
+    let (iq, rows, texts) = window(&mut socket, 4);
+    println!("after the rows request: {rows} rows, {iq} raw IQ frames, echo {texts:?}");
+    assert!(texts.iter().any(|text| text.contains("spectrum")), "no echo for the rows request: {texts:?}");
+    assert!(rows >= 60 && iq == 0, "the rows should return: {rows} rows, {iq} IQ");
+
     drop(socket);
     replay.stop_clean();
 }
