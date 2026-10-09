@@ -268,6 +268,71 @@ impl Drop for Replay {
     }
 }
 
+/// SHA-256 of a file, as lowercase hex. An unreadable or empty file is an error:
+/// an empty file has a hash, but it is not an executable anyone ran.
+pub fn sha256_hex(path: &Path) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    if bytes.is_empty() {
+        return Err(format!("{} is empty", path.display()));
+    }
+    Ok(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// The records a published comparison rests on. Every one is required: if any
+/// cannot be saved, or is empty, this returns an error naming it, so a run can
+/// never look complete while missing the Bridge's final telemetry or the
+/// identity of the executable that was measured.
+///
+/// Written into `results`: `run-info.txt` (the Bridge's path and SHA-256, then
+/// `info`), `transport-screen.txt` (`table`), `perf-final.json` (a copy of the
+/// Bridge's `perf_json`, which must parse as a perf document) and one
+/// `arm-<name>-audio-intervals-ms.txt` per entry of `intervals`, each with at
+/// least one interval. Each file is read back and checked before returning.
+pub fn save_required_records(
+    results: &Path,
+    perf_json: &Path,
+    bridge: &Path,
+    info: &str,
+    table: &str,
+    intervals: &[(&str, &[f64])],
+) -> Result<(), String> {
+    fs::create_dir_all(results).map_err(|error| format!("cannot create {}: {error}", results.display()))?;
+    let write = |name: &str, bytes: &[u8]| -> Result<(), String> {
+        if bytes.is_empty() {
+            return Err(format!("required record {name} is empty"));
+        }
+        let path = results.join(name);
+        fs::write(&path, bytes).map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        let back = fs::read(&path).map_err(|error| format!("cannot read back {}: {error}", path.display()))?;
+        if back != bytes {
+            return Err(format!("required record {name} did not read back as written"));
+        }
+        Ok(())
+    };
+
+    let hash = sha256_hex(bridge).map_err(|why| format!("the Bridge executable hash is required: {why}"))?;
+    write("run-info.txt", format!("bridge: {}\nbridge sha256: {hash}\n{info}", bridge.display()).as_bytes())?;
+
+    let perf = fs::read(perf_json)
+        .map_err(|error| format!("the Bridge's final perf.json is required: cannot read {}: {error}", perf_json.display()))?;
+    let text = String::from_utf8_lossy(&perf);
+    if serde_like::Perf::parse(&text).is_none() {
+        return Err(format!("the Bridge's final perf.json is required: {} is not a perf document", perf_json.display()));
+    }
+    write("perf-final.json", &perf)?;
+
+    write("transport-screen.txt", table.as_bytes())?;
+    for (name, values) in intervals {
+        if values.is_empty() {
+            return Err(format!("arm {name}: no audio intervals were measured, so there is nothing to record"));
+        }
+        let rows: Vec<String> = values.iter().map(|v| format!("{v:.3}")).collect();
+        write(&format!("arm-{name}-audio-intervals-ms.txt"), (rows.join("\n") + "\n").as_bytes())?;
+    }
+    Ok(())
+}
+
 /// Just enough JSON handling to read `perf.json` metrics without a new dependency.
 pub mod serde_like {
     pub struct Perf(String);

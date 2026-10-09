@@ -132,3 +132,119 @@ fn every_run_gets_its_own_directory() {
     let second = shell("exit 0");
     assert_ne!(first.root(), second.root());
 }
+
+// ---- the records a published comparison rests on are required, not best effort
+
+use std::path::{Path, PathBuf};
+
+/// A unique scratch directory, removed when the test ends.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Self {
+        static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("saturn-records-test-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn file(&self, name: &str, bytes: &[u8]) -> PathBuf {
+        let path = self.0.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn results(&self) -> PathBuf {
+        self.0.join("results")
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+const PERF: &[u8] = b"{\n  \"metrics\": {\n    \"ddc_s\": 844.0\n  }\n}\n";
+/// SHA-256 of the three bytes "abc" (FIPS 180-2 test vector).
+const ABC_SHA256: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+const INTERVALS: &[f64] = &[21.3, 21.4, 42.9];
+
+fn save(scratch: &Scratch, perf: &Path, bridge: &Path, table: &str, intervals: &[(&str, &[f64])]) -> Result<(), String> {
+    save_required_records(&scratch.results(), perf, bridge, "settings\n", table, intervals)
+}
+
+#[test]
+fn all_required_records_are_saved_with_the_right_hash() {
+    let scratch = Scratch::new();
+    let perf = scratch.file("perf.json", PERF);
+    let bridge = scratch.file("saturn-bridge", b"abc");
+    save(&scratch, &perf, &bridge, "table\n", &[("A1", INTERVALS), ("B", INTERVALS)]).unwrap();
+    let results = scratch.results();
+    assert_eq!(std::fs::read(results.join("perf-final.json")).unwrap(), PERF);
+    let info = std::fs::read_to_string(results.join("run-info.txt")).unwrap();
+    assert!(info.contains(&format!("bridge sha256: {ABC_SHA256}")), "{info}");
+    assert!(info.contains("settings"), "{info}");
+    assert_eq!(std::fs::read_to_string(results.join("transport-screen.txt")).unwrap(), "table\n");
+    let rows = std::fs::read_to_string(results.join("arm-B-audio-intervals-ms.txt")).unwrap();
+    assert_eq!(rows, "21.300\n21.400\n42.900\n");
+}
+
+#[test]
+fn a_missing_final_perf_json_is_an_error_not_a_skipped_record() {
+    let scratch = Scratch::new();
+    let bridge = scratch.file("saturn-bridge", b"abc");
+    let missing = scratch.0.join("perf.json");
+    let why = save(&scratch, &missing, &bridge, "table\n", &[("A1", INTERVALS)]).unwrap_err();
+    assert!(why.contains("perf.json") && why.contains("required"), "{why}");
+    assert!(!scratch.results().join("perf-final.json").exists());
+}
+
+#[test]
+fn an_empty_or_foreign_perf_json_is_an_error() {
+    let scratch = Scratch::new();
+    let bridge = scratch.file("saturn-bridge", b"abc");
+    let empty = scratch.file("empty.json", b"");
+    assert!(save(&scratch, &empty, &bridge, "t\n", &[("A1", INTERVALS)]).unwrap_err().contains("perf"));
+    let foreign = scratch.file("foreign.json", b"{\"hello\": 1}\n");
+    let why = save(&scratch, &foreign, &bridge, "t\n", &[("A1", INTERVALS)]).unwrap_err();
+    assert!(why.contains("not a perf document"), "{why}");
+}
+
+#[test]
+fn a_missing_or_empty_bridge_executable_is_an_error_not_a_blank_hash() {
+    let scratch = Scratch::new();
+    let perf = scratch.file("perf.json", PERF);
+    let missing = scratch.0.join("no-such-bridge");
+    let why = save(&scratch, &perf, &missing, "t\n", &[("A1", INTERVALS)]).unwrap_err();
+    assert!(why.contains("Bridge executable hash is required"), "{why}");
+    let empty = scratch.file("empty-bridge", b"");
+    let why = save(&scratch, &perf, &empty, "t\n", &[("A1", INTERVALS)]).unwrap_err();
+    assert!(why.contains("Bridge executable hash is required") && why.contains("empty"), "{why}");
+    // Neither failure may leave a run-info that looks complete.
+    assert!(!scratch.results().join("run-info.txt").exists());
+}
+
+#[test]
+fn an_empty_table_or_an_arm_with_no_intervals_is_an_error() {
+    let scratch = Scratch::new();
+    let perf = scratch.file("perf.json", PERF);
+    let bridge = scratch.file("saturn-bridge", b"abc");
+    let why = save(&scratch, &perf, &bridge, "", &[("A1", INTERVALS)]).unwrap_err();
+    assert!(why.contains("transport-screen.txt") && why.contains("empty"), "{why}");
+    let why = save(&scratch, &perf, &bridge, "t\n", &[("A1", INTERVALS), ("C", &[])]).unwrap_err();
+    assert!(why.contains("arm C") && why.contains("no audio intervals"), "{why}");
+}
+
+#[test]
+fn an_unwritable_results_directory_is_an_error() {
+    let scratch = Scratch::new();
+    let perf = scratch.file("perf.json", PERF);
+    let bridge = scratch.file("saturn-bridge", b"abc");
+    let blocker = scratch.file("a-file", b"x");
+    let why = save_required_records(&blocker.join("results"), &perf, &bridge, "i\n", "t\n", &[("A1", INTERVALS)])
+        .unwrap_err();
+    assert!(why.contains("cannot create"), "{why}");
+}

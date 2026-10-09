@@ -17,6 +17,7 @@ mod common;
 
 use std::fmt::Write as _;
 use std::fs;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::*;
@@ -198,24 +199,21 @@ fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), S
 /// the table, every audio inter-arrival time, the Bridge's final perf.json and
 /// the settings of the run.
 fn save_records(replay: &Replay, arms: &[Arm], table: &str, nodelay: &str, window: Duration) {
-    let dir = replay.root().join("results");
-    fs::create_dir_all(&dir).expect("create the results directory");
-    let mut info = String::new();
-    writeln!(info, "bridge: {}", env!("CARGO_BIN_EXE_saturn-bridge")).unwrap();
-    if let Ok(output) = std::process::Command::new("sha256sum").arg(env!("CARGO_BIN_EXE_saturn-bridge")).output() {
-        write!(info, "bridge sha256: {}", String::from_utf8_lossy(&output.stdout)).unwrap();
-    }
-    writeln!(info, "measured window per arm: {} s", window.as_secs()).unwrap();
-    writeln!(info, "{nodelay}").unwrap();
-    writeln!(info, "tones: {TONE_OFFSET_HZ} Hz at -30 dBFS, {SAMPLE_RATE} S/s").unwrap();
-    fs::write(dir.join("run-info.txt"), info).unwrap();
-    fs::write(dir.join("transport-screen.txt"), table).unwrap();
-    for arm in arms {
-        let rows: Vec<String> = arm.audio_intervals_ms.iter().map(|v| format!("{v:.3}")).collect();
-        fs::write(dir.join(format!("arm-{}-audio-intervals-ms.txt", arm.name)), rows.join("\n") + "\n").unwrap();
-    }
-    if let Ok(perf) = fs::read(replay.work.join("perf.json")) {
-        fs::write(dir.join("perf-final.json"), perf).unwrap();
+    let info = format!(
+        "measured window per arm: {} s\n{nodelay}\ntones: {TONE_OFFSET_HZ} Hz at -30 dBFS, {SAMPLE_RATE} S/s\n",
+        window.as_secs()
+    );
+    let intervals: Vec<(&str, &[f64])> = arms.iter().map(|arm| (arm.name, arm.audio_intervals_ms.as_slice())).collect();
+    // Every record is required; a missing one fails the run (the directory is kept).
+    if let Err(why) = save_required_records(
+        &replay.root().join("results"),
+        &replay.work.join("perf.json"),
+        Path::new(env!("CARGO_BIN_EXE_saturn-bridge")),
+        &info,
+        table,
+        &intervals,
+    ) {
+        panic!("the run's required records could not be saved: {why}");
     }
 }
 

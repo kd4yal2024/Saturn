@@ -74,7 +74,11 @@ Bridge, no WDSP; it runs in the ordinary `cargo test`):
 * **Evidence.** Each run has its own directory (`$TMPDIR/saturn-replay-<pid>-<n>-<time>/`)
   with `logs/`, `work/` (perf.json, replay statistics) and, for the transport
   screen, `results/` (the table, every audio inter-arrival time, the final
-  perf.json, the Bridge's path and SHA-256, the settings). It is deleted only
+  perf.json, the Bridge's path and SHA-256, the settings). **Every record is
+  required:** a missing, unreadable or empty final perf.json, a Bridge hash that
+  cannot be computed, an empty table, or an arm with no audio intervals fails
+  the run instead of being skipped, and each file is read back after writing.
+  The directory is deleted only
   if the test passed. It is kept on any failure, always for the transport
   screen (its records are the point), and for any run when
   `SATURN_REPLAY_KEEP=1`. The path is printed.
