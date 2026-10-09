@@ -3310,6 +3310,10 @@ fn bridge_perf_file_telemetry(
                 "ddc_fifo_faults": integer("rx_fifo_faults"),
                 "wdsp_resume_events": integer("wdsp_resume_count"),
                 "wdsp_resume_flush_failures": integer("wdsp_resume_flush_failures"),
+                // Bridge-session totals; null when an older Bridge omits them.
+                "command_arm_cancelled": integer("command_arm_cancelled"),
+                "command_mic_cancelled": integer("command_mic_cancelled"),
+                "non_finite_controls_rejected": integer("non_finite_controls_rejected"),
                 "adc_overflow_events": adc_episode_count,
                 "duc_dma_writes": integer("tx_dma_writes").unwrap_or(0),
                 "duc_packets": integer("tx_frames").unwrap_or(0),
@@ -5433,6 +5437,50 @@ mod tests {
             telemetry["current"]["gauges"]["bridge"]["build_git_sha"],
             "d570b4e6c58f09e71b03e2fdcc0ac66bbb9f5d1c"
         );
+    }
+
+    #[test]
+    fn direct_xdma_perf_snapshot_reports_command_guard_totals_and_null_for_an_older_bridge() {
+        let write = |name: &str, metrics: &str| {
+            let path = std::env::temp_dir().join(format!(
+                "saturn-bridge-perf-guards-{name}-{}.json",
+                std::process::id()
+            ));
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"schema_version":1,"updated_at_ms":10000,"source":"saturn-bridge","backend":"xdma","metrics":{{"pid":42,{metrics}}}}}"#
+                ),
+            )
+            .unwrap();
+            path
+        };
+
+        let current = write(
+            "current",
+            r#""command_arm_cancelled":3,"command_mic_cancelled":5,"non_finite_controls_rejected":7"#,
+        );
+        let telemetry = bridge_perf_file_telemetry(&current, Some(42), 11_000).unwrap();
+        let _ = std::fs::remove_file(&current);
+        let counters = &telemetry["current"]["counters"];
+        assert_eq!(counters["command_arm_cancelled"], 3);
+        assert_eq!(counters["command_mic_cancelled"], 5);
+        assert_eq!(counters["non_finite_controls_rejected"], 7);
+        // The raw session totals are also available to the page as gauges.
+        assert_eq!(telemetry["current"]["gauges"]["bridge"]["command_arm_cancelled"], 3);
+
+        // An older Bridge does not write them: unavailable, not zero.
+        let older = write("older", r#""client":1"#);
+        let telemetry = bridge_perf_file_telemetry(&older, Some(42), 11_000).unwrap();
+        let _ = std::fs::remove_file(&older);
+        let counters = telemetry["current"]["counters"].as_object().unwrap();
+        for key in [
+            "command_arm_cancelled",
+            "command_mic_cancelled",
+            "non_finite_controls_rejected",
+        ] {
+            assert!(counters[key].is_null(), "{key} must be null, not zero");
+        }
     }
 
     #[test]
