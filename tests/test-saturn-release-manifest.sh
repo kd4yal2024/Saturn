@@ -4,6 +4,7 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TOOL="$REPO_ROOT/update_manager/scripts/saturn-release-manifest.py"
 COMPONENTS="$REPO_ROOT/update_manager/release/components-v1.json"
+# shellcheck disable=SC1091 # CI does not follow this runtime checkout-relative source.
 source "$REPO_ROOT/update_manager/scripts/saturn-go-web-assets.sh"
 TMP_ROOT="$(mktemp -d)"
 RELEASE_ROOT="$TMP_ROOT/release"
