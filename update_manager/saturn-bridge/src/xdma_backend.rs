@@ -658,34 +658,11 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
             }
             if command_count != 0 {
                 let handling_us = command_started.elapsed().as_micros();
-                let mut model_lock_us = 0;
-                let mut dsp_sync_us = 0;
-                let mut publish_us = 0;
-                if command_effects.dsp_dirty
-                    || command_effects.tuning_dirty
-                    || command_effects.tx_state_dirty
-                    || command_effects.radio_state_dirty
-                {
-                    let lock_started = Instant::now();
-                    let model = radio_model.lock_unpoisoned();
-                    model_lock_us = lock_started.elapsed().as_micros();
-                    if command_effects.dsp_dirty {
-                        let sync_started = Instant::now();
-                        wdsp.sync_model(&model)?;
-                        dsp_sync_us = sync_started.elapsed().as_micros();
-                    }
-                    let publish_started = Instant::now();
-                    if command_effects.tuning_dirty {
-                        tci.publish_tuning_state(&model);
-                    }
-                    if command_effects.tx_state_dirty {
-                        tci.publish_tx_state(&model);
-                    }
-                    if command_effects.radio_state_dirty {
-                        tci.publish_radio_state(&model);
-                    }
-                    publish_us = publish_started.elapsed().as_micros();
-                }
+                let EffectTimings {
+                    model_lock_us,
+                    dsp_sync_us,
+                    publish_us,
+                } = publish_command_effects(&command_effects, &radio_model, &mut wdsp, &tci)?;
                 if command_effects.tuning_dirty {
                     // A frame must never straddle two RF center frequencies.
                     iq_packetizer.reset();
@@ -1019,6 +996,27 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// The receive-session controls that command handling needs. The real
+/// session implements it; tests substitute a recording fake so the command
+/// handler can run without hardware.
+trait DirectRxControl {
+    fn tune(&mut self, frequency_hz: u32) -> Result<(), XdmaError>;
+    fn set_rx_antenna(&mut self, antenna: u8) -> Result<(), XdmaError>;
+    fn set_rx_attenuation(&mut self, attenuation_db: u8) -> Result<(), XdmaError>;
+}
+
+impl DirectRxControl for OperationalRxSession {
+    fn tune(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
+        OperationalRxSession::tune(self, frequency_hz)
+    }
+    fn set_rx_antenna(&mut self, antenna: u8) -> Result<(), XdmaError> {
+        OperationalRxSession::set_rx_antenna(self, antenna)
+    }
+    fn set_rx_attenuation(&mut self, attenuation_db: u8) -> Result<(), XdmaError> {
+        OperationalRxSession::set_rx_attenuation(self, attenuation_db)
+    }
+}
+
 /// Outcome of a tuning request against the direct receive path.
 #[derive(Debug, PartialEq, Eq)]
 enum TuningOutcome {
@@ -1095,12 +1093,59 @@ fn restore_tuning(model: &mut RadioModel, saved: TuningState) {
     ) = saved;
 }
 
+/// Microseconds spent in the phases of `publish_command_effects`.
+#[derive(Default)]
+struct EffectTimings {
+    model_lock_us: u128,
+    dsp_sync_us: u128,
+    publish_us: u128,
+}
+
+/// Applies the DSP changes and publishes the state that a batch of commands
+/// marked dirty. A rejected tuning request is not `tuning_dirty`, but still
+/// publishes the radio state, which returns the clients to the real
+/// frequencies.
+fn publish_command_effects(
+    effects: &CommandEffects,
+    radio_model: &Arc<Mutex<RadioModel>>,
+    wdsp: &mut WdspRxEngine,
+    tci: &TciFrontend,
+) -> Result<EffectTimings, Box<dyn Error>> {
+    let mut timings = EffectTimings::default();
+    if effects.dsp_dirty
+        || effects.tuning_dirty
+        || effects.tx_state_dirty
+        || effects.radio_state_dirty
+    {
+        let lock_started = Instant::now();
+        let model = radio_model.lock_unpoisoned();
+        timings.model_lock_us = lock_started.elapsed().as_micros();
+        if effects.dsp_dirty {
+            let sync_started = Instant::now();
+            wdsp.sync_model(&model)?;
+            timings.dsp_sync_us = sync_started.elapsed().as_micros();
+        }
+        let publish_started = Instant::now();
+        if effects.tuning_dirty {
+            tci.publish_tuning_state(&model);
+        }
+        if effects.tx_state_dirty {
+            tci.publish_tx_state(&model);
+        }
+        if effects.radio_state_dirty {
+            tci.publish_radio_state(&model);
+        }
+        timings.publish_us = publish_started.elapsed().as_micros();
+    }
+    Ok(timings)
+}
+
 fn handle_command(
     command: TciCommand,
     radio_model: &Arc<Mutex<RadioModel>>,
     tci: &TciFrontend,
     wdsp: &mut WdspRxEngine,
-    rx: &mut OperationalRxSession,
+    rx: &mut impl DirectRxControl,
     tx_cmd_tx: &mpsc::Sender<TxCommand>,
     tx_control: &mut DirectTxControl,
     remote_tx_rf_enabled: bool,
@@ -2685,5 +2730,238 @@ mod tests {
         // The one-second S-meter request remains the periodic full-state
         // convergence point.
         assert!(command_effects(&TciCommand::RequestSmeter).radio_state_dirty);
+    }
+}
+
+/// The command handler run for real: `handle_command` and
+/// `publish_command_effects` with the stub DSP, a real TCI frontend and a
+/// loopback client, and a recording fake in place of the receive hardware.
+#[cfg(all(test, saturn_bridge_stub_native))]
+mod command_handler_tests {
+    use super::*;
+    use crate::config::BridgeConfig;
+    use crate::tx_audio::TxAudioIngress;
+    use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+    use tungstenite::WebSocket;
+
+    #[derive(Default)]
+    struct FakeRx {
+        tuned: Vec<u32>,
+        fail_tune: bool,
+    }
+
+    impl DirectRxControl for FakeRx {
+        fn tune(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
+            if self.fail_tune {
+                return Err(XdmaError::Io {
+                    action: "write DDC frequency register",
+                    source: std::io::Error::from(std::io::ErrorKind::BrokenPipe),
+                });
+            }
+            self.tuned.push(frequency_hz);
+            Ok(())
+        }
+        fn set_rx_antenna(&mut self, _: u8) -> Result<(), XdmaError> {
+            Ok(())
+        }
+        fn set_rx_attenuation(&mut self, _: u8) -> Result<(), XdmaError> {
+            Ok(())
+        }
+    }
+
+    struct Fixture {
+        model: Arc<Mutex<RadioModel>>,
+        tci: TciFrontend,
+        wdsp: WdspRxEngine,
+        rx: FakeRx,
+        tx_cmd_tx: mpsc::Sender<TxCommand>,
+        _tx_cmd_rx: mpsc::Receiver<TxCommand>,
+        tx_control: DirectTxControl,
+        ingress: TxAudioIngress,
+        client: WebSocket<TcpStream>,
+        _keep: Box<dyn std::any::Any>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut initial =
+                RadioModel::new(DIRECT_DDC_INDEX as u8, 7_100_000, 0, 384, 24, 2048, true, 4096, true);
+            initial.desired.vfo_a_hz = 7_100_000;
+            initial.desired.vfo_b_hz = 14_200_000;
+            initial.desired.active_vfo = 0;
+            initial.sync_vfo_routes();
+            let wdsp = WdspRxEngine::new(&initial).expect("stub RX engine");
+            let model = Arc::new(Mutex::new(initial));
+
+            let port = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            let mut config = BridgeConfig::default();
+            config.tci_bind_addr = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
+            let (tci, commands) =
+                TciFrontend::bind_with_display_spectrum(&config, model.clone(), true).unwrap();
+
+            let stream = connect_with_retry(port);
+            let (client, _) = tungstenite::client(format!("ws://127.0.0.1:{port}/"), stream)
+                .expect("websocket handshake");
+            client
+                .get_ref()
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            let (tx_cmd_tx, tx_cmd_rx) = mpsc::channel();
+            let (ingress, audio_rx, _) = TxAudioIngress::bounded();
+
+            let mut fixture = Self {
+                model,
+                tci,
+                wdsp,
+                rx: FakeRx::default(),
+                tx_cmd_tx,
+                _tx_cmd_rx: tx_cmd_rx,
+                tx_control: DirectTxControl::default(),
+                ingress,
+                client,
+                _keep: Box::new((commands, audio_rx)),
+            };
+            // The greeting ends with "ready;"; read it so later reads see only
+            // what the commands publish.
+            let greeting = fixture.read_messages(Duration::from_secs(3), Some("ready;"));
+            assert!(greeting.iter().any(|m| m == "ready;"), "no greeting: {greeting:?}");
+            fixture
+        }
+
+        /// Text messages from the server until `stop_at` is seen, or until
+        /// the connection has been quiet for 300 ms (or `limit` has passed).
+        fn read_messages(&mut self, limit: Duration, stop_at: Option<&str>) -> Vec<String> {
+            let started = Instant::now();
+            let mut quiet_since = Instant::now();
+            let mut messages = Vec::new();
+            while started.elapsed() < limit {
+                match self.client.read() {
+                    Ok(tungstenite::Message::Text(text)) => {
+                        for part in text.split(';').filter(|part| !part.is_empty()) {
+                            // The SATP state heartbeat repeats about every 250 ms
+                            // whatever the commands do; it must not count as activity.
+                            if part.starts_with("saturn_satp_state:") {
+                                continue;
+                            }
+                            quiet_since = Instant::now();
+                            messages.push(format!("{part};"));
+                        }
+                        if stop_at.is_some_and(|stop| messages.iter().any(|m| m == stop)) {
+                            break;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(_) if quiet_since.elapsed() > Duration::from_millis(300) => break,
+                    Err(_) => {}
+                }
+            }
+            messages
+        }
+
+        fn tuning(&self) -> (u32, u32, u8, u32, u32) {
+            tuning_state(&self.model.lock_unpoisoned())
+        }
+
+        /// The handler, then the publication the control loop performs.
+        fn run(&mut self, command: TciCommand) -> Result<CommandEffects, Box<dyn Error>> {
+            let effects = handle_command(
+                command,
+                &self.model,
+                &self.tci,
+                &mut self.wdsp,
+                &mut self.rx,
+                &self.tx_cmd_tx,
+                &mut self.tx_control,
+                false,
+                &self.ingress,
+            )?;
+            publish_command_effects(&effects, &self.model, &mut self.wdsp, &self.tci)?;
+            Ok(effects)
+        }
+    }
+
+    fn connect_with_retry(port: u16) -> TcpStream {
+        for _ in 0..100 {
+            if let Ok(stream) = TcpStream::connect((Ipv4Addr::LOCALHOST, port)) {
+                return stream;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("TCI frontend never started listening on {port}");
+    }
+
+    #[test]
+    fn an_invalid_tuning_request_is_rejected_republished_and_the_next_command_works() {
+        for rejected in [
+            TciCommand::SetVfoA(100_000_000),
+            TciCommand::SetIqCenter(100_000_000),
+        ] {
+            let mut fixture = Fixture::new();
+            let before = fixture.tuning();
+            let label = format!("{rejected:?}");
+
+            // Returns normally: the runtime is not asked to stop.
+            let effects = fixture
+                .run(rejected)
+                .unwrap_or_else(|error| panic!("{label} ended the runtime: {error}"));
+            assert!(!effects.tuning_dirty, "{label}: nothing was retuned");
+            assert!(effects.radio_state_dirty, "{label}: clients must be told");
+
+            // Frequencies and hardware are unchanged.
+            assert_eq!(fixture.tuning(), before, "{label}");
+            assert!(fixture.rx.tuned.is_empty(), "{label}: hardware was written");
+
+            // The unchanged state is republished; the rejected value is not.
+            let published = fixture.read_messages(Duration::from_secs(3), None);
+            assert!(published.contains(&"vfo:0,0,7100000;".to_string()), "{label}: {published:?}");
+            assert!(published.contains(&"dds:0,7100000;".to_string()), "{label}: {published:?}");
+            assert!(
+                !published.iter().any(|m| m.contains("100000000")),
+                "{label}: the rejected frequency reached a client: {published:?}"
+            );
+
+            // The next valid command is accepted, tuned, and published.
+            let effects = fixture.run(TciCommand::SetVfoA(7_150_000)).unwrap();
+            assert!(effects.tuning_dirty);
+            assert_eq!(fixture.rx.tuned, [7_150_000], "{label}");
+            assert_eq!(fixture.tuning().0, 7_150_000, "{label}");
+            let published = fixture.read_messages(Duration::from_secs(3), None);
+            assert!(published.contains(&"vfo:0,0,7150000;".to_string()), "{label}: {published:?}");
+            assert!(published.contains(&"dds:0,7150000;".to_string()), "{label}: {published:?}");
+        }
+    }
+
+    #[test]
+    fn activating_an_unsupported_vfo_through_the_handler_keeps_the_active_vfo() {
+        let mut fixture = Fixture::new();
+        // Accepted while inactive: nothing is tuned to it.
+        fixture.run(TciCommand::SetVfoB(100_000_000)).unwrap();
+        let before = fixture.tuning();
+        let tuned_before = fixture.rx.tuned.clone();
+        fixture.read_messages(Duration::from_secs(3), None);
+
+        let effects = fixture.run(TciCommand::SetActiveVfo(1)).unwrap();
+        assert!(!effects.tuning_dirty);
+        assert_eq!(fixture.tuning(), before);
+        assert_eq!(fixture.rx.tuned, tuned_before, "no further hardware write");
+        let published = fixture.read_messages(Duration::from_secs(3), None);
+        assert!(published.contains(&"vfo_active:0,A;".to_string()), "{published:?}");
+        assert!(published.contains(&"dds:0,7100000;".to_string()), "{published:?}");
+    }
+
+    #[test]
+    fn a_device_fault_still_ends_the_runtime_without_committing_the_request() {
+        let mut fixture = Fixture::new();
+        let before = fixture.tuning();
+        fixture.rx.fail_tune = true;
+        let error = fixture
+            .run(TciCommand::SetVfoA(7_200_000))
+            .expect_err("a register write failure is a device fault");
+        assert!(error.to_string().contains("write DDC frequency register"));
+        assert_eq!(fixture.tuning(), before);
     }
 }
