@@ -32,6 +32,11 @@ pub(crate) struct TciCommandQueueSnapshot {
     pub(crate) control_dropped: u64,
     pub(crate) mic_dropped: u64,
     pub(crate) safety_coalesced: u64,
+    /// Queued arm requests removed because a release or disconnect arrived
+    /// after them.
+    pub(crate) arm_cancelled: u64,
+    /// Queued microphone frames removed at the same boundary.
+    pub(crate) mic_cancelled: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -53,11 +58,24 @@ struct TciCommandQueues {
     control_dropped: u64,
     mic_dropped: u64,
     safety_coalesced: u64,
+    arm_cancelled: u64,
+    mic_cancelled: u64,
 }
 
 impl TciCommandQueues {
     fn depth(&self) -> usize {
         self.safety.len() + self.control.len() + self.mic.len()
+    }
+
+    fn cancel_session_commands(&mut self) {
+        let queued_arms = self.control.len();
+        self.control
+            .retain(|queued| !matches!(queued, TciCommand::SetTxEnabled(true)));
+        self.arm_cancelled = self
+            .arm_cancelled
+            .saturating_add((queued_arms - self.control.len()) as u64);
+        self.mic_cancelled = self.mic_cancelled.saturating_add(self.mic.len() as u64);
+        self.mic.clear();
     }
 
     fn record_high_watermark(&mut self) {
@@ -75,6 +93,8 @@ impl TciCommandQueues {
             control_dropped: self.control_dropped,
             mic_dropped: self.mic_dropped,
             safety_coalesced: self.safety_coalesced,
+            arm_cancelled: self.arm_cancelled,
+            mic_cancelled: self.mic_cancelled,
         }
     }
 }
@@ -110,6 +130,12 @@ impl TciCommandMailboxSender {
     fn enqueue(&self, command: TciCommand) {
         let mut queues = self.queues.lock_unpoisoned();
         if command_is_safety(&command) {
+            // Safety commands are delivered ahead of control commands, so a
+            // release that merely overtook an older arm would still let that
+            // arm run afterwards. Everything queued before the release or
+            // disconnect belongs to the session it ends: drop it here. Commands
+            // enqueued afterwards, including a fresh arm, are unaffected.
+            queues.cancel_session_commands();
             let discriminant = std::mem::discriminant(&command);
             if let Some(position) = queues
                 .safety
@@ -226,9 +252,134 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
         assert!(started.elapsed() < std::time::Duration::from_millis(10));
         assert!(matches!(rx.try_recv(), Ok(TciCommand::SetVfoA(_))));
-        assert!(matches!(rx.try_recv(), Ok(TciCommand::MicAudioFrame(_))));
+        // The release is a cancellation boundary: microphone frames that
+        // arrived before it are not delivered after it.
+        assert!(rx.try_recv().is_err());
         let snapshot = rx.snapshot();
         assert!(snapshot.total_depth <= MAX_TCI_CONTROL_COMMANDS + MAX_TCI_MIC_COMMANDS);
+        assert_eq!(snapshot.mic_cancelled, MAX_TCI_MIC_COMMANDS as u64);
+    }
+
+    fn mic_frame(sequence: u32) -> TciCommand {
+        TciCommand::MicAudioFrame(super::super::TciMicFrame {
+            sample_rate_hz: 48_000,
+            channels: 1,
+            sequence,
+            received_at: std::time::Instant::now(),
+            samples: vec![0.0; 16],
+        })
+    }
+
+    #[test]
+    fn release_cancels_an_older_queued_arm() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+        tx.send(TciCommand::SetTxEnabled(false)).unwrap();
+
+        assert_eq!(rx.snapshot().arm_cancelled, 1);
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+        assert!(rx.try_recv().is_err(), "the older arm must not be delivered");
+    }
+
+    #[test]
+    fn disconnect_cancels_an_older_queued_arm() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+        tx.send(TciCommand::ClientDisconnected).unwrap();
+
+        assert_eq!(rx.snapshot().arm_cancelled, 1);
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::ClientDisconnected)));
+        assert!(rx.try_recv().is_err(), "the older arm must not be delivered");
+    }
+
+    #[test]
+    fn a_new_arm_after_a_release_is_delivered() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+        tx.send(TciCommand::SetTxEnabled(false)).unwrap();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+
+        assert_eq!(rx.snapshot().arm_cancelled, 1);
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(true))));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_new_arm_after_a_disconnect_is_delivered() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+        tx.send(TciCommand::ClientDisconnected).unwrap();
+        tx.send(TciCommand::ClientConnected).unwrap();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::ClientDisconnected)));
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::ClientConnected)));
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(true))));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn release_keeps_unrelated_control_commands_in_order() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::SetVfoA(7_100_000)).unwrap();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+        tx.send(TciCommand::RequestSmeter).unwrap();
+        tx.send(TciCommand::SetTxEnabled(false)).unwrap();
+
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetVfoA(7_100_000))));
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::RequestSmeter)));
+        assert!(rx.try_recv().is_err());
+        assert_eq!(rx.snapshot().arm_cancelled, 1);
+    }
+
+    #[test]
+    fn release_without_a_queued_arm_cancels_nothing() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::SetVfoA(7_100_000)).unwrap();
+        tx.send(TciCommand::SetTxEnabled(false)).unwrap();
+
+        let snapshot = rx.snapshot();
+        assert_eq!(snapshot.arm_cancelled, 0);
+        assert_eq!(snapshot.mic_cancelled, 0);
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetVfoA(7_100_000))));
+    }
+
+    #[test]
+    fn release_discards_older_microphone_frames_but_not_newer_ones() {
+        let (tx, rx) = tci_command_mailbox();
+        for sequence in 1..=3 {
+            tx.send(mic_frame(sequence)).unwrap();
+        }
+        tx.send(TciCommand::SetTxEnabled(false)).unwrap();
+        tx.send(mic_frame(4)).unwrap();
+
+        assert_eq!(rx.snapshot().mic_cancelled, 3);
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(TciCommand::MicAudioFrame(frame)) if frame.sequence == 4
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn an_arm_after_a_release_does_not_inherit_the_earlier_sessions_microphone() {
+        let (tx, rx) = tci_command_mailbox();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+        tx.send(mic_frame(1)).unwrap();
+        tx.send(mic_frame(2)).unwrap();
+        tx.send(TciCommand::SetTxEnabled(false)).unwrap();
+        tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+        assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(true))));
+        assert!(rx.try_recv().is_err());
+        let snapshot = rx.snapshot();
+        assert_eq!(snapshot.arm_cancelled, 1);
+        assert_eq!(snapshot.mic_cancelled, 2);
     }
 
     #[test]

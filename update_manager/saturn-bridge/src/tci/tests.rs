@@ -57,6 +57,37 @@ fn satp_control_requires_operator_role_and_strict_actions() {
     }
 }
 
+#[test]
+fn ptt_release_cancels_a_queued_arm_through_the_parser() {
+    let clients = test_client_registry(7);
+    let (tx, rx) = tci_command_mailbox();
+    parse_tci_command("trx:0,true", &tx, &clients, 7, true);
+    parse_tci_command("trx:0,false", &tx, &clients, 7, true);
+    assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+    assert!(rx.try_recv().is_err(), "a stale arm survived the release");
+}
+
+#[test]
+fn ptt_press_after_a_release_still_arms_through_the_parser() {
+    let clients = test_client_registry(7);
+    let (tx, rx) = tci_command_mailbox();
+    parse_tci_command("trx:0,true", &tx, &clients, 7, true);
+    parse_tci_command("trx:0,false", &tx, &clients, 7, true);
+    parse_tci_command("trx:0,true", &tx, &clients, 7, true);
+    assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
+    assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(true))));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn client_disconnect_cancels_a_queued_arm() {
+    let (tx, rx) = tci_command_mailbox();
+    tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+    tx.send(TciCommand::ClientDisconnected).unwrap();
+    assert!(matches!(rx.try_recv(), Ok(TciCommand::ClientDisconnected)));
+    assert!(rx.try_recv().is_err(), "a stale arm survived the disconnect");
+}
+
 fn opus_wb_runtime_available() -> bool {
     let mut decoder = TxCodecDecoder::new_with_flags(
         TxMicCodec::OpusWb,
