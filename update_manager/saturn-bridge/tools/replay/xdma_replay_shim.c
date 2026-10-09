@@ -98,6 +98,7 @@ static __thread int fake_policy = SCHED_OTHER;
 static __thread int fake_priority;
 
 static int nodelay_accepted;
+static int (*real_setsockopt)(int, int, int, const void *, socklen_t);
 static int (*real_accept4)(int, struct sockaddr *, socklen_t *, int);
 static int (*real_accept)(int, struct sockaddr *, socklen_t *);
 static ssize_t (*real_pread64)(int, void *, size_t, off_t);
@@ -158,6 +159,7 @@ __attribute__((constructor)) static void shim_init(void) {
   real_getparam = dlsym(RTLD_NEXT, "sched_getparam");
   real_accept4 = dlsym(RTLD_NEXT, "accept4");
   real_accept = dlsym(RTLD_NEXT, "accept");
+  real_setsockopt = dlsym(RTLD_NEXT, "setsockopt");
   const char *nodelay = getenv("SATURN_REPLAY_TCP_NODELAY");
   nodelay_accepted = nodelay && strcmp(nodelay, "1") == 0;
 
@@ -376,7 +378,9 @@ static int with_nodelay(int accepted) {
     int saved_errno = errno;
     int one = 1, readback = 0;
     socklen_t length = sizeof(readback);
-    if (setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) != 0) {
+    if (!real_setsockopt) real_setsockopt = dlsym(RTLD_NEXT, "setsockopt");
+    // Through the real function, so this call is not reported as the Bridge's.
+    if (real_setsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) != 0) {
       fprintf(stderr, "xdma_replay_shim: TCP_NODELAY FAILED on accepted fd %d: %s\n", accepted,
               strerror(errno));
     } else if (getsockopt(accepted, IPPROTO_TCP, TCP_NODELAY, &readback, &length) != 0 ||
@@ -390,6 +394,27 @@ static int with_nodelay(int accepted) {
     errno = saved_errno;
   }
   return accepted;
+}
+
+// Reports the Bridge's own TCP_NODELAY calls (one line each, on stderr) and passes
+// every setsockopt through unchanged. This is how a run shows that the real
+// accept path set the option on its sockets, or, with the Bridge's switch off,
+// that it did not.
+int setsockopt(int fd, int level, int optname, const void *optval, socklen_t optlen) {
+  if (!real_setsockopt) real_setsockopt = dlsym(RTLD_NEXT, "setsockopt");
+  int result = real_setsockopt(fd, level, optname, optval, optlen);
+  if (level == IPPROTO_TCP && optname == TCP_NODELAY && optval && optlen >= sizeof(int)) {
+    int saved_errno = errno;
+    int value = *(const int *)optval;
+    if (result == 0) {
+      fprintf(stderr, "xdma_replay_shim: Bridge setsockopt(TCP_NODELAY=%d) on fd %d -> ok\n", value, fd);
+    } else {
+      fprintf(stderr, "xdma_replay_shim: Bridge setsockopt(TCP_NODELAY=%d) on fd %d -> FAILED: %s\n", value, fd,
+              strerror(saved_errno));
+    }
+    errno = saved_errno;
+  }
+  return result;
 }
 
 int accept4(int fd, struct sockaddr *addr, socklen_t *len, int flags) {

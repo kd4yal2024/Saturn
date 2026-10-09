@@ -171,26 +171,44 @@ fn report(arms: &[Arm]) -> String {
     out
 }
 
-/// TCP_NODELAY as the shim reports it for the sockets the Bridge accepted. A run
-/// that asked for it must show it set and read back on every arm's connection;
-/// a run that did not ask must show none. Anything else means the arm is not
-/// what its label says.
+/// TCP_NODELAY on the sockets the Bridge accepted, from two independent sources
+/// on the Bridge's stderr: the shim's own optional hook
+/// (SATURN_REPLAY_TCP_NODELAY=1, for a Bridge that does not set it) and the
+/// shim's observation of the Bridge's own setsockopt call (the Bridge sets it
+/// unless SATURN_BRIDGE_TCI_NODELAY is 0). The run must show what its settings
+/// say, on every arm's connection, and no failure; anything else means an arm
+/// is not what its label says.
 fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), String>) {
-    let requested = std::env::var("SATURN_REPLAY_TCP_NODELAY").is_ok_and(|value| value == "1");
+    let shim_requested = std::env::var("SATURN_REPLAY_TCP_NODELAY").is_ok_and(|value| value == "1");
+    let bridge_off = std::env::var("SATURN_BRIDGE_TCI_NODELAY")
+        .is_ok_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"));
     let log = replay.log_text("stderr.log");
-    let enabled = log.matches("TCP_NODELAY enabled on accepted fd").count();
-    let failed = log.matches("TCP_NODELAY FAILED").count();
+    let shim_set = log.matches("TCP_NODELAY enabled on accepted fd").count();
+    let bridge_set = log
+        .lines()
+        .filter(|line| line.contains("Bridge setsockopt(TCP_NODELAY=1) on fd") && line.ends_with("-> ok"))
+        .count();
+    let failed = log
+        .lines()
+        .filter(|line| line.contains("TCP_NODELAY FAILED") || (line.contains("Bridge setsockopt(TCP_NODELAY") && line.contains("-> FAILED")))
+        .count();
     let verdict = if failed != 0 {
-        Err("the shim could not set or read back TCP_NODELAY".to_string())
-    } else if requested && enabled < connections {
-        Err(format!("TCP_NODELAY was requested but confirmed on {enabled} of {connections} accepted sockets"))
-    } else if !requested && enabled != 0 {
-        Err("TCP_NODELAY was not requested but was set".to_string())
+        Err(format!("{failed} TCP_NODELAY call(s) failed"))
+    } else if shim_requested && shim_set < connections {
+        Err(format!("the shim's TCP_NODELAY was requested but confirmed on {shim_set} of {connections} accepted sockets"))
+    } else if !shim_requested && shim_set != 0 {
+        Err("the shim's TCP_NODELAY was not requested but was set".to_string())
+    } else if bridge_off && bridge_set != 0 {
+        Err(format!("SATURN_BRIDGE_TCI_NODELAY is off but the Bridge set TCP_NODELAY on {bridge_set} sockets"))
+    } else if !bridge_off && bridge_set < connections {
+        Err(format!("the Bridge set TCP_NODELAY on {bridge_set} of {connections} accepted sockets"))
     } else {
         Ok(())
     };
     let text = format!(
-        "TCP_NODELAY requested: {requested}; confirmed (set and read back) on {enabled} accepted sockets; failures: {failed}"
+        "TCP_NODELAY: Bridge setting {}, set by the Bridge on {bridge_set} accepted sockets; \
+         shim hook requested: {shim_requested}, confirmed on {shim_set}; failures: {failed}",
+        if bridge_off { "off" } else { "on" }
     );
     (text, verdict)
 }

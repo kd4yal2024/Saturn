@@ -38,17 +38,22 @@ tools/replay/run_replay_bridge.sh \
   --tones 1500:-30 --wisdom ~/.cache/saturn-replay/wisdom
 ```
 
-* `SATURN_REPLAY_TCP_NODELAY=1` in the environment sets `TCP_NODELAY` on every
-  socket the Bridge accepts. The Bridge on `main` sets it nowhere, so this runs
-  the "does it help" experiment without changing the Bridge. The shim checks
-  the `setsockopt` result, reads the option back from the socket, and prints
-  one `TCP_NODELAY enabled on accepted fd N (read back 1)` line to the Bridge's
-  stderr per connection (or `TCP_NODELAY FAILED …`). The transport screen reads
-  those lines and fails if the run asked for it and it is not confirmed on every
-  arm's connection, or if it was not asked for and was set. (An unmerged
+* **TCP_NODELAY.** The Bridge now sets `TCP_NODELAY` on every TCI socket it
+  accepts, unless `SATURN_BRIDGE_TCI_NODELAY=0` (so one binary serves both
+  arms of a matched comparison). The shim reports the Bridge's own
+  `setsockopt` on stderr, one line per call
+  (`Bridge setsockopt(TCP_NODELAY=1) on fd N -> ok`), and the transport screen
+  fails if the Bridge's setting and what it did disagree on any arm's
+  connection. `SATURN_REPLAY_TCP_NODELAY=1` is a separate hook in the shim for
+  a Bridge build that does not set the option itself (such as `main` before this
+  change): the shim sets it on accept, reads it back, and logs
+  `TCP_NODELAY enabled on accepted fd N (read back 1)`; the screen requires
+  that on every arm when requested and none when not. (An unmerged
   `silverforge/rx-smoothness-g2` branch, commit `a90f33a`, adds
   `stream.set_nodelay(true)` to `handle_client`, and its 2026-10-02 trial
-  document reports the browser-facing TLS socket result on a real G2.)
+  document reports the browser-facing TLS socket result on a real G2; this
+  Bridge change is the same five-line idea with the failure handling, a switch
+  and tests.)
 * `--work` must be new or empty. The Bridge's `perf.json`, readiness file and
   logs go there.
 * Without `--wisdom` the Bridge plans its FFTs at start, about a minute.
