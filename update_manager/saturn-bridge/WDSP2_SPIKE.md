@@ -166,4 +166,7 @@ python3 scripts/wdsp-pin-manifest.py \
 
 Source hashes are comparable between any two builds. The archive and object
 hashes only match between builds made with the same compiler and flags, so a G2
-build is compared with another G2 build, not with a cross build.
+build is compared with another G2 build, not with a cross build. A compiler that
+emits debug information also embeds the build directory, so the build path must
+match as well. GCC without `-g` gave bit-identical objects and archive from two
+different directories.

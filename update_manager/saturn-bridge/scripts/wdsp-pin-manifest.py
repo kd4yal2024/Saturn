@@ -27,7 +27,11 @@ It records:
 
 Exit status is 1 if a pin does not match or a required symbol is missing.
 Hashes of the archive and objects are only comparable between builds made with
-the same compiler and flags; the source hashes are comparable always.
+the same compiler and flags; the source hashes are comparable always. A
+compiler that emits debug information also embeds the build directory, so with
+such a compiler the objects only match if the build path matches too. (Checked
+2026-10-09: GCC without -g gave bit-identical objects and archive from two
+different directories; a Zig/clang cross build did not.)
 """
 import argparse
 import hashlib
