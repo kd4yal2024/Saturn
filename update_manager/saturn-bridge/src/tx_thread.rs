@@ -489,7 +489,12 @@ fn configure_tx_thread_scheduling(
     Ok(Some((cpu, policy, actual_priority)))
 }
 
-/// Next TX command: those already moved aside by `release_is_pending`, oldest
+/// Most commands the worker holds aside at once. It also bounds the work of
+/// one cancellation check, which scans the held commands and moves at most
+/// enough more from the channel to fill this.
+const MAX_TX_PENDING_COMMANDS: usize = 2 * MAX_TX_COMMANDS_PER_LOOP;
+
+/// Next TX command: those already moved aside by `cancellation_check`, oldest
 /// first, then whatever is still in the channel.
 fn next_tx_command(
     pending: &mut VecDeque<TxCommand>,
@@ -501,24 +506,53 @@ fn next_tx_command(
     }
 }
 
-/// Moves every command now in the channel behind those already set aside, in
-/// order, and reports whether a release (or shutdown, or a closed channel) is
-/// among them. The bounded command batch can stop right after an Arm, and an
-/// Arm's native setup can take long enough for the release to arrive behind
-/// it; the release is then still unread when the keying code runs. Checking
-/// here, immediately before keying, makes the outcome independent of where
-/// the release sits in the queue.
-fn release_is_pending(pending: &mut VecDeque<TxCommand>, rx: &Receiver<TxCommand>) -> bool {
-    loop {
+fn is_cancelling(command: &TxCommand) -> bool {
+    matches!(command, TxCommand::Disarm | TxCommand::Shutdown)
+}
+
+/// What a cancellation check could establish about the commands behind the
+/// arm that is about to key.
+#[derive(Debug, PartialEq, Eq)]
+enum CancellationCheck {
+    /// Every queued command was inspected and none cancels the arm.
+    Clear,
+    /// A release, a shutdown or a closed channel is queued.
+    Cancelled,
+    /// More commands are queued than one check may inspect, so a release
+    /// behind them cannot be ruled out. Keying must wait.
+    Undetermined,
+}
+
+/// Looks for a release among the commands already queued, without reading
+/// past a bounded number of them. Commands moved out of the channel are kept,
+/// in order, and are consumed first by the next batch. The check stops at the
+/// first release. If the backlog is deeper than `MAX_TX_PENDING_COMMANDS` it
+/// reports `Undetermined` rather than assuming the unseen part is clear.
+///
+/// The command batch can stop right after an Arm, and an Arm's native setup or
+/// the key preparation can take long enough for the release to arrive behind
+/// it, so the release may still be unread when the keying code runs.
+fn cancellation_check(
+    pending: &mut VecDeque<TxCommand>,
+    rx: &Receiver<TxCommand>,
+) -> CancellationCheck {
+    if pending.iter().any(is_cancelling) {
+        return CancellationCheck::Cancelled;
+    }
+    while pending.len() < MAX_TX_PENDING_COMMANDS {
         match rx.try_recv() {
-            Ok(command) => pending.push_back(command),
-            Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Disconnected) => return true,
+            Ok(command) => {
+                let cancelling = is_cancelling(&command);
+                pending.push_back(command);
+                if cancelling {
+                    return CancellationCheck::Cancelled;
+                }
+            }
+            Err(TryRecvError::Empty) => return CancellationCheck::Clear,
+            Err(TryRecvError::Disconnected) => return CancellationCheck::Cancelled,
         }
     }
-    pending
-        .iter()
-        .any(|command| matches!(command, TxCommand::Disarm | TxCommand::Shutdown))
+    CancellationCheck::Undetermined
 }
 
 fn run(
@@ -1242,11 +1276,28 @@ fn run(
                     }
 
                     // A release already queued behind this arm cancels it, even
-                    // when the command batch ended before reaching it. Drop the
-                    // packet; the release is handled at the top of the next pass.
-                    if release_is_pending(&mut pending_commands, &cmd_rx) {
-                        did_work = true;
-                        continue;
+                    // when the command batch ended before reaching it. This
+                    // early check spares a cancelled arm the hardware
+                    // preparation below; the one that decides is the check at
+                    // the commit point. Drop the packet; a release is handled at
+                    // the top of the next pass, and an undetermined backlog is
+                    // worked down by the same batches.
+                    match cancellation_check(&mut pending_commands, &cmd_rx) {
+                        CancellationCheck::Clear => {}
+                        CancellationCheck::Cancelled => {
+                            did_work = true;
+                            continue;
+                        }
+                        CancellationCheck::Undetermined => {
+                            if last_zero_iq_log_at.elapsed() >= TX_ZERO_IQ_LOG_INTERVAL {
+                                eprintln!(
+                                    "saturn-bridge: TX key deferred: more than {MAX_TX_PENDING_COMMANDS} commands are queued behind the arm"
+                                );
+                                last_zero_iq_log_at = Instant::now();
+                            }
+                            did_work = true;
+                            continue;
+                        }
                     }
 
                     // First keyable mic+IQ packet — key the radio.
@@ -1267,6 +1318,25 @@ fn run(
                                 continue;
                             }
                             wdsp_tx.set_puresignal_mox(true);
+                        }
+                        // Commit point. Waiting for the model lock and the
+                        // preparation above can take long enough for a release
+                        // to be queued, so decide here, after them and
+                        // immediately before the key call. A release recorded
+                        // before this check cancels the key (do_unkey, which
+                        // runs when the release is read, also clears PureSignal
+                        // MOX). A release after it takes the normal unkey path.
+                        // Only a clear result commits; an undetermined backlog
+                        // waits like a cancelled arm. The key call itself can
+                        // block (direct XDMA configures the stream, prefills the
+                        // FIFO and writes registers before asserting MOX), and a
+                        // release that arrives during it is not seen until it
+                        // returns.
+                        if cancellation_check(&mut pending_commands, &cmd_rx)
+                            != CancellationCheck::Clear
+                        {
+                            did_work = true;
+                            continue;
                         }
                         model.desired.tx_enabled = true;
                         match session.try_key_with_iq(&model, &chunk) {
@@ -1998,6 +2068,13 @@ mod arm_cancellation_tests {
         /// Runs once, on the worker thread, while the first Arm is being set
         /// up: the point at which a release can arrive during the rebuild.
         during_arm_setup: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        /// Runs once, inside `configure_puresignal_feedback`: pre-key
+        /// preparation, after the worker's first cancellation check.
+        during_prekey_feedback: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        /// Runs once, inside the second `send_duc_specific` call (the
+        /// PureSignal preparation; the first is the arm setup).
+        during_prekey_duc_specific: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        duc_specific_calls: AtomicUsize,
     }
 
     impl TxRadio for FakeTxRadio {
@@ -2011,10 +2088,18 @@ mod arm_cancellation_tests {
             true // as direct XDMA: a native rebuild on every arm
         }
         fn configure_puresignal_feedback(&self) -> TxRadioResult {
+            if let Some(hook) = self.during_prekey_feedback.lock_unpoisoned().take() {
+                hook();
+            }
             Ok(())
         }
         fn send_duc_specific(&self, _model: &RadioModel) -> TxRadioResult {
-            if let Some(hook) = self.during_arm_setup.lock_unpoisoned().take() {
+            let hook = if self.duc_specific_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.during_arm_setup.lock_unpoisoned().take()
+            } else {
+                self.during_prekey_duc_specific.lock_unpoisoned().take()
+            };
+            if let Some(hook) = hook {
                 hook();
             }
             Ok(())
@@ -2036,7 +2121,7 @@ mod arm_cancellation_tests {
 
     struct Worker {
         radio: Arc<FakeTxRadio>,
-        commands: Sender<TxCommand>,
+        commands: Option<Sender<TxCommand>>,
         events: Receiver<TxEvent>,
         stop: Arc<AtomicBool>,
         handle: Option<JoinHandle<()>>,
@@ -2072,7 +2157,9 @@ mod arm_cancellation_tests {
     impl Drop for Worker {
         fn drop(&mut self) {
             self.stop.store(true, Ordering::SeqCst);
-            let _ = self.commands.send(TxCommand::Shutdown);
+            if let Some(commands) = &self.commands {
+                let _ = commands.send(TxCommand::Shutdown);
+            }
             if let Some(handle) = self.handle.take() {
                 let _ = handle.join();
             }
@@ -2083,24 +2170,55 @@ mod arm_cancellation_tests {
         TxCommand::Arm { rf_enabled: true }
     }
 
-    /// Starts the worker with `queued` already in its command channel, so a
-    /// test controls exactly which commands the first batch contains.
-    fn start(
+    type Hook = Option<Box<dyn FnOnce() + Send>>;
+
+    /// What a test controls about the worker it starts.
+    struct Options {
         two_tone: bool,
+        pure_signal: bool,
+        /// Keep a sender in the `Worker`. With false, the hooks hold the only
+        /// senders, so a hook can close the command channel.
+        keep_sender: bool,
+        /// Commands already in the channel before the worker starts.
         queued: Vec<TxCommand>,
-        during_arm_setup: impl FnOnce(Sender<TxCommand>) -> Option<Box<dyn FnOnce() + Send>>,
-    ) -> Worker {
+        during_arm_setup: Box<dyn FnOnce(Sender<TxCommand>) -> Hook>,
+        during_prekey_feedback: Box<dyn FnOnce(Sender<TxCommand>) -> Hook>,
+        during_prekey_duc_specific: Box<dyn FnOnce(Sender<TxCommand>) -> Hook>,
+    }
+
+    impl Options {
+        fn new(queued: Vec<TxCommand>) -> Self {
+            Self {
+                two_tone: true,
+                pure_signal: false,
+                keep_sender: true,
+                queued,
+                during_arm_setup: Box::new(no_hook),
+                during_prekey_feedback: Box::new(no_hook),
+                during_prekey_duc_specific: Box::new(no_hook),
+            }
+        }
+    }
+
+    /// Starts the worker with `options.queued` already in its command channel,
+    /// so a test controls exactly which commands the first batch contains.
+    fn start_with(options: Options) -> Worker {
         let radio = Arc::new(FakeTxRadio::default());
         let (commands, command_rx) = mpsc::channel();
-        for command in queued {
+        for command in options.queued {
             commands.send(command).unwrap();
         }
-        *radio.during_arm_setup.lock_unpoisoned() = during_arm_setup(commands.clone());
+        *radio.during_arm_setup.lock_unpoisoned() = (options.during_arm_setup)(commands.clone());
+        *radio.during_prekey_feedback.lock_unpoisoned() =
+            (options.during_prekey_feedback)(commands.clone());
+        *radio.during_prekey_duc_specific.lock_unpoisoned() =
+            (options.during_prekey_duc_specific)(commands.clone());
         let (_audio_tx, audio_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
         let model = {
             let mut model = RadioModel::new(6, 7_215_000, 0, 384, 24, 2048, true, 4096, true);
-            model.desired.two_tone_enabled = two_tone;
+            model.desired.two_tone_enabled = options.two_tone;
+            model.desired.pure_signal_enabled = options.pure_signal;
             model.desired.tx_phase = TxPhase::Armed;
             Arc::new(Mutex::new(model))
         };
@@ -2123,14 +2241,25 @@ mod arm_cancellation_tests {
         };
         Worker {
             radio,
-            commands,
+            commands: options.keep_sender.then_some(commands),
             events,
             stop,
             handle: Some(handle),
         }
     }
 
-    fn no_hook(_: Sender<TxCommand>) -> Option<Box<dyn FnOnce() + Send>> {
+    fn start(
+        two_tone: bool,
+        queued: Vec<TxCommand>,
+        during_arm_setup: impl FnOnce(Sender<TxCommand>) -> Hook + 'static,
+    ) -> Worker {
+        let mut options = Options::new(queued);
+        options.two_tone = two_tone;
+        options.during_arm_setup = Box::new(during_arm_setup);
+        start_with(options)
+    }
+
+    fn no_hook(_: Sender<TxCommand>) -> Hook {
         None
     }
 
@@ -2242,5 +2371,221 @@ mod arm_cancellation_tests {
         let worker = start(true, queued, no_hook);
         assert!(worker.wait_unkeyed());
         assert_eq!(worker.key_calls(), 0);
+    }
+
+    /// A release (or shutdown) queued while the worker prepares to key, after
+    /// its first cancellation check, with a pause so the preparation is slow.
+    fn release_then_pause(
+        commands: Sender<TxCommand>,
+        release: impl FnOnce() -> TxCommand + Send + 'static,
+    ) -> Hook {
+        Some(Box::new(move || {
+            commands.send(release()).unwrap();
+            thread::sleep(Duration::from_millis(100));
+        }))
+    }
+
+    fn pure_signal_options(queued: Vec<TxCommand>) -> Options {
+        let mut options = Options::new(queued);
+        options.pure_signal = true;
+        options
+    }
+
+    #[test]
+    fn prekey_preparation_without_a_release_still_keys_once() {
+        // Positive control for the next tests: the same slow PureSignal
+        // preparation, no release.
+        let mut options = pure_signal_options(vec![arm()]);
+        options.during_prekey_feedback =
+            Box::new(|_| Some(Box::new(|| thread::sleep(Duration::from_millis(100)))));
+        let worker = start_with(options);
+        assert!(worker.wait_keyed(), "never keyed");
+        assert_eq!(worker.key_calls(), 1);
+    }
+
+    #[test]
+    fn release_during_puresignal_feedback_preparation_never_keys() {
+        let mut options = pure_signal_options(vec![arm()]);
+        options.during_prekey_feedback =
+            Box::new(|commands| release_then_pause(commands, || TxCommand::Disarm));
+        let worker = start_with(options);
+        assert!(worker.wait_unkeyed(), "the release was never processed");
+        assert_eq!(worker.key_calls(), 0, "keyed after a release had been queued");
+    }
+
+    #[test]
+    fn release_during_puresignal_duc_preparation_never_keys() {
+        let mut options = pure_signal_options(vec![arm()]);
+        options.during_prekey_duc_specific =
+            Box::new(|commands| release_then_pause(commands, || TxCommand::Disarm));
+        let worker = start_with(options);
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0);
+    }
+
+    #[test]
+    fn shutdown_during_prekey_preparation_never_keys() {
+        let mut options = pure_signal_options(vec![arm()]);
+        options.during_prekey_feedback =
+            Box::new(|commands| release_then_pause(commands, || TxCommand::Shutdown));
+        let worker = start_with(options);
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0);
+    }
+
+    #[test]
+    fn a_closed_command_channel_during_prekey_preparation_never_keys() {
+        // The hooks hold the only senders; running the hook closes the channel.
+        let mut options = pure_signal_options(vec![arm()]);
+        options.keep_sender = false;
+        options.during_prekey_feedback = Box::new(|commands| {
+            Some(Box::new(move || {
+                drop(commands);
+                thread::sleep(Duration::from_millis(100));
+            }))
+        });
+        options.during_prekey_duc_specific = Box::new(|commands| {
+            drop(commands);
+            None
+        });
+        options.during_arm_setup = Box::new(|commands| {
+            drop(commands);
+            None
+        });
+        let worker = start_with(options);
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0);
+    }
+
+    #[test]
+    fn a_new_press_after_a_release_during_prekey_preparation_keys_once() {
+        let mut options = pure_signal_options(vec![arm()]);
+        options.during_prekey_feedback = Box::new(|commands| {
+            Some(Box::new(move || {
+                commands.send(TxCommand::Disarm).unwrap();
+                commands.send(arm()).unwrap();
+                thread::sleep(Duration::from_millis(100));
+            }))
+        });
+        let worker = start_with(options);
+        assert!(worker.wait_unkeyed(), "the cancelled arm must be released first");
+        assert!(worker.wait_keyed(), "the new press never keyed");
+        assert_eq!(worker.key_calls(), 1, "only the new press may key");
+    }
+
+    #[test]
+    fn a_release_behind_more_commands_than_one_check_inspects_never_keys() {
+        // Deeper than the cap on what a single check may look at.
+        let mut queued = vec![arm()];
+        queued.extend((0..MAX_TX_COMMANDS_PER_LOOP * 8).map(|_| filler()));
+        queued.push(TxCommand::Disarm);
+        let worker = start_with(Options::new(queued));
+        assert!(worker.wait_unkeyed());
+        assert_eq!(worker.key_calls(), 0, "a release hidden behind the backlog was missed");
+    }
+
+    #[test]
+    fn a_deep_backlog_without_a_release_delays_keying_but_does_not_prevent_it() {
+        let mut queued = vec![arm()];
+        queued.extend((0..MAX_TX_COMMANDS_PER_LOOP * 8).map(|_| filler()));
+        let worker = start_with(Options::new(queued));
+        assert!(worker.wait_keyed(), "a backlog starved keying forever");
+        assert_eq!(worker.key_calls(), 1);
+    }
+
+    fn filler_channel(
+        before: usize,
+        release: Option<TxCommand>,
+        after: usize,
+    ) -> (Sender<TxCommand>, Receiver<TxCommand>) {
+        let (commands, rx) = mpsc::channel();
+        for _ in 0..before {
+            commands.send(filler()).unwrap();
+        }
+        if let Some(release) = release {
+            commands.send(release).unwrap();
+        }
+        for _ in 0..after {
+            commands.send(filler()).unwrap();
+        }
+        (commands, rx)
+    }
+
+    fn left_in(rx: &Receiver<TxCommand>) -> usize {
+        std::iter::from_fn(|| rx.try_recv().ok()).count()
+    }
+
+    #[test]
+    fn a_check_stops_at_the_first_release_and_reads_no_further() {
+        let (_commands, rx) = filler_channel(10, Some(TxCommand::Disarm), 10_000);
+        let mut pending = VecDeque::new();
+        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Cancelled);
+        assert_eq!(pending.len(), 11, "it must stop at the release");
+        assert_eq!(left_in(&rx), 10_000, "it must not read past the release");
+    }
+
+    #[test]
+    fn a_check_moves_at_most_the_cap_and_reports_an_undetermined_backlog() {
+        let (_commands, rx) = filler_channel(0, None, 10_000);
+        let mut pending = VecDeque::new();
+        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Undetermined);
+        assert_eq!(pending.len(), MAX_TX_PENDING_COMMANDS);
+        assert_eq!(left_in(&rx), 10_000 - MAX_TX_PENDING_COMMANDS);
+    }
+
+    #[test]
+    fn a_repeated_check_on_a_full_queue_reads_nothing_more() {
+        let (_commands, rx) = filler_channel(0, None, 10_000);
+        let mut pending = VecDeque::new();
+        cancellation_check(&mut pending, &rx);
+        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Undetermined);
+        assert_eq!(pending.len(), MAX_TX_PENDING_COMMANDS);
+        assert_eq!(left_in(&rx), 10_000 - MAX_TX_PENDING_COMMANDS);
+    }
+
+    #[test]
+    fn a_short_queue_without_a_release_is_clear_and_is_kept_in_order() {
+        let (commands, rx) = filler_channel(5, None, 0);
+        commands.send(TxCommand::ModelChanged).unwrap();
+        let mut pending = VecDeque::new();
+        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Clear);
+        assert_eq!(pending.len(), 6);
+        assert!(matches!(pending.back(), Some(TxCommand::ModelChanged)));
+        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Clear);
+        assert_eq!(pending.len(), 6, "a second check must not duplicate commands");
+        // The next batch reads them back, oldest first, then the channel.
+        for _ in 0..5 {
+            assert!(matches!(
+                next_tx_command(&mut pending, &rx),
+                Ok(TxCommand::PureSignalReset)
+            ));
+        }
+        assert!(matches!(next_tx_command(&mut pending, &rx), Ok(TxCommand::ModelChanged)));
+        assert!(matches!(
+            next_tx_command(&mut pending, &rx),
+            Err(TryRecvError::Empty)
+        ));
+    }
+
+    #[test]
+    fn a_release_already_set_aside_is_found_without_touching_the_channel() {
+        let (_commands, rx) = filler_channel(0, None, 10_000);
+        let mut pending = VecDeque::from([filler(), TxCommand::Disarm]);
+        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Cancelled);
+        assert_eq!(left_in(&rx), 10_000);
+    }
+
+    #[test]
+    fn shutdown_and_a_closed_channel_also_cancel() {
+        let (_commands, rx) = filler_channel(3, Some(TxCommand::Shutdown), 0);
+        assert_eq!(
+            cancellation_check(&mut VecDeque::new(), &rx),
+            CancellationCheck::Cancelled
+        );
+        let (commands, rx) = filler_channel(3, None, 0);
+        drop(commands);
+        let mut pending = VecDeque::new();
+        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Cancelled);
+        assert_eq!(pending.len(), 3, "commands sent before the close are kept");
     }
 }
