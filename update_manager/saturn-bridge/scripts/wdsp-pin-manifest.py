@@ -7,13 +7,19 @@ with another. It reads, and never changes, the sources and the archive that
 scripts/build-wdsp2-linux-arm.sh produced.
 
   wdsp-pin-manifest.py --native-src DIR --build-dir DIR [--bridge BINARY]
-                       [--cc CC] [--target-cpu CPU] [--output FILE]
+                       [--fftw-lib FILE ...] [--cc CC] [--target-cpu CPU]
+                       [--output FILE]
 
   --native-src  the directory holding OpenHPSDR-wdsp/ and pihpsdr/ (the
                 installer's target/native-src)
   --build-dir   the build helper's output (WDSP2_BUILD_DIR), holding libwdsp.a
                 and the patched sources it was built from
   --bridge      optionally also record a built saturn-bridge binary
+  --fftw-lib    an FFTW library file the build links (libfftw3.a, libfftw3f.a,
+                libfftw3.so.3 ...); repeatable. Its version is read from the
+                version string FFTW embeds in the file. Without it the version
+                is only what pkg-config reports on THIS machine, which is the
+                wrong answer for a cross build.
 
 It records:
   * the expected commits, read from the installer (the single source of truth)
@@ -25,7 +31,15 @@ It records:
   * SHA-256 of libwdsp.a and of each object in it, its machine type, and
     whether every symbol the installer requires is defined.
 
-Exit status is 1 if a pin does not match or a required symbol is missing.
+Exit status is 1 if a pin does not match, a required symbol is missing, the
+supplied FFTW libraries disagree on their version, or a supplied Bridge does
+not contain the expected WDSP commit string.
+
+This is an inventory of one build, not proof of what is installed. It cannot
+say which WDSP is inside a Bridge already running on a radio: for that, hash
+the installed executable and match it to a trusted build record, and until
+then report its WDSP provenance as unknown. The manifest's "limits" and
+"field_sources" say how each field was obtained.
 Hashes of the archive and objects are only comparable between builds made with
 the same compiler and flags; the source hashes are comparable always. A
 compiler that emits debug information also embeds the build directory, so with
@@ -129,7 +143,56 @@ def archive_report(archive: Path) -> dict:
     }
 
 
-def bridge_report(binary: Path) -> dict:
+FFTW_VERSION_STRING = re.compile(r"^fftw-(\d+\.\d+\.\d+)(?:-[a-z0-9-]+)?$")
+
+
+def fftw_library_report(path: Path) -> dict:
+    """SHA-256 of an FFTW library file and the version(s) FFTW embeds in it."""
+    strings = run(["strings", "-a", str(path)]).stdout.splitlines()
+    versions = sorted({m.group(1) for line in strings if (m := FFTW_VERSION_STRING.match(line.strip()))})
+    return {
+        "path": str(path),
+        "sha256": sha256(path),
+        "bytes": path.stat().st_size,
+        "embedded_versions": versions,
+    }
+
+
+def fftw_report(libraries: list, host_pkg_config_version) -> dict:
+    """Which FFTW the build links, and how that was learned.
+
+    The version comes from the library files when they are supplied. Otherwise
+    it is what pkg-config says on the machine running this tool, labelled as
+    such, because that machine's FFTW is not the one linked in a cross build.
+    """
+    artifacts = [fftw_library_report(Path(library)) for library in libraries]
+    embedded = sorted({v for artifact in artifacts for v in artifact["embedded_versions"]})
+    report = {
+        "libraries": artifacts,
+        "host_pkg_config_version": host_pkg_config_version or None,
+        "conflict": len(embedded) > 1,
+    }
+    if embedded:
+        report["version"] = embedded[0] if len(embedded) == 1 else None
+        report["version_source"] = "version string embedded in the supplied FFTW library file(s)"
+        report["differs_from_host"] = bool(host_pkg_config_version) and embedded != [host_pkg_config_version]
+    elif host_pkg_config_version:
+        report["version"] = host_pkg_config_version
+        report["version_source"] = (
+            "pkg-config --modversion fftw3 on the machine that ran this tool; the host's FFTW, "
+            "not shown to be the one linked (pass --fftw-lib to read the linked library)"
+            if not artifacts
+            else "pkg-config on the host: the supplied FFTW file(s) embed no readable version"
+        )
+        report["differs_from_host"] = None
+    else:
+        report["version"] = None
+        report["version_source"] = "unknown"
+        report["differs_from_host"] = None
+    return report
+
+
+def bridge_report(binary: Path, expected_commit: str) -> dict:
     header = run(["readelf", "-h", str(binary)]).stdout
     machine = re.search(r"Machine:\s+(.+)", header)
     needed = re.findall(r"\(NEEDED\)\s+Shared library: \[(.+)\]", run(["readelf", "-d", str(binary)]).stdout)
@@ -141,7 +204,16 @@ def bridge_report(binary: Path) -> dict:
         "machine": machine.group(1).strip() if machine else None,
         "dynamic_needed": needed,
         "embeds_wdsp_flavor_2_10": "wdsp2-2.10" in strings,
-        "embeds_wdsp_commit": "b02d5bac675dd2f33ec2bab2b339f79a597c47dd" in strings,
+        "embeds_wdsp_commit": expected_commit in strings,
+        # A string scan of the file. The 40-character commit is found in
+        # read-only data in every build seen; a short constant such as the flavor
+        # label may not appear as a scannable string at all (seen on x86-64, where
+        # the Bridge reports wdsp2-2.10 in perf.json yet no such string is in the
+        # file; how it is stored was not examined), so "False" for the flavor is
+        # "not found", never "absent". Nothing here ties this binary to the
+        # libwdsp.a recorded below.
+        "string_scan": True,
+        "bound_to_archive": False,
     }
 
 
@@ -150,6 +222,7 @@ def main() -> int:
     parser.add_argument("--native-src", type=Path, required=True)
     parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--bridge", type=Path)
+    parser.add_argument("--fftw-lib", type=Path, action="append", default=[])
     parser.add_argument("--cc", default="cc")
     parser.add_argument("--target-cpu", default=None)
     parser.add_argument("--output", type=Path)
@@ -166,10 +239,33 @@ def main() -> int:
     pins_match = all(actual[key] == expected[key] for key in expected)
 
     cc_version = run([args.cc, "--version"]).stdout.splitlines()
-    fftw = shutil.which("pkg-config") and run(["pkg-config", "--modversion", "fftw3"]).stdout.strip()
+    host_fftw = (shutil.which("pkg-config") and run(["pkg-config", "--modversion", "fftw3"]).stdout.strip()) or None
+    fftw = fftw_report(args.fftw_lib, host_fftw)
     archive = archive_report(args.build_dir / "libwdsp.a")
+    bridge = bridge_report(args.bridge, expected["wdsp"]) if args.bridge else None
     manifest = {
-        "schema": "saturn-wdsp-pin-manifest-v1",
+        "schema": "saturn-wdsp-pin-manifest-v2",
+        "limits": [
+            "An inventory of one build. It cannot identify the WDSP inside an already-installed Bridge; "
+            "hash the installed executable and match it to a trusted build record, otherwise report its "
+            "WDSP provenance as unknown.",
+            "compile_options is the build helper's text, not a receipt of the commands actually run.",
+            "The Bridge, if given, is string-scanned for the expected WDSP commit, not bound to libwdsp.a. "
+            "A flavor label not found by the scan is not proof it is absent: a short constant may not be stored as a scannable string.",
+            "Object and archive hashes are comparable only between builds with the same compiler, flags "
+            "and build path (see the top of this tool).",
+        ],
+        "field_sources": {
+            "pins.expected": "the installer script, read now",
+            "pins.checked_out": "git rev-parse HEAD in the two checkouts, run now",
+            "upstream_sources / patched_build_tree": "SHA-256 of the files on disk now",
+            "build.compile_options": "text of scripts/build-wdsp2-linux-arm.sh, read now",
+            "build.compiler / compiler_machine": "the --cc command run now with --version / -dumpmachine",
+            "build.target_cpu": "the --target-cpu argument, as given",
+            "build.fftw": "see build.fftw.version_source",
+            "archive": "libwdsp.a on disk now (ar, nm, readelf)",
+            "bridge": "the --bridge file on disk now (readelf, strings)",
+        },
         "pins": {
             "installer": str(INSTALLER.relative_to(HERE.parent.parent.parent)),
             "repositories": {
@@ -192,10 +288,12 @@ def main() -> int:
             "target_cpu": args.target_cpu,
             "compiler": cc_version[0] if cc_version else None,
             "compiler_machine": run([args.cc, "-dumpmachine"]).stdout.strip() or None,
-            "fftw_version": fftw or None,
+            "fftw_version": fftw["version"],
+            "fftw_version_source": fftw["version_source"],
+            "fftw": fftw,
         },
         "archive": archive,
-        "bridge": bridge_report(args.bridge) if args.bridge else None,
+        "bridge": bridge,
     }
     text = json.dumps(manifest, indent=1, sort_keys=True) + "\n"
     if args.output:
@@ -207,6 +305,17 @@ def main() -> int:
         problems.append(f"pins differ: expected {expected}, checked out {actual}")
     if archive["missing_required_symbols"]:
         problems.append(f"missing symbols: {archive['missing_required_symbols']}")
+    if fftw["conflict"]:
+        problems.append(f"the supplied FFTW libraries embed different versions: {fftw['libraries']}")
+    if bridge is not None and not bridge["embeds_wdsp_commit"]:
+        problems.append(
+            f"no occurrence of the expected WDSP commit {expected['wdsp']} was found in the Bridge "
+            "(was it built with SATURN_BRIDGE_WDSP_COMMIT set?)"
+        )
+    if bridge is not None and not bridge["embeds_wdsp_flavor_2_10"]:
+        print("wdsp-pin-manifest: note: the flavor label wdsp2-2.10 was not found by string scan in the "
+              "Bridge; a short constant may not be stored as a scannable string, so this is not "
+              "proof it is absent (the running Bridge reports it as wdsp_flavor in perf.json)", file=sys.stderr)
     for problem in problems:
         print(f"wdsp-pin-manifest: {problem}", file=sys.stderr)
     return 1 if problems else 0
