@@ -22,6 +22,7 @@ pub enum TxDecodeError {
     PayloadSizeMismatch,
     PayloadTooShort,
     SampleCountMismatch,
+    NonFiniteSample,
 }
 
 pub const TX_MIC_CODEC_PCM_ID: u32 = 0;
@@ -453,7 +454,17 @@ fn decode_pcm_payload(
                 let bytes: [u8; 4] = payload[i * 4..i * 4 + 4]
                     .try_into()
                     .map_err(|_| TxDecodeError::PayloadTooShort)?;
-                samples.push(f32::from_le_bytes(bytes));
+                let sample = f32::from_le_bytes(bytes);
+                // A NaN or infinite sample would reach the native TX chain and
+                // can poison its filter state. Refuse the whole frame, as the
+                // SATP path does; it is counted as a decode error and
+                // persistent errors already force the radio back to RX.
+                // Finite values of any magnitude pass: level limiting is the
+                // TX chain's job.
+                if !sample.is_finite() {
+                    return Err(TxDecodeError::NonFiniteSample);
+                }
+                samples.push(sample);
             }
         }
         _ => return Err(TxDecodeError::UnsupportedSampleType),

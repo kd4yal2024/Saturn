@@ -170,6 +170,20 @@ pub(crate) fn tx_codec_decode_fault_message(count: u64, limit: u64) -> String {
     format!("tx_fault:0,codec_decode,count={count},limit={limit};")
 }
 
+/// Parses a numeric control value. Returns `None` for text that is not a number
+/// and, counting it against the client, for NaN and infinities.
+fn parse_finite_control(text: &str, clients: &ClientRegistry, client_id: u64) -> Option<f64> {
+    let value = text.trim().parse::<f64>().ok()?;
+    if value.is_finite() {
+        return Some(value);
+    }
+    if let Some(client) = clients.lock_unpoisoned().get_mut(&client_id) {
+        client.state.non_finite_control_count =
+            client.state.non_finite_control_count.saturating_add(1);
+    }
+    None
+}
+
 #[cfg(test)]
 pub(crate) fn parse_tci_command(
     command: &str,
@@ -228,6 +242,11 @@ pub(crate) fn parse_tci_command_with_roles(
     if !allow_control && !viewer_tci_command_allowed(&name) {
         return;
     }
+    // Numeric controls must be finite. `f64::from_str` accepts "NaN", "inf"
+    // and "infinity", and `clamp` passes NaN through, so a range check alone
+    // would still store NaN in the model. A refused value is counted for the
+    // client; text that is not a number at all is ignored as before.
+    let finite = |text: &str| parse_finite_control(text, clients, client_id);
     match name.as_str() {
         "saturn_satp_control" => {
             if args.len() == 1 && matches!(args[0], "pair" | "renew" | "tci" | "satp") {
@@ -306,7 +325,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(volume_text) = volume_arg {
-                if let Ok(volume_db) = volume_text.trim().parse::<f64>() {
+                if let Some(volume_db) = finite(volume_text) {
                     let _ = command_tx.send(TciCommand::SetRxVolume(volume_db));
                 }
             }
@@ -325,7 +344,7 @@ pub(crate) fn parse_tci_command_with_roles(
         }
         "rx_ssql_threshold" => {
             let value = args.get(1).or_else(|| args.first());
-            if let Some(threshold) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+            if let Some(threshold) = value.and_then(|text| finite(text)) {
                 let _ =
                     command_tx.send(TciCommand::SetRxSsqlThreshold(threshold.clamp(0.0, 100.0)));
             }
@@ -361,7 +380,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(level_text) = level_arg {
-                if let Ok(level) = level_text.trim().parse::<f64>() {
+                if let Some(level) = finite(level_text) {
                     let _ = command_tx.send(TciCommand::SetRxNoiseReductionLevel(level));
                 }
             }
@@ -455,7 +474,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(gain_text) = gain_arg {
-                if let Ok(gain) = gain_text.trim().parse::<f64>() {
+                if let Some(gain) = finite(gain_text) {
                     let _ = command_tx.send(TciCommand::SetRxAnrVals {
                         taps: None,
                         delay: None,
@@ -472,7 +491,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(leakage_text) = leakage_arg {
-                if let Ok(leakage) = leakage_text.trim().parse::<f64>() {
+                if let Some(leakage) = finite(leakage_text) {
                     let _ = command_tx.send(TciCommand::SetRxAnrVals {
                         taps: None,
                         delay: None,
@@ -747,7 +766,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(thresh_text) = thresh_arg {
-                if let Ok(thresh) = thresh_text.trim().parse::<f64>() {
+                if let Some(thresh) = finite(thresh_text) {
                     let _ = command_tx.send(TciCommand::SetNoiseBlankerThreshold(thresh));
                 }
             }
@@ -805,7 +824,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(gain_text) = gain_arg {
-                if let Ok(gain) = gain_text.trim().parse::<f64>() {
+                if let Some(gain) = finite(gain_text) {
                     let _ = command_tx.send(TciCommand::SetRxAnfVals {
                         taps: None,
                         delay: None,
@@ -822,7 +841,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(leakage_text) = leakage_arg {
-                if let Ok(leakage) = leakage_text.trim().parse::<f64>() {
+                if let Some(leakage) = finite(leakage_text) {
                     let _ = command_tx.send(TciCommand::SetRxAnfVals {
                         taps: None,
                         delay: None,
@@ -849,7 +868,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(gain_text) = gain_arg {
-                if let Ok(gain) = gain_text.trim().parse::<f64>() {
+                if let Some(gain) = finite(gain_text) {
                     let _ = command_tx.send(TciCommand::SetAgcGain(gain));
                 }
             }
@@ -882,12 +901,10 @@ pub(crate) fn parse_tci_command_with_roles(
         }
         "tx_monitor_level" => {
             if args.len() == 2 && args[0].trim() == "0" {
-                if let Ok(level) = args[1].trim().parse::<f64>() {
-                    if level.is_finite() {
-                        let _ = command_tx.send(TciCommand::SetTxMonitorLevel(
-                            crate::tx_monitor::clamp_level(level),
-                        ));
-                    }
+                if let Some(level) = finite(args[1]) {
+                    let _ = command_tx.send(TciCommand::SetTxMonitorLevel(
+                        crate::tx_monitor::clamp_level(level),
+                    ));
                 }
             }
         }
@@ -898,7 +915,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(gain_text) = gain_arg {
-                if let Ok(gain_db) = gain_text.trim().parse::<f64>() {
+                if let Some(gain_db) = finite(gain_text) {
                     let _ = command_tx.send(TciCommand::SetTxMicGain(gain_db));
                 }
             }
@@ -980,7 +997,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(precomp_text) = precomp_arg {
-                if let Ok(db) = precomp_text.trim().parse::<f64>() {
+                if let Some(db) = finite(precomp_text) {
                     let _ = command_tx.send(TciCommand::SetTxCfcPrecomp(db));
                 }
             }
@@ -988,10 +1005,9 @@ pub(crate) fn parse_tci_command_with_roles(
         "tx_cfc_band" => {
             // tx_cfc_band:0,band_idx,gain_db  — band_idx 1-10, gain_db in dB
             if args.len() >= 3 {
-                if let (Ok(band), Ok(gain_db)) = (
-                    args[1].trim().parse::<usize>(),
-                    args[2].trim().parse::<f64>(),
-                ) {
+                if let (Ok(band), Some(gain_db)) =
+                    (args[1].trim().parse::<usize>(), finite(args[2]))
+                {
                     if band >= 1 && band <= 10 {
                         let _ = command_tx.send(TciCommand::SetTxCfcBand { band, gain_db });
                     }
@@ -1029,7 +1045,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(corner_text) = corner_arg {
-                if let Ok(corner_hz) = corner_text.trim().parse::<f64>() {
+                if let Some(corner_hz) = finite(corner_text) {
                     let _ = command_tx.send(TciCommand::SetTxPhaseRotatorCorner(corner_hz));
                 }
             }
@@ -1093,7 +1109,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(freq_text) = freq_arg {
-                if let Ok(freq_hz) = freq_text.trim().parse::<f64>() {
+                if let Some(freq_hz) = finite(freq_text) {
                     let _ = command_tx.send(TciCommand::SetTxTwoToneFreq1(freq_hz));
                 }
             }
@@ -1105,7 +1121,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(freq_text) = freq_arg {
-                if let Ok(freq_hz) = freq_text.trim().parse::<f64>() {
+                if let Some(freq_hz) = finite(freq_text) {
                     let _ = command_tx.send(TciCommand::SetTxTwoToneFreq2(freq_hz));
                 }
             }
@@ -1117,7 +1133,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(level_text) = level_arg {
-                if let Ok(level_db) = level_text.trim().parse::<f64>() {
+                if let Some(level_db) = finite(level_text) {
                     let _ = command_tx.send(TciCommand::SetTxTwoToneLevelDb(level_db));
                 }
             }
@@ -1165,7 +1181,7 @@ pub(crate) fn parse_tci_command_with_roles(
                 args.first()
             };
             if let Some(thresh_text) = thresh_arg {
-                if let Ok(thresh_db) = thresh_text.trim().parse::<f64>() {
+                if let Some(thresh_db) = finite(thresh_text) {
                     let clamped = thresh_db.clamp(-80.0, 0.0);
                     let _ = command_tx.send(TciCommand::SetTxNoiseGateThreshold(clamped));
                 }
@@ -1179,7 +1195,7 @@ pub(crate) fn parse_tci_command_with_roles(
         }
         "tx_dexp_threshold" => {
             let value = args.get(1).or_else(|| args.first());
-            if let Some(threshold_db) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+            if let Some(threshold_db) = value.and_then(|text| finite(text)) {
                 let _ = command_tx.send(TciCommand::SetTxDexpThreshold(
                     threshold_db.clamp(-80.0, -6.0),
                 ));
@@ -1187,7 +1203,7 @@ pub(crate) fn parse_tci_command_with_roles(
         }
         "tx_dexp_expansion" => {
             let value = args.get(1).or_else(|| args.first());
-            if let Some(expansion_db) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+            if let Some(expansion_db) = value.and_then(|text| finite(text)) {
                 let _ = command_tx.send(TciCommand::SetTxDexpExpansion(
                     expansion_db.clamp(0.0, 30.0),
                 ));
@@ -1201,7 +1217,7 @@ pub(crate) fn parse_tci_command_with_roles(
         }
         "tx_speech_processor_gain" => {
             let value = args.get(1).or_else(|| args.first());
-            if let Some(gain_db) = value.and_then(|text| text.trim().parse::<f64>().ok()) {
+            if let Some(gain_db) = value.and_then(|text| finite(text)) {
                 let _ = command_tx.send(TciCommand::SetTxSpeechProcessorGain(
                     gain_db.clamp(0.0, 20.0),
                 ));

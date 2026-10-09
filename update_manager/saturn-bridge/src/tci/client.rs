@@ -104,6 +104,8 @@ pub(crate) struct ClientState {
     pub(crate) tx_codec_decoder: Arc<Mutex<TxCodecDecoder>>,
     pub(crate) tx_codec_degraded: bool,
     pub(crate) tx_codec_decode_error_count: u64,
+    /// Numeric controls refused because they were NaN or infinite.
+    pub(crate) non_finite_control_count: u64,
     pub(crate) tx_codec_decode_error_window_started_at: Option<Instant>,
     pub(crate) tx_codec_decode_error_window_count: u64,
     pub(crate) tx_codec_stale_drop_count: u64,
@@ -155,6 +157,7 @@ impl ClientState {
             ))),
             tx_codec_degraded: false,
             tx_codec_decode_error_count: 0,
+            non_finite_control_count: 0,
             tx_codec_decode_error_window_started_at: None,
             tx_codec_decode_error_window_count: 0,
             tx_codec_stale_drop_count: 0,

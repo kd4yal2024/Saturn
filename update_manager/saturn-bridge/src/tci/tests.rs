@@ -444,6 +444,184 @@ fn safety_messages_are_not_affected_by_a_media_backlog() {
     assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
 }
 
+/// Every TCI control that carries a floating-point value, with a command
+/// prefix that supplies the value as its last argument.
+const FLOAT_CONTROLS: &[&str] = &[
+    "rx_volume:0,",
+    "rx_ssql_threshold:0,",
+    "rx_nr_level:0,",
+    "rx_anr_gain:0,",
+    "rx_anr_leakage:0,",
+    "rx_nb_threshold:0,",
+    "rx_anf_gain:0,",
+    "rx_anf_leakage:0,",
+    "rx_agc_gain:0,",
+    "tx_monitor_level:0,",
+    "tx_mic_gain:0,",
+    "tx_cfc_precomp:0,",
+    "tx_cfc_band:0,3,",
+    "tx_phase_rotator_corner:0,",
+    "tx_two_tone_freq1:0,",
+    "tx_two_tone_freq2:0,",
+    "tx_two_tone_level_db:0,",
+    "tx_noise_gate_threshold:0,",
+    "tx_dexp_threshold:0,",
+    "tx_dexp_expansion:0,",
+    "tx_speech_processor_gain:0,",
+];
+
+fn non_finite_control_count(clients: &ClientRegistry, client_id: u64) -> u64 {
+    clients
+        .lock_unpoisoned()
+        .get(&client_id)
+        .unwrap()
+        .state
+        .non_finite_control_count
+}
+
+#[test]
+fn non_finite_numeric_controls_are_rejected_and_counted() {
+    for prefix in FLOAT_CONTROLS {
+        for bad in ["NaN", "nan", "-nan", "inf", "-inf", "Infinity", "-infinity", "1e999", "-1e999"] {
+            let clients = test_client_registry(7);
+            let (tx, rx) = tci_command_mailbox();
+            parse_tci_command(&format!("{prefix}{bad}"), &tx, &clients, 7, true);
+            assert!(
+                rx.try_recv().is_err(),
+                "{prefix}{bad} produced a command"
+            );
+            assert_eq!(
+                non_finite_control_count(&clients, 7),
+                1,
+                "{prefix}{bad} was not counted"
+            );
+        }
+    }
+}
+
+#[test]
+fn finite_numeric_controls_are_still_accepted() {
+    for prefix in FLOAT_CONTROLS {
+        for good in ["0", "-12.5", "3", "1e3", " 7.25 "] {
+            let clients = test_client_registry(7);
+            let (tx, rx) = tci_command_mailbox();
+            parse_tci_command(&format!("{prefix}{good}"), &tx, &clients, 7, true);
+            assert!(
+                rx.try_recv().is_ok(),
+                "{prefix}{good} was not accepted"
+            );
+            assert!(rx.try_recv().is_err(), "{prefix}{good} produced two commands");
+            assert_eq!(non_finite_control_count(&clients, 7), 0, "{prefix}{good}");
+        }
+    }
+}
+
+#[test]
+fn extreme_finite_controls_are_not_mistaken_for_non_finite() {
+    // The largest finite f64 is a legal number; range limits belong to the
+    // control that owns it. Only NaN and infinities are refused here.
+    let clients = test_client_registry(7);
+    let (tx, rx) = tci_command_mailbox();
+    parse_tci_command("rx_ssql_threshold:0,1.7976931348623157e308", &tx, &clients, 7, true);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(TciCommand::SetRxSsqlThreshold(value)) if value == 100.0
+    ));
+    parse_tci_command("tx_mic_gain:0,1e300", &tx, &clients, 7, true);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(TciCommand::SetTxMicGain(value)) if value.is_finite()
+    ));
+    assert_eq!(non_finite_control_count(&clients, 7), 0);
+}
+
+#[test]
+fn a_rejected_control_does_not_disturb_the_following_commands() {
+    let clients = test_client_registry(7);
+    let (tx, rx) = tci_command_mailbox();
+    parse_tci_command("rx_ssql_threshold:0,NaN", &tx, &clients, 7, true);
+    parse_tci_command("rx_ssql_threshold:0,40", &tx, &clients, 7, true);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(TciCommand::SetRxSsqlThreshold(value)) if value == 40.0
+    ));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(non_finite_control_count(&clients, 7), 1);
+}
+
+#[test]
+fn unparsable_numeric_controls_are_ignored_but_not_counted_as_non_finite() {
+    let clients = test_client_registry(7);
+    let (tx, rx) = tci_command_mailbox();
+    parse_tci_command("rx_ssql_threshold:0,loud", &tx, &clients, 7, true);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(non_finite_control_count(&clients, 7), 0);
+}
+
+fn float_mic_frame(samples: &[f32]) -> Vec<u8> {
+    let mut frame = vec![0u8; 64 + samples.len() * 4];
+    write_u32_le(&mut frame, 4, 48_000);
+    write_u32_le(&mut frame, 8, TX_SAMPLE_TYPE_FLOAT32);
+    write_u32_le(&mut frame, 20, samples.len() as u32);
+    write_u32_le(&mut frame, 24, 2);
+    write_u32_le(&mut frame, 28, 1);
+    for (index, sample) in samples.iter().enumerate() {
+        let offset = 64 + index * 4;
+        frame[offset..offset + 4].copy_from_slice(&sample.to_le_bytes());
+    }
+    frame
+}
+
+#[test]
+fn float_mic_frames_with_non_finite_samples_are_rejected_as_decode_errors() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let frame = float_mic_frame(&[0.25, -0.5, bad, 0.125]);
+        assert_eq!(
+            parse_tci_mic_frame_result(&frame).unwrap_err(),
+            TciMicFrameParseError::Decode(TxDecodeError::NonFiniteSample),
+            "{bad}"
+        );
+    }
+}
+
+#[test]
+fn rejected_float_mic_frames_count_toward_the_existing_decode_fault_escalation() {
+    let clients = test_client_registry(9);
+    let now = Instant::now();
+    let mut forced_rx_at = None;
+    for attempt in 1..=64u64 {
+        let frame = float_mic_frame(&[f32::NAN]);
+        assert!(parse_tci_mic_frame_result(&frame).is_err());
+        let action = record_client_tx_codec_decode_error_at(&clients, 9, now);
+        if action.force_rx && forced_rx_at.is_none() {
+            forced_rx_at = Some(attempt);
+        }
+    }
+    assert_eq!(
+        forced_rx_at,
+        Some(TX_CODEC_DECODE_ERROR_FORCE_RX_LIMIT),
+        "persistently invalid float audio must release PTT"
+    );
+}
+
+#[test]
+fn finite_float_mic_frames_are_unchanged_including_extremes() {
+    let samples = [0.0, -0.0, 0.25, -1.0, 1.0, 4.0, f32::MIN_POSITIVE, f32::MAX, f32::MIN];
+    let parsed = parse_tci_mic_frame(&float_mic_frame(&samples)).unwrap();
+    assert_eq!(parsed.samples.len(), samples.len());
+    for (decoded, sent) in parsed.samples.iter().zip(samples) {
+        assert_eq!(decoded.to_bits(), sent.to_bits());
+    }
+}
+
+#[test]
+fn a_bad_float_mic_frame_does_not_poison_the_next_good_one() {
+    let bad = float_mic_frame(&[f32::NAN, 0.5]);
+    let good = float_mic_frame(&[0.25, -0.5]);
+    assert!(parse_tci_mic_frame_result(&bad).is_err());
+    assert_eq!(parse_tci_mic_frame(&good).unwrap().samples, vec![0.25, -0.5]);
+}
+
 fn opus_wb_runtime_available() -> bool {
     let mut decoder = TxCodecDecoder::new_with_flags(
         TxMicCodec::OpusWb,
