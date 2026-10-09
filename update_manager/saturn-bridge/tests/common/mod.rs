@@ -186,4 +186,3 @@ pub fn real_tone_db(samples: &[f32], sample_rate: f64, frequency_hz: f64) -> f64
     }
     20.0 * ((re * re + im * im).sqrt() * 2.0 / samples.len() as f64).max(1e-12).log10()
 }
-
