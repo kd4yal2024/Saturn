@@ -687,12 +687,16 @@ impl ClientOutbound {
                 }
                 queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
                 queues.control.push_back(item);
+                // The control budget is for control messages. Raw IQ, audio and
+                // display have their own limits and must not evict control state.
+                let mut control_bytes = control_queue_bytes(&queues);
                 while queues.control.len() > MAX_CONTROL_QUEUE_MESSAGES
-                    || queues.queued_bytes > MAX_CONTROL_QUEUE_BYTES
+                    || control_bytes > MAX_CONTROL_QUEUE_BYTES
                 {
                     let Some(old) = queues.control.pop_front() else {
                         break;
                     };
+                    control_bytes = control_bytes.saturating_sub(old.estimated_bytes);
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
                     dropped += 1;
                     self.stats.record_control_dropped();
@@ -902,12 +906,14 @@ impl ClientOutbound {
             OutboundClass::Safety => queues.safety.push_front(item),
             OutboundClass::Control => {
                 queues.control.push_front(item);
+                let mut control_bytes = control_queue_bytes(&queues);
                 while queues.control.len() > MAX_CONTROL_QUEUE_MESSAGES
-                    || queues.queued_bytes > MAX_CONTROL_QUEUE_BYTES
+                    || control_bytes > MAX_CONTROL_QUEUE_BYTES
                 {
                     let Some(old) = queues.control.pop_back() else {
                         break;
                     };
+                    control_bytes = control_bytes.saturating_sub(old.estimated_bytes);
                     queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
                     self.stats.record_control_dropped();
                 }
@@ -1125,6 +1131,11 @@ pub(crate) fn display_frame_interval_for_limit(limit_hz: u16) -> Duration {
     } else {
         Duration::from_nanos(1_000_000_000u64 / u64::from(limit_hz))
     }
+}
+
+/// Bytes held by the control queue alone.
+fn control_queue_bytes(queues: &OutboundQueues) -> usize {
+    queues.control.iter().map(|item| item.estimated_bytes).sum()
 }
 
 pub(crate) fn queued_bytes_without_audio(queues: &OutboundQueues) -> usize {

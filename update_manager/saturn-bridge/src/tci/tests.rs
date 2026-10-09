@@ -265,6 +265,185 @@ fn handshake_resumption_stops_at_the_timeout_it_is_given() {
     assert!(elapsed < Duration::from_millis(1000), "returned after {elapsed:?}");
 }
 
+/// Bytes held in every queue, to compare with the running total.
+fn outbound_byte_total(queues: &OutboundQueues) -> usize {
+    let held = |queue: &std::collections::VecDeque<QueuedOutbound>| -> usize {
+        queue.iter().map(|item| item.estimated_bytes).sum()
+    };
+    held(&queues.safety)
+        + held(&queues.control)
+        + held(&queues.audio)
+        + held(&queues.full_rate_iq)
+        + queues
+            .display
+            .as_ref()
+            .map_or(0, |item| item.estimated_bytes)
+}
+
+fn raw_iq_frame() -> OutboundMessage {
+    // The direct-XDMA frame: 12,800 complex pairs, 102,464 bytes with header.
+    OutboundMessage::FullRateIqFrame {
+        receiver: 0,
+        sample_rate: 384_000,
+        iq_samples: vec![0.0; 25_600],
+    }
+}
+
+/// Fills one media class well past the 256 KiB control budget.
+fn fill_media_class(outbound: &ClientOutbound, class: OutboundClass) {
+    match class {
+        OutboundClass::FullRateIq => {
+            for _ in 0..MAX_FULL_RATE_IQ_QUEUE_MESSAGES {
+                outbound.enqueue(raw_iq_frame());
+            }
+        }
+        OutboundClass::Display => {
+            outbound.enqueue(OutboundMessage::IqFrame {
+                receiver: 0,
+                sample_rate: 384_000,
+                iq_samples: vec![0.0; 100_000],
+            });
+        }
+        OutboundClass::Audio => {
+            outbound.enqueue(OutboundMessage::AudioFrame {
+                receiver: 0,
+                sample_rate: 48_000,
+                channels: 1,
+                audio_samples: vec![0.0; 100_000],
+                sequence: 0,
+            });
+        }
+        _ => unreachable!("not a media class"),
+    }
+    assert!(
+        outbound.queues.lock_unpoisoned().queued_bytes > MAX_CONTROL_QUEUE_BYTES,
+        "{class:?} backlog must exceed the control budget for this test to mean anything"
+    );
+}
+
+#[test]
+fn media_backlog_does_not_delete_fresh_control_state() {
+    for classes in [
+        vec![OutboundClass::FullRateIq],
+        vec![OutboundClass::Display],
+        vec![OutboundClass::Audio],
+        vec![
+            OutboundClass::FullRateIq,
+            OutboundClass::Display,
+            OutboundClass::Audio,
+        ],
+    ] {
+        let outbound = ClientOutbound::new();
+        for class in &classes {
+            fill_media_class(&outbound, *class);
+        }
+        let media_before = {
+            let queues = outbound.queues.lock_unpoisoned();
+            (
+                queues.full_rate_iq.len(),
+                queues.display.is_some(),
+                queues.audio.len(),
+            )
+        };
+
+        let dropped = outbound.enqueue(OutboundMessage::Text("vfo:0,0,7215000;".into()));
+        assert_eq!(dropped, 0, "{classes:?}: the new control message was dropped");
+        {
+            let queues = outbound.queues.lock_unpoisoned();
+            assert_eq!(queues.control.len(), 1, "{classes:?}");
+            assert_eq!(
+                (
+                    queues.full_rate_iq.len(),
+                    queues.display.is_some(),
+                    queues.audio.len()
+                ),
+                media_before,
+                "{classes:?}: media must be left to its own policy"
+            );
+            assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
+        }
+        let next = outbound.next_message(true).unwrap();
+        assert_eq!(next.class, OutboundClass::Control);
+        assert!(matches!(&next.message, OutboundMessage::Text(text) if text == "vfo:0,0,7215000;"));
+        assert_eq!(outbound.drain_stats().control_dropped, 0, "{classes:?}");
+    }
+}
+
+#[test]
+fn the_control_budget_still_applies_to_control_bytes() {
+    let outbound = ClientOutbound::new();
+    fill_media_class(&outbound, OutboundClass::FullRateIq);
+    // Three 100,000-byte messages are 300,000 bytes: over the 262,144 budget.
+    let messages: Vec<String> = (0..3).map(|n| format!("{n}{}", "x".repeat(99_999))).collect();
+    let mut dropped = 0;
+    for message in &messages {
+        dropped += outbound.enqueue(OutboundMessage::Text(message.clone()));
+    }
+    let queues = outbound.queues.lock_unpoisoned();
+    let control_bytes: usize = queues.control.iter().map(|item| item.estimated_bytes).sum();
+    assert!(control_bytes <= MAX_CONTROL_QUEUE_BYTES, "control holds {control_bytes}");
+    assert_eq!(dropped, 1, "exactly the oldest control message is dropped");
+    assert!(matches!(
+        &queues.control.back().unwrap().message,
+        OutboundMessage::Text(text) if text == &messages[2]
+    ));
+    assert_eq!(queues.full_rate_iq.len(), MAX_FULL_RATE_IQ_QUEUE_MESSAGES);
+    assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
+    drop(queues);
+    assert_eq!(outbound.drain_stats().control_dropped, 1);
+}
+
+#[test]
+fn requeued_control_state_survives_a_media_backlog() {
+    let outbound = ClientOutbound::new();
+    outbound.enqueue(OutboundMessage::Text("vfo:0,0,7215000;".into()));
+    fill_media_class(&outbound, OutboundClass::FullRateIq);
+
+    // The writer takes the control message, then puts it back unsent.
+    let taken = outbound.next_message(false).unwrap();
+    assert_eq!(taken.class, OutboundClass::Control);
+    outbound.requeue_front(taken);
+
+    {
+        let queues = outbound.queues.lock_unpoisoned();
+        assert_eq!(queues.control.len(), 1, "the requeued message was dropped");
+        assert_eq!(queues.full_rate_iq.len(), MAX_FULL_RATE_IQ_QUEUE_MESSAGES);
+        assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
+    }
+    assert_eq!(outbound.drain_stats().control_dropped, 0);
+    assert_eq!(outbound.next_message(true).unwrap().class, OutboundClass::Control);
+}
+
+#[test]
+fn requeue_keeps_control_within_its_own_budget() {
+    let outbound = ClientOutbound::new();
+    fill_media_class(&outbound, OutboundClass::FullRateIq);
+    let big = |tag: char| OutboundMessage::Text(format!("{tag}{}", "x".repeat(99_999)));
+    outbound.enqueue(big('a'));
+    outbound.enqueue(big('b'));
+    let taken = outbound.next_message(false).unwrap();
+    outbound.enqueue(big('c'));
+    outbound.enqueue(big('d'));
+    // Enqueueing 'd' pushed control past its budget and dropped 'b', leaving
+    // 'c','d'. Putting 'a' back is over the budget again and must trim it.
+    outbound.requeue_front(taken);
+
+    let queues = outbound.queues.lock_unpoisoned();
+    let control_bytes: usize = queues.control.iter().map(|item| item.estimated_bytes).sum();
+    assert!(control_bytes <= MAX_CONTROL_QUEUE_BYTES, "control holds {control_bytes}");
+    assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
+}
+
+#[test]
+fn safety_messages_are_not_affected_by_a_media_backlog() {
+    let outbound = ClientOutbound::new();
+    fill_media_class(&outbound, OutboundClass::FullRateIq);
+    outbound.enqueue(OutboundMessage::SafetyText("trx:0,false;".into()));
+    let queues = outbound.queues.lock_unpoisoned();
+    assert_eq!(queues.safety.len(), 1);
+    assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
+}
+
 fn opus_wb_runtime_available() -> bool {
     let mut decoder = TxCodecDecoder::new_with_flags(
         TxMicCodec::OpusWb,
