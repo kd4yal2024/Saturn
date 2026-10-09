@@ -25,6 +25,13 @@ describe('RXC1 receiver-counter presentation', () => {
     expect(result.detail).toContain('no register reads or loss count');
   });
 
+  it('shows a spent trial arm without treating counters as zero', () => {
+    const result = present({ schema: 'rxc1-v1', source_backend: 'xdma', status: 'unarmed' }, 'xdma');
+    expect(result.state).toBe('unavailable');
+    expect(result.summary).toBe('unarmed / unavailable');
+    expect(result.detail).toContain('polling stayed off');
+  });
+
   it('does not attribute a stale P2 reading to a direct-XDMA session', () => {
     const result = present({ schema: 'rxc1-v1', source_backend: 'p2', status: 'valid' }, 'xdma');
     expect(result.state).toBe('unavailable');

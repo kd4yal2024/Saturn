@@ -419,6 +419,8 @@ Group=${P2APP_SERVICE_GROUP}
 Restart=always
 RestartSec=5
 TimeoutStopSec=30
+StateDirectory=saturn-rxc1-p2
+StateDirectoryMode=0700
 Environment=LD_LIBRARY_PATH=/usr/local/lib:/usr/lib
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=SATURN_P23_SELECTED_APP=p2

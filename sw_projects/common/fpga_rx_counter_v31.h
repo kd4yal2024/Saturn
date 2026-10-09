@@ -27,7 +27,8 @@ typedef enum
   eRXC1OverflowMismatch,
   eRXC1SnapshotChanged,
   eRXC1AckFailed,
-  eRXC1Disabled
+  eRXC1Disabled,
+  eRXC1Unarmed
 } ERXC1Status;
 
 typedef struct

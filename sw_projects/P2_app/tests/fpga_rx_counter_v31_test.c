@@ -1,9 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "fpga_rx_counter_v31.h"
 
@@ -28,6 +32,23 @@ static bool FaultFired;
 static uint32_t FailedRequestToken;
 static unsigned int AckFailuresRemaining, AckAttempts;
 static unsigned int RegisterReads, RegisterWrites;
+static char TrialDirectory[] = "/tmp/saturn-rxc1-test-XXXXXX";
+
+static void TrialPath(char *Path, size_t Size, const char *Name)
+{
+  assert(snprintf(Path, Size, "%s/%s", TrialDirectory, Name) > 0);
+}
+
+static void ArmTrial(void)
+{
+  char Path[sizeof(TrialDirectory) + 16U];
+  FILE *File;
+  TrialPath(Path, sizeof(Path), "armed");
+  File = fopen(Path, "w");
+  assert(File != NULL);
+  assert(fputs("RXC1-TRIAL-0x53460004\n", File) >= 0);
+  assert(fclose(File) == 0);
+}
 
 bool RegisterReadChecked(uint32_t Address, uint32_t *Value)
 {
@@ -125,12 +146,15 @@ static void ResetFake(EMode NewMode)
   FailedRequestToken = 0;
   AckFailuresRemaining = AckAttempts = 0;
   RegisterReads = RegisterWrites = 0;
+  ArmTrial();
   RXC1Init(0x53460004U);
 }
 
 static void TestPollingDisabled(void)
 {
   TRXC1Snapshot Snapshot;
+  char Path[sizeof(TrialDirectory) + 16U];
+  struct timespec OldTime[2];
   FILE *File;
   char Buffer[8192];
   size_t Length;
@@ -170,6 +194,25 @@ static void TestPollingDisabled(void)
   ResetFake(Normal); /* candidate identity plus explicit opt-in */
   RXC1Sample();
   assert(RegisterReads != 0 && RegisterWrites != 0);
+
+  ResetFake(Normal);
+  RXC1Init(0x53460004U); /* restart after spent arm: no BAR traffic */
+  RXC1Sample();
+  RXC1GetSnapshot(&Snapshot);
+  assert(RegisterReads == 0 && RegisterWrites == 0);
+  assert(Snapshot.DDC[0].Status == eRXC1Unarmed);
+
+  ArmTrial();
+  TrialPath(Path, sizeof(Path), "armed");
+  OldTime[0].tv_sec = OldTime[1].tv_sec = time(NULL) - 601;
+  OldTime[0].tv_nsec = OldTime[1].tv_nsec = 0;
+  assert(utimensat(AT_FDCWD, Path, OldTime, 0) == 0);
+  RXC1Init(0x53460004U);
+  RXC1Sample();
+  RXC1GetSnapshot(&Snapshot);
+  assert(RegisterReads == 0 && RegisterWrites == 0);
+  assert(Snapshot.DDC[0].Status == eRXC1Unarmed);
+  assert(access(Path, F_OK) != 0);
 }
 
 static void TestNormalAndRestart(void)
@@ -193,6 +236,7 @@ static void TestNormalAndRestart(void)
   FirstToken = Snapshot.DDC[0].HostToken;
   assert(FirstToken != 0);
   assert(RegisterWriteChecked(0x8004U, 0x80000000U)); /* old pending snapshot */
+  ArmTrial();
   RXC1Init(0x53460004U); /* new acquisition owner, same hardware */
   RXC1Sample();
   RXC1GetSnapshot(&Snapshot);
@@ -384,6 +428,9 @@ static void TestSaturation(void)
 
 int main(void)
 {
+  char Path[sizeof(TrialDirectory) + 16U];
+  assert(mkdtemp(TrialDirectory) != NULL);
+  assert(setenv("STATE_DIRECTORY", TrialDirectory, 1) == 0);
   assert(setenv("SATURN_RXC1_POLL_ENABLED", "1", 1) == 0);
   TestNormalAndRestart();
   TestCorruptions();
@@ -393,6 +440,11 @@ int main(void)
   TestUnavailableJSON();
   TestSaturation();
   TestPollingDisabled();
+  TrialPath(Path, sizeof(Path), "armed");
+  (void)unlink(Path);
+  TrialPath(Path, sizeof(Path), "spent");
+  (void)unlink(Path);
+  assert(rmdir(TrialDirectory) == 0);
   puts("RXC1 checked acquisition tests passed");
   return 0;
 }

@@ -2,8 +2,10 @@
 #include "fpga_rx_counter_v31.h"
 
 #include <inttypes.h>
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -19,6 +21,8 @@
 #define RXC1_RESET 0x08U
 #define RXC1_EXHAUSTED 0x30U
 #define RXC1_TOKEN_BOUND 0x40U
+#define RXC1_TRIAL_ARM "RXC1-TRIAL-0x53460004\n"
+#define RXC1_TRIAL_MAX_AGE_SECONDS 600
 
 static TRXC1Snapshot g_snapshot;
 static uint32_t g_token;
@@ -27,6 +31,47 @@ static bool g_bound;
 static time_t g_last_sample_second;
 static uint32_t g_token_sequence;
 static bool g_poll_enabled;
+
+/* Spend the durable arm before any RXC1 BAR access. A hard reset or process
+ * restart then comes back with polling off, even when the unit still says 1.
+ * The installer creates the StateDirectory but never creates "armed". */
+static bool ConsumeTrialArm(void)
+{
+  const char *Directory = getenv("STATE_DIRECTORY");
+  char Contents[sizeof(RXC1_TRIAL_ARM)];
+  struct stat Stat;
+  int DirectoryFd, ArmFd;
+  ssize_t Length;
+  bool Allowed = false;
+  bool ValidArm;
+  time_t Now;
+
+  if (Directory == NULL || Directory[0] != '/' || strchr(Directory, ':') != NULL)
+    return false;
+  DirectoryFd = open(Directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (DirectoryFd < 0) return false;
+  ArmFd = openat(DirectoryFd, "armed", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (ArmFd >= 0)
+  {
+    Length = read(ArmFd, Contents, sizeof(Contents));
+    Now = time(NULL);
+    ValidArm = fstat(ArmFd, &Stat) == 0 && S_ISREG(Stat.st_mode) &&
+               Stat.st_uid == geteuid() &&
+               Length == (ssize_t)(sizeof(RXC1_TRIAL_ARM) - 1U) &&
+               memcmp(Contents, RXC1_TRIAL_ARM, sizeof(RXC1_TRIAL_ARM) - 1U) == 0 &&
+               Now >= RXC1_TRIAL_MAX_AGE_SECONDS &&
+               Stat.st_mtime <= Now &&
+               Stat.st_mtime >= Now - RXC1_TRIAL_MAX_AGE_SECONDS;
+    /* Spend invalid arms too: a later clock correction or image change must
+     * not turn an old request into an automatic hardware probe. */
+    if (renameat(DirectoryFd, "armed", DirectoryFd, "spent") == 0 &&
+        fsync(ArmFd) == 0 && fsync(DirectoryFd) == 0)
+      Allowed = ValidArm;
+    close(ArmFd);
+  }
+  close(DirectoryFd);
+  return Allowed;
+}
 
 static uint64_t NowMs(void)
 {
@@ -85,9 +130,16 @@ void RXC1Init(uint32_t FpgaBuildId)
   ERXC1Status InitialStatus;
   /* An RXC1 BAR read on an image without that register bank may not complete.
    * Never probe the known 0x53460003 baseline or an unidentified image. */
-  g_poll_enabled = PollRequested && FpgaBuildId == RXC1_CANDIDATE_BUILD_ID;
+  g_poll_enabled = PollRequested && FpgaBuildId == RXC1_CANDIDATE_BUILD_ID &&
+                   ConsumeTrialArm();
+  if (PollRequested && FpgaBuildId == RXC1_CANDIDATE_BUILD_ID && !g_poll_enabled)
+    fprintf(stderr, "p2app: RXC1 polling refused: no durable one-use trial arm\n");
+  if (g_poll_enabled)
+    fprintf(stderr, "p2app: RXC1 one-use trial arm spent before polling\n");
   InitialStatus = g_poll_enabled ? eRXC1Unavailable :
-                  PollRequested ? eRXC1Unsupported : eRXC1Disabled;
+                  !PollRequested ? eRXC1Disabled :
+                  FpgaBuildId != RXC1_CANDIDATE_BUILD_ID ? eRXC1Unsupported :
+                  eRXC1Unarmed;
   memset(&g_snapshot, 0, sizeof(g_snapshot));
   for (Receiver = 0; Receiver < RXC1_DDC_COUNT; Receiver++)
     Invalidate(&g_snapshot.DDC[Receiver], Receiver, InitialStatus);

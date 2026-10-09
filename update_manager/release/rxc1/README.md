@@ -42,11 +42,23 @@ policy is unchanged: during initial P2 receive testing, do not key the radio.
 Both owners leave RXC1 polling disabled by default. Neither probes the RXC1
 register bank on the working `0x53460003` image, even if polling is requested:
 an absent AXI-Lite register cannot be safely discovered by reading it. On an
-identified `0x53460004` candidate only, set
-`SATURN_RXC1_POLL_ENABLED=1` at process startup to opt in to five-second
-polling. An unknown or baseline build reports RXC1 `unsupported`; an unset,
-`0`, or unrecognized setting reports `disabled`. In all inactive cases the
-RXC1 counters are null, while IQ acquisition and other telemetry continue.
+identified `0x53460004` candidate only, RXC1 still requires both
+`SATURN_RXC1_POLL_ENABLED=1` and a one-use durable trial arm. The arm must
+contain exactly `RXC1-TRIAL-0x53460004` followed by a newline in the selected
+owner's `StateDirectory` as `armed`. The Bridge uses
+`/var/lib/saturn-rxc1-bridge`; P2 uses `/var/lib/saturn-rxc1-p2`. The file
+must be owned by that service's runtime user (`pi` or `saturn-radio`). The
+installer creates the directory but never creates the arm, even if it detects
+the candidate FPGA. The arm must be no more than ten minutes old; a malformed
+or stale arm is spent and rejected. Before the first RXC1 BAR access, the owner
+renames the arm to `spent` and syncs it to disk. A restart or reboot therefore
+runs with polling off, even if the environment still says `1`. Re-arm only after
+reviewing the previous trial. This prevents a repeated boot loop; it cannot
+make the first hardware access safe if the FPGA itself resets the host.
+An unknown or baseline build reports RXC1 `unsupported`; an unset, `0`, or
+unrecognized setting reports `disabled`; an enabled candidate without an arm
+reports `unarmed`. In all inactive cases the RXC1 counters are null, while IQ
+acquisition and other telemetry continue.
 Read, reset, and stale acquisition failures on an enabled candidate are
 reported as unavailable rather than zero loss.
 
@@ -123,7 +135,12 @@ For that comparison on the approved candidate only, put
 `Environment=SATURN_RXC1_POLL_ENABLED=1` in a
 separate root-owned systemd drop-in for **only the selected FPGA owner**
 (`saturn-bridge.service` for `xdma`, `p2app.service` for `p2`), reload systemd
-and restart that owner through its controlled owner path. In P2-client mode,
+and create one valid `armed` file in that owner's StateDirectory before
+restarting it through its controlled owner path. Sync the file and directory
+before restarting. Do not arm both owners or have the installer create an arm.
+If the first trial crashes, do not create another arm as part of recovery:
+the next start must report `unarmed` and keep serving radio traffic with RXC1
+off. In P2-client mode,
 the Bridge can remain active but must report runtime backend `p2`; it must not
 poll the FPGA RXC1 register bank directly. Verify IQ reception and non-RXC1
 telemetry continue, then compare against polling disabled (`0` or no

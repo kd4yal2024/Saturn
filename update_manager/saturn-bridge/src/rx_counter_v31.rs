@@ -3,6 +3,10 @@
 
 use crate::xdma::XdmaRegisterDevice;
 use std::fmt::Write as _;
+use std::fs::{self, OpenOptions};
+use std::io::Read as _;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -18,7 +22,53 @@ const EXHAUSTED: u32 = (1 << 4) | (1 << 5);
 const TOKEN_BOUND: u32 = 1 << 6;
 const DDC_COUNT: usize = 10;
 const PERIOD: Duration = Duration::from_secs(5);
+const TRIAL_ARM: &[u8] = b"RXC1-TRIAL-0x53460004\n";
+const TRIAL_MAX_AGE: Duration = Duration::from_secs(600);
 static TOKEN_SEQUENCE: AtomicU32 = AtomicU32::new(1);
+
+// Consume and sync a one-use arm before the first risky BAR transaction. If
+// the host resets, the next service start observes only "spent" and runs
+// normally with RXC1 off. Neither installation nor ID detection arms it.
+fn consume_trial_arm(directory: &Path) -> bool {
+    if !directory.is_absolute() {
+        return false;
+    }
+    let Ok(dir) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(directory)
+    else {
+        return false;
+    };
+    let armed = directory.join("armed");
+    let spent = directory.join("spent");
+    let Ok(mut file) = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&armed)
+    else {
+        return false;
+    };
+    let mut contents = [0u8; TRIAL_ARM.len() + 1];
+    let length = file.read(&mut contents).ok();
+    let valid = file.metadata().ok().is_some_and(|metadata| {
+        metadata.is_file()
+            && metadata.uid() == unsafe { libc::geteuid() }
+            && metadata.modified().ok().is_some_and(|modified| {
+                SystemTime::now()
+                    .duration_since(modified)
+                    .is_ok_and(|age| age <= TRIAL_MAX_AGE)
+            })
+            && length == Some(TRIAL_ARM.len())
+            && &contents[..TRIAL_ARM.len()] == TRIAL_ARM
+    });
+    // Spend malformed and stale arms too, so a later clock correction or
+    // image change cannot unexpectedly turn one into a live hardware probe.
+    if fs::rename(&armed, &spent).is_err() || file.sync_all().is_err() || dir.sync_all().is_err() {
+        return false;
+    }
+    valid
+}
 
 pub(crate) trait Registers {
     fn read(&self, address: u64) -> Result<u32, String>;
@@ -82,7 +132,20 @@ pub(crate) struct Owner {
 impl Owner {
     pub(crate) fn for_build_id(build_id: u32) -> Self {
         let setting = std::env::var("SATURN_RXC1_POLL_ENABLED").ok();
-        Self::with_config(build_id, setting.as_deref())
+        let owner = Self::with_config(build_id, setting.as_deref());
+        if !owner.poll_enabled {
+            return owner;
+        }
+        let armed = std::env::var_os("STATE_DIRECTORY")
+            .filter(|value| !value.to_string_lossy().contains(':'))
+            .is_some_and(|value| consume_trial_arm(Path::new(&value)));
+        if armed {
+            eprintln!("saturn-bridge: RXC1 one-use trial arm spent before polling");
+            owner
+        } else {
+            eprintln!("saturn-bridge: RXC1 polling refused: no durable one-use trial arm");
+            Self::with_status(false, "unarmed")
+        }
     }
 
     fn with_config(build_id: u32, setting: Option<&str>) -> Self {
@@ -507,6 +570,37 @@ mod tests {
             assert_eq!(owner.failures, 0);
         }
         assert!(Owner::with_config(CANDIDATE_BUILD_ID, Some("1")).is_enabled());
+    }
+
+    #[test]
+    fn durable_trial_arm_is_spent_before_polling_and_cannot_be_reused() {
+        let sequence = TOKEN_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let directory = std::env::temp_dir().join(format!(
+            "saturn-rxc1-guard-test-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).unwrap();
+        assert!(!consume_trial_arm(&directory));
+        fs::write(directory.join("armed"), b"wrong-image\n").unwrap();
+        assert!(!consume_trial_arm(&directory));
+        assert!(!directory.join("armed").exists());
+        fs::write(directory.join("armed"), TRIAL_ARM).unwrap();
+        let old_time = SystemTime::now() - Duration::from_secs(601);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(directory.join("armed"))
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(old_time))
+            .unwrap();
+        assert!(!consume_trial_arm(&directory));
+        assert!(!directory.join("armed").exists());
+        fs::write(directory.join("armed"), TRIAL_ARM).unwrap();
+        assert!(consume_trial_arm(&directory));
+        assert!(!directory.join("armed").exists());
+        assert_eq!(fs::read(directory.join("spent")).unwrap(), TRIAL_ARM);
+        assert!(!consume_trial_arm(&directory));
+        fs::remove_file(directory.join("spent")).unwrap();
+        fs::remove_dir(directory).unwrap();
     }
 
     // The expected values are the independently scripted snapshot-boundary

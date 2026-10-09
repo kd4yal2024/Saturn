@@ -395,7 +395,7 @@ const char *RXC1StatusName(ERXC1Status Status)
     "reset_active", "reset_changed", "generation_exhausted", "stale_snapshot",
     "stale_serial", "snapshot_unavailable", "receiver_mismatch",
     "configuration_mismatch", "token_mismatch", "overflow_mismatch",
-    "snapshot_changed", "ack_failed", "disabled"
+    "snapshot_changed", "ack_failed", "disabled", "unarmed"
   };
   if ((unsigned int)Status >= sizeof(Names) / sizeof(Names[0]))
     return "unavailable";

@@ -1507,6 +1507,9 @@ function rxCounterV31Presentation(value, activeBackend){
   if (value.status === 'disabled'){
     return { state:'unavailable', summary:'disabled / unavailable', detail:'RXC1 polling is disabled in the selected acquisition owner; no register reads or loss count are inferred.' };
   }
+  if (value.status === 'unarmed'){
+    return { state:'unavailable', summary:'unarmed / unavailable', detail:'RXC1 trial arm was absent or already spent; polling stayed off and no loss count is inferred.' };
+  }
   if (backend === 'unknown' || !['valid', 'partial'].includes(value.status)){
     return { state:'unavailable', summary:'unavailable', detail:`Acquisition ${String(value.status || 'missing')} from ${backend}; no loss count is inferred.` };
   }
