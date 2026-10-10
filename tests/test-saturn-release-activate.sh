@@ -996,7 +996,7 @@ wait "$helper_pid" || term_rc=$?
 [[ "$term_rc" == 143 ]]
 # the validation wait was 120 s: an interrupted helper must not sit through it
 (( SECONDS - term_started < 30 ))
-python3 - "$(ls -d "$TMP_ROOT"/state/deployments/validation/*-target-"${STARTUP_COMMIT:0:12}".* | tail -1)/status.json" <<'PY'
+python3 - "$(find "$TMP_ROOT/state/deployments/validation" -maxdepth 1 -name "*-target-${STARTUP_COMMIT:0:12}.*" | sort | tail -1)/status.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -1017,6 +1017,8 @@ rm -f -- "$SYSTEMCTL_STATE/p2app.service" "$SATURN_TEST_CLIENT_MARKER"
 write_config 1
 
 # --- A deployment that predates release directories has no release path to hold its binaries to: only its rollback validation says so.
+# The variables below are read by the functions of the sourced helper, which shellcheck cannot see; the exports stay in this subshell.
+# shellcheck disable=SC2030,SC2034
 (
   # shellcheck disable=SC1090
   source "$ACTIVATOR"
@@ -1134,6 +1136,7 @@ grep -Fq 'is not the recorded previous commit' "$TMP_ROOT/last-run.log"
 export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
 cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
 
+# shellcheck disable=SC2031  # the earlier assignment was made in a subshell on purpose
 export SATURN_TEST_VALIDATOR_FAIL_COMMITS="$NEW_COMMIT"
 expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
 grep -Fq 'reception on the previous release could not be proven' "$TMP_ROOT/last-run.log"
@@ -1273,7 +1276,7 @@ check_rc=0
 wait "$check_pid" || check_rc=$?
 [[ "$check_rc" == 143 ]]
 (( SECONDS - check_term_started < 30 ))
-python3 - "$(ls -d "$TMP_ROOT"/state/deployments/validation/*-check-"${NEW_COMMIT:0:12}".* | tail -1)/status.json" <<'PY'
+python3 - "$(find "$TMP_ROOT/state/deployments/validation" -maxdepth 1 -name "*-check-${NEW_COMMIT:0:12}.*" | sort | tail -1)/status.json" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -1309,6 +1312,7 @@ rm "$FAKE_BIN/systemd-run"
 # The systemd launcher cannot be used without systemd-run. (This machine may have a real one, so the PATH is restricted to python3.)
 mkdir -p "$TMP_ROOT/minbin"
 ln -sf "$(command -v python3)" "$TMP_ROOT/minbin/python3"
+# shellcheck disable=SC2034,SC2123
 if (
   # shellcheck disable=SC1090
   source "$ACTIVATOR"

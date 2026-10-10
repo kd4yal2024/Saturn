@@ -268,6 +268,7 @@ new_fixture
 add_validator_sources
 mkdir "$TEST_ROOT/bin"
 REAL_INSTALL="$(command -v install)"
+# shellcheck disable=SC2016  # the single quotes are deliberate: the wrapper script is written out verbatim
 printf '#!/bin/bash\n"%s" "$@"\ncase " $* " in *saturn-remote-validate.py*) printf "# corrupted\\n" >> "${@: -1}";; esac\n' "$REAL_INSTALL" >"$TEST_ROOT/bin/install"
 chmod 0755 "$TEST_ROOT/bin/install"
 if PATH="$TEST_ROOT/bin:$PATH" run_installer_full "$VALIDATOR_SHA" "$GUARD_SHA" >"$TMP_ROOT/corrupted-install.log" 2>&1; then

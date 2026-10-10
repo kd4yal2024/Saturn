@@ -197,6 +197,9 @@ jobs:
             tests/test-saturn-go-worktree.sh \
             tests/test-saturn-fftw-wisdom.sh \
             tests/test-saturn-release-activate.sh \
+            tests/test-saturn-release-install-activator.sh \
+            tests/test-g2-headless-steps.sh \
+            update_manager/docs/headless-validation/g2_headless_steps.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
             tests/test-saturn-release-source.sh \
@@ -245,6 +248,9 @@ jobs:
             tests/test-saturn-go-worktree.sh \
             tests/test-saturn-fftw-wisdom.sh \
             tests/test-saturn-release-activate.sh \
+            tests/test-saturn-release-install-activator.sh \
+            tests/test-g2-headless-steps.sh \
+            update_manager/docs/headless-validation/g2_headless_steps.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
             tests/test-saturn-release-source.sh \
@@ -328,6 +334,15 @@ jobs:
 
       - name: Test atomic release activation transaction
         run: tests/test-saturn-release-activate.sh
+
+      - name: Test activation helper installation
+        run: tests/test-saturn-release-install-activator.sh
+
+      - name: Test automatic headless receive validation
+        run: python3 -W ignore tests/test-saturn-remote-validate.py --parallel 3
+
+      - name: Test the staged appliance procedure
+        run: tests/test-g2-headless-steps.sh
 
       - name: Test deskHPSDR integration patches
         run: tests/test-deskhpsdr-integration.sh
