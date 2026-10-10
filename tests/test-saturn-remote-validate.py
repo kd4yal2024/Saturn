@@ -56,6 +56,26 @@ def put(name, value):
 def session(connected):
     put("session.json", {"pid": os.getpid(), "connected": connected})
 put("browser_argv.json", {"argv": sys.argv, "env": dict(os.environ)})
+def fake_tree():
+    """What /proc and the unit's cgroup would show for a real browser: a main process, GPU, and renderers (Seccomp: 2 when sandboxed)."""
+    me = os.getpid()
+    def entry(pid, ppid, kind, seccomp):
+        d = os.path.join(W, "proc", str(pid)); os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "stat"), "w") as h: h.write(f"{pid} (chromium) S {ppid} 0 0\n")
+        args = ["/usr/bin/chromium"] + ([f"--type={kind}"] if kind != "browser" else [])
+        if "--no-sandbox" in sys.argv or SC.get("browser_no_sandbox"): args.append("--no-sandbox")
+        # as on a real host: the browser process has NUL-separated arguments, the processes it forks one space-separated string
+        with open(os.path.join(d, "cmdline"), "wb") as h:
+            h.write(b"\0".join(a.encode() for a in args) + b"\0" if kind == "browser" else " ".join(args).encode() + b"\0")
+        with open(os.path.join(d, "status"), "w") as h: h.write(f"Name:\tchromium\nSeccomp:\t{seccomp}\nNoNewPrivs:\t1\n")
+    entry(me, os.getppid(), "browser", 0)
+    pids = [me]
+    for i in range(SC.get("renderers", 2)):
+        entry(900001 + i, me, "renderer", SC.get("renderer_seccomp", 2)); pids.append(900001 + i)
+    entry(900100, me, "gpu-process", 0); pids.append(900100)
+    cg = os.path.join(W, "cgroup", "system.slice", "fake.service"); os.makedirs(cg, exist_ok=True)
+    with open(os.path.join(cg, "cgroup.procs"), "w") as h: h.write("\n".join(str(p) for p in pids) + "\n")
+fake_tree()
 session(False)
 if SC.get("stubborn"):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -206,10 +226,30 @@ while True:
 '''
 
 FAKE_SYSTEMCTL = """#!/bin/sh
-if [ "$1" = show ]; then cat "$FAKE_PIDS/$5" 2>/dev/null || echo 0; exit 0; fi
+if [ "$1" = show ]; then
+  case "$2" in
+    --property=*) for unit; do :; done; echo "$unit" >> "$FAKE_PIDS/show-units.log"; cat "$FAKE_PIDS/unit-properties.txt" 2>/dev/null; exit 0 ;;
+  esac
+  cat "$FAKE_PIDS/$5" 2>/dev/null || echo 0; exit 0
+fi
 echo "$@" >> "$FAKE_PIDS/systemctl.log"
 exit 0
 """
+
+
+FAKE_SYSTEMD_RUN = """#!/bin/sh
+export FAKE_WORLD=%(world)s FAKE_PIDS=%(pids)s FAKE_SCENARIO='%(scenario)s'
+: > "$FAKE_PIDS/systemd-run.args"
+while [ $# -gt 0 ]; do
+  if [ "$1" = -- ]; then shift; break; fi
+  echo "$1" >> "$FAKE_PIDS/systemd-run.args"
+  shift
+done
+exec "$@"
+"""
+
+DEFAULT_UNIT_PROPERTIES = {"ControlGroup": "/system.slice/fake.service", "MemoryMax": "367001600", "MemorySwapMax": "0",
+                           "MemoryCurrent": "123456789", "MemoryPeak": "222222222", "ActiveState": "active"}
 
 
 def alive(pid):
@@ -225,8 +265,10 @@ class Rig:
 
     def __init__(self, test, scenario=None, baseline=0, rxc1="unarmed", bridge_commit=COMMIT, ready_commit=COMMIT, freeze_owner=False,
                  sdr_never=False, limits=None, expect_rxc1="any", auth=True, ready_flag=True, bridge_pid_file=None, perf_pid=None,
-                 freeze_on_session=False, owner_blind=False, p23_broken=False, sticky=False):
+                 freeze_on_session=False, owner_blind=False, p23_broken=False, sticky=False, isolation=None, unit_props=None):
         self.test = test
+        self.isolation = isolation          # None: not checked; "direct": a browser started directly; "systemd": in a (fake) transient unit
+        self.unit_props = dict(DEFAULT_UNIT_PROPERTIES, **(unit_props or {}))
         self.root = Path(tempfile.mkdtemp(prefix="saturn-validate-test-"))
         self.world = self.root / "world"
         self.world.mkdir()
@@ -368,13 +410,25 @@ class Rig:
                 "--perf-json", str(self.perf), "--unit", "saturn-bridge.service", "--unit", "saturn-go.service",
                 "--owner-unit", "saturn-bridge.service", "--auth-unit", "saturn-go.service", "--release-root", str(self.releases),
                 "--tls-cert", "", "--browser", str(self.browser), "--launcher", "direct", "--guard-script", str(GUARD),
-                "--systemctl", str(self.systemctl), "--limits", json.dumps(self.limits), *extra]
+                "--systemctl", str(self.systemctl), "--limits", json.dumps(self.limits), *self.isolation_args(), *extra]
+
+    def isolation_args(self):
+        if self.isolation is None:
+            return ["--isolation", "off"]
+        args = ["--isolation", "required", "--proc-root", str(self.world / "proc"), "--cgroup-root", str(self.world / "cgroup")]
+        if self.isolation == "systemd":
+            args += ["--launcher", "systemd", "--systemd-run", str(self.root / "systemd-run")]
+        return args
 
     def env(self):
         env = {"PATH": os.environ["PATH"], "FAKE_WORLD": str(self.world), "FAKE_PIDS": str(self.pids), "FAKE_SCENARIO": json.dumps(self.scenario)}
         return env
 
     def start(self, extra=()):
+        (self.pids / "unit-properties.txt").write_text("".join(f"{k}={v}\n" for k, v in self.unit_props.items() if v is not None))
+        stub = self.root / "systemd-run"
+        stub.write_text(FAKE_SYSTEMD_RUN % {"world": self.world, "pids": self.pids, "scenario": json.dumps(self.scenario).replace("'", "'\\''")})
+        stub.chmod(0o755)
         self.out = open(self.root / "validator.out", "w")
         self.validator = subprocess.Popen(self.args(extra), env=self.env(), stdout=self.out, stderr=subprocess.STDOUT, start_new_session=True)
         return self.validator
@@ -681,30 +735,67 @@ class FailureTests(RigCase):
     def test_session_connects_but_not_as_a_viewer(self):
         self.failure("session.connected_as_viewer", {"role": "operator"}, detail="operator")
 
-    def test_a_bridge_that_predates_viewer_enforcement_is_accepted_when_the_guard_is_proven(self):
+    def test_the_viewer_role_is_the_default_and_an_operator_session_is_refused(self):
         rig = self.rig(scenario={"role": "operator"})
-        rig.start(("--viewer-role", "preferred"))
+        rig.start()
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "session.connected_as_viewer")
+        self.assertEqual((status["role_policy"], status["legacy_fallback_used"]), ("required", False))
+        self.assertNotIn("session.role_legacy_fallback", status["conditions"])
+        self.assertCleanedUp(rig)
+
+    def test_a_bridge_that_predates_viewer_enforcement_is_accepted_only_under_the_named_fallback(self):
+        rig = self.rig(scenario={"role": "operator"})
+        rig.start(("--viewer-role", "legacy-fallback"))
         code, ready = rig.wait_ready()
         self.assertEqual((code, ready["state"]), (0, "ready"), ready)
         status = rig.status()
         self.assertEqual((status["role"], status["role_enforced_by_bridge"]), ("operator", False))
+        self.assertEqual((status["role_policy"], status["legacy_fallback_used"]), ("legacy-fallback", True))
         self.assertTrue(status["conditions"]["guard.active"]["ok"])
-        self.assertIn("predates viewer enforcement", status["conditions"]["session.connected_as_viewer"]["detail"])
+        fallback = status["conditions"]["session.role_legacy_fallback"]
+        self.assertTrue(fallback["ok"])
+        self.assertIn("LEGACY BRIDGE FALLBACK USED", fallback["detail"])
+        self.assertIn("predates viewer-role enforcement", fallback["detail"])
+        self.assertNotIn("session.connected_as_viewer", status["conditions"], "an operator session must never be recorded as a viewer session")
         rig.stop(); self.assertEqual(rig.finish(), 0)
 
-    def test_preferred_still_refuses_any_other_role(self):
+    def test_the_fallback_still_refuses_any_other_role(self):
         rig = self.rig(scenario={"role": "observer"})
-        rig.start(("--viewer-role", "preferred"))
+        rig.start(("--viewer-role", "legacy-fallback"))
         rig.finish()
-        self.assertEqual(rig.status()["failed"]["id"], "session.connected_as_viewer")
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "session.connected_as_viewer")
+        self.assertFalse(status["legacy_fallback_used"])
 
-    def test_a_viewer_is_recorded_as_enforced_by_the_bridge(self):
+    def test_the_fallback_is_not_used_when_the_bridge_enforces_the_viewer_role(self):
         rig = self.rig()
-        rig.start(("--viewer-role", "preferred"))
+        rig.start(("--viewer-role", "legacy-fallback"))
         self.assertEqual(rig.wait_ready()[0], 0)
         status = rig.status()
         self.assertEqual((status["role"], status["role_enforced_by_bridge"]), ("viewer", True))
+        self.assertEqual((status["role_policy"], status["legacy_fallback_used"]), ("legacy-fallback", False))
+        self.assertNotIn("session.role_legacy_fallback", status["conditions"])
         rig.stop(); rig.finish()
+
+    def test_a_viewer_is_recorded_as_enforced_by_the_bridge(self):
+        rig = self.rig()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        status = rig.status()
+        self.assertEqual((status["role"], status["role_enforced_by_bridge"]), ("viewer", True))
+        self.assertEqual((status["role_policy"], status["legacy_fallback_used"]), ("required", False))
+        rig.stop(); rig.finish()
+
+    def test_the_fallback_does_not_waive_the_guard(self):
+        rig = self.rig(scenario={"guard_inactive": True, "role": "operator"})
+        rig.start(("--viewer-role", "legacy-fallback"))
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "guard.active")
+        self.assertNotIn("session.started", status["conditions"])
+        self.assertFalse(rig.read_world("session.json")["connected"], "a connection was made without the guard")
 
     def test_without_the_guard_nothing_is_started(self):
         rig = self.rig(scenario={"guard_inactive": True, "role": "operator"})
@@ -867,6 +958,128 @@ class FailureTests(RigCase):
         rig.finish()
 
 
+class IsolationTests(RigCase):
+    """The browser's sandbox and memory cap are verified from the host while the session runs, not assumed from the flags that were passed."""
+
+    def isolated(self, **kwargs):
+        return self.rig(isolation="systemd", **kwargs)
+
+    def failure(self, rig, identifier, detail):
+        status = self.run_to_failure(rig, identifier, detail=detail)
+        self.assertCleanedUp(rig)       # a failed isolation check still ends the session and releases the owner
+        return status
+
+    def test_a_sandboxed_browser_with_its_cap_is_verified_and_the_evidence_kept(self):
+        rig = self.isolated()
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), ready)
+        status = rig.status()
+        sandbox, memory = status["conditions"]["browser.sandbox_intact"], status["conditions"]["browser.memory_limit_applied"]
+        self.assertTrue(sandbox["ok"] and memory["ok"], (sandbox, memory))
+        self.assertIn("Seccomp: 2", sandbox["detail"])
+        self.assertIn("367001600", memory["detail"])
+        kinds = sorted(p["type"] for p in status["isolation"]["processes"])
+        self.assertEqual(kinds, ["browser", "gpu-process", "renderer", "renderer"])
+        self.assertTrue(all(p["seccomp"] == 2 for p in status["isolation"]["processes"] if p["type"] == "renderer"))
+        self.assertEqual(status["isolation"]["memory"]["max_bytes"], "367001600")
+        self.assertTrue(status["sandbox_requested"])
+        rig.stop(); self.assertEqual(rig.finish(), 0)
+        status = rig.status()
+        self.assertEqual(status["isolation"]["memory"]["peak_bytes"], "222222222", "how close the browser came to its cap is kept")
+        self.assertCleanedUp(rig)
+
+    def test_the_unit_is_started_with_the_cap_and_the_hardening(self):
+        rig = self.isolated()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        rig.stop(); rig.finish()
+        given = (rig.pids / "systemd-run.args").read_text().split()
+        for needed in ("MemoryMax=350M", "MemorySwapMax=0", "NoNewPrivileges=yes", "DynamicUser=yes", "IPAddressDeny=any", "IPAddressAllow=localhost"):
+            self.assertIn(needed, given)
+        self.assertNotIn("--no-sandbox", rig.read_world("browser_argv.json")["argv"])
+        unit = rig.status()["unit"] + ".service"
+        self.assertIn(f"stop {unit}", (rig.pids / "systemctl.log").read_text())
+        queried = set((rig.pids / "show-units.log").read_text().split())
+        self.assertEqual(queried, {unit}, "the cap and the cgroup must be read from the browser's own unit, not from any unit")
+
+    def test_a_renderer_that_is_not_confined_fails_the_run(self):
+        rig = self.isolated(scenario={"renderer_seccomp": 0})
+        status = self.failure(rig, "browser.sandbox_intact", r"Seccomp:0")
+        self.assertFalse(status["conditions"]["browser.sandbox_intact"]["ok"])
+
+    def test_a_browser_started_without_its_sandbox_fails_even_if_it_looks_confined(self):
+        rig = self.isolated(scenario={"browser_no_sandbox": True})
+        self.failure(rig, "browser.sandbox_intact", r"--no-sandbox")
+
+    def test_the_no_sandbox_option_cannot_pass_the_check(self):
+        rig = self.isolated()
+        rig.start(("--no-sandbox",))
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "browser.sandbox_intact")
+        self.assertFalse(status["sandbox_requested"])
+        self.assertIn("--no-sandbox", rig.read_world("browser_argv.json")["argv"])
+        self.assertCleanedUp(rig)
+
+    def test_a_browser_with_no_renderer_to_inspect_is_not_assumed_sandboxed(self):
+        rig = self.isolated(scenario={"renderers": 0})
+        self.failure(rig, "browser.sandbox_intact", r"no renderer process")
+
+    def test_a_missing_memory_cap_fails_the_run(self):
+        rig = self.isolated(unit_props={"MemoryMax": "infinity"})
+        self.failure(rig, "browser.memory_limit_applied", r"no memory cap")
+
+    def test_a_different_memory_cap_fails_the_run(self):
+        rig = self.isolated(unit_props={"MemoryMax": str(2 * 1024 ** 3)})
+        self.failure(rig, "browser.memory_limit_applied", r"MemoryMax is 2147483648 bytes but 350M")
+
+    def test_swap_is_not_allowed(self):
+        rig = self.isolated(unit_props={"MemorySwapMax": "infinity"})
+        self.failure(rig, "browser.memory_limit_applied", r"swap")
+
+    def test_an_unreadable_unit_fails_the_run(self):
+        rig = self.isolated(unit_props={"MemoryMax": None, "MemorySwapMax": None, "ControlGroup": None})
+        status = self.run_to_failure(rig, "browser.sandbox_intact")        # no cgroup, so no process could be inspected either
+        self.assertFalse(status["conditions"]["browser.memory_limit_applied"]["ok"])
+        self.assertCleanedUp(rig)
+
+    def test_a_browser_started_directly_has_no_cap_and_fails_a_required_check(self):
+        rig = self.rig(isolation="direct")
+        status = self.run_to_failure(rig, "browser.memory_limit_applied", detail="not started in a systemd unit")
+        self.assertTrue(status["conditions"]["browser.sandbox_intact"]["ok"], "the sandbox evidence is gathered the same way for a direct child")
+        self.assertCleanedUp(rig)
+
+    def test_isolation_is_checked_before_the_session_is_held(self):
+        rig = self.isolated(scenario={"renderer_seccomp": 0})
+        rig.start()
+        rig.finish()
+        self.assertIsNone(rig.status().get("ready_at"), "a run whose isolation failed must never report ready")
+
+    def test_the_sandbox_only_mode_checks_the_sandbox_and_not_the_cap(self):
+        rig = self.rig(isolation="direct")
+        rig.start(("--isolation", "sandbox"))
+        self.assertEqual(rig.wait_ready()[0], 0)
+        conditions = rig.status()["conditions"]
+        self.assertTrue(conditions["browser.sandbox_intact"]["ok"])
+        self.assertNotIn("browser.memory_limit_applied", conditions)
+        rig.stop(); rig.finish()
+
+    def test_the_sandbox_only_mode_still_fails_an_unconfined_renderer(self):
+        rig = self.rig(isolation="direct", scenario={"renderer_seccomp": 0})
+        rig.start(("--isolation", "sandbox"))
+        rig.finish()
+        self.assertEqual(rig.status()["failed"]["id"], "browser.sandbox_intact")
+        self.assertCleanedUp(rig)
+
+    def test_with_isolation_off_nothing_is_inspected(self):
+        rig = self.rig()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        self.assertNotIn("browser.sandbox_intact", rig.status()["conditions"])
+        rig.stop(); rig.finish()
+
+
 class PreconditionTests(RigCase):
     def no_browser(self, rig):
         self.assertIsNone(rig.browser_pid(), "a browser was started although the target is not running")
@@ -1006,6 +1219,71 @@ class UnitTests(unittest.TestCase):
             self.assertIn(needed, text)
         self.assertEqual(command[0], "systemd-run")
         self.assertNotIn("User=root", text)
+
+    def test_the_defaults_are_the_strict_ones(self):
+        args = V.parser().parse_args(["run", "--control-dir", "/x", "--target-commit", "c"])
+        self.assertEqual((args.viewer_role, args.isolation, args.memory_max, args.no_sandbox), ("required", "required", "350M", False))
+
+    def test_parse_size_reads_what_systemd_reads(self):
+        self.assertEqual(V.parse_size("350M"), 350 * 1024 ** 2)
+        self.assertEqual(V.parse_size("1g"), 1024 ** 3)
+        self.assertEqual(V.parse_size("512"), 512)
+        self.assertEqual(V.parse_size("2K"), 2048)
+        for bad in ("", "M", "1.5G", "-1", "350 MB", "infinity"):
+            with self.assertRaises(ValueError, msg=bad):
+                V.parse_size(bad)
+
+    def test_sandbox_verdict(self):
+        def proc(kind, seccomp, flag=False, pid=1):
+            return {"pid": pid, "type": kind, "seccomp": seccomp, "no_new_privs": "1", "no_sandbox_flag": flag}
+        good = [proc("browser", 0), proc("gpu-process", 0), proc("renderer", 2, pid=2), proc("renderer", 2, pid=3)]
+        self.assertTrue(V.sandbox_verdict(good)[0])
+        self.assertFalse(V.sandbox_verdict([])[0])
+        self.assertFalse(V.sandbox_verdict([proc("browser", 0)])[0])
+        self.assertFalse(V.sandbox_verdict(good + [proc("renderer", 0, pid=4)])[0], "one loose renderer is enough")
+        self.assertFalse(V.sandbox_verdict(good + [proc("renderer", 1, pid=4)])[0], "strict mode (1) is not the filter the sandbox installs")
+        self.assertFalse(V.sandbox_verdict([proc("browser", 0, flag=True), proc("renderer", 2)])[0])
+        self.assertFalse(V.sandbox_verdict([proc("browser", 0), proc("renderer", 2, flag=True)])[0])
+        self.assertFalse(V.sandbox_verdict([proc("browser", 0), proc("renderer", -1)])[0], "an unreadable Seccomp field proves nothing")
+
+    def test_memory_verdict(self):
+        props = {"MemoryMax": str(350 * 1024 ** 2), "MemorySwapMax": "0", "MemoryCurrent": "5"}
+        self.assertTrue(V.memory_verdict(props, "350M")[0])
+        self.assertFalse(V.memory_verdict(props, "351M")[0])
+        self.assertFalse(V.memory_verdict(props, "350")[0])
+        self.assertFalse(V.memory_verdict(dict(props, MemoryMax="infinity"), "350M")[0])
+        self.assertFalse(V.memory_verdict({k: v for k, v in props.items() if k != "MemoryMax"}, "350M")[0])
+        self.assertFalse(V.memory_verdict(dict(props, MemorySwapMax="infinity"), "350M")[0])
+        self.assertFalse(V.memory_verdict({k: v for k, v in props.items() if k != "MemorySwapMax"}, "350M")[0])
+
+    def test_descendants_follow_the_parent_pids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for pid, parent in ((10, 1), (11, 10), (12, 11), (13, 10), (20, 1), (21, 20)):
+                (root / str(pid)).mkdir()
+                (root / str(pid) / "stat").write_text(f"{pid} (a b) c) S {parent} 0 0\n")        # a command name with spaces and a parenthesis
+            (root / "self").mkdir()
+            self.assertEqual(sorted(V.descendants(root, 10)), [10, 11, 12, 13])
+            self.assertEqual(V.descendants(root, 99), [99])
+
+    def test_proc_snapshot_reads_the_kind_and_the_filter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "7").mkdir()
+            (root / "7" / "cmdline").write_bytes(b"/usr/bin/chromium\0--type=renderer\0--lang=en\0")
+            (root / "7" / "status").write_text("Name:\tchromium\nSeccomp:\t2\nNoNewPrivs:\t1\n")
+            snap = V.proc_snapshot(root, 7)
+            self.assertEqual((snap["type"], snap["seccomp"], snap["no_sandbox_flag"]), ("renderer", 2, False))
+            (root / "7" / "cmdline").write_bytes(b"/usr/bin/chromium\0--no-sandbox\0")
+            snap = V.proc_snapshot(root, 7)
+            self.assertEqual((snap["type"], snap["no_sandbox_flag"]), ("browser", True))
+            # a process forked by the browser retitles itself: one string, arguments separated by spaces (found by running a real Chrome)
+            (root / "7" / "cmdline").write_bytes(b"/opt/google/chrome/chrome --type=renderer --no-sandbox --lang=en-US\0\0\0")
+            snap = V.proc_snapshot(root, 7)
+            self.assertEqual((snap["type"], snap["no_sandbox_flag"]), ("renderer", True))
+            (root / "7" / "cmdline").write_bytes(b"/opt/google/chrome/chrome --type=renderer --lang=en-US\0\0\0")
+            self.assertEqual(V.proc_snapshot(root, 7)["type"], "renderer")
+            self.assertIsNone(V.proc_snapshot(root, 8))
 
     def test_direct_launch_maps_the_pipe_to_descriptors_3_and_4(self):
         command = V.build_launch_command("direct", "/b", ["--x"], "u", 1, "1M")

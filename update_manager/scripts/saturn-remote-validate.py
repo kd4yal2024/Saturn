@@ -25,6 +25,15 @@ It never starts a Bridge, never opens XDMA and never uses a saved profile.
 Isolation: only the browser is unprivileged. In production it runs as a transient systemd service with a dynamic user, no sound device, no
 network except loopback, a memory cap and a hard lifetime; the credential for the authenticated proxy is read here, from the saturn-go
 service's own environment, and handed to the browser over the DevTools pipe. It is never put in an argument, a file or a log.
+The isolation is verified, not assumed (--isolation required, the default): the browser's own sandbox must be doing its job (no --no-sandbox
+on any of its processes, and a seccomp filter confining every renderer, read from /proc) and the unit must carry the configured memory cap
+and no swap (read from systemd). A sandbox that was silently switched off, or a cap that never applied, fails the validation.
+
+Viewer role: the Bridge must assign the viewer role (--viewer-role required, the default). The one exception is a named compatibility
+fallback (--viewer-role legacy-fallback), meant only for a release whose Bridge predates viewer-role enforcement (the release being rolled
+back TO, or a running release that was installed before the fix). It is recorded as legacy_fallback_used and in its own condition, never
+as an ordinary viewer session; the injected guard must be proven active before it is accepted, and the wire audit and the unchanged-radio
+check apply as always.
 """
 from __future__ import annotations
 
@@ -34,6 +43,7 @@ import collections
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -231,6 +241,83 @@ def radio_state(perf: dict[str, Any]) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------------------------------------------------------------------
 # the browser
+def parse_size(text: str) -> int:
+    """systemd's reading of a size: plain bytes, or a number with a K, M, G or T suffix (powers of 1024)."""
+    match = re.fullmatch(r"(\d+)([KMGT]?)", text.strip().upper())
+    if match is None:
+        raise ValueError(f"not a size: {text!r}")
+    return int(match.group(1)) * 1024 ** ("KMGT".find(match.group(2)) + 1 if match.group(2) else 0)
+
+
+def proc_snapshot(proc_root: Path, pid: int) -> dict[str, Any] | None:
+    """What /proc says about one browser process: its kind (from its own command line) and whether a seccomp filter confines it."""
+    try:
+        command_line = (proc_root / str(pid) / "cmdline").read_bytes().decode("utf-8", "replace")
+        status = (proc_root / str(pid) / "status").read_text()
+    except OSError:
+        return None
+    # The browser process has one NUL-terminated word per argument; the processes it forks rewrite their title into a single string with the
+    # arguments separated by spaces. Splitting on both reads either.
+    arguments = [part for part in re.split(r"[\0\s]+", command_line) if part]
+    fields = {key.strip(): value.strip() for key, _, value in (line.partition(":") for line in status.splitlines()) if value}
+    kind = next((part.split("=", 1)[1] for part in arguments if part.startswith("--type=")), "browser")
+    try:
+        seccomp = int(fields.get("Seccomp", "-1"))
+    except ValueError:
+        seccomp = -1
+    return {"pid": pid, "type": kind, "seccomp": seccomp, "no_new_privs": fields.get("NoNewPrivs"), "no_sandbox_flag": "--no-sandbox" in arguments}
+
+
+def descendants(proc_root: Path, root_pid: int) -> list[int]:
+    """root_pid and everything below it, from the parent pids in /proc (a browser started directly rather than in a unit)."""
+    children: dict[int, list[int]] = {}
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return [root_pid]
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            parent = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(parent, []).append(int(entry.name))
+    found, queue = [root_pid], [root_pid]
+    while queue:
+        for child in children.get(queue.pop(), []):
+            found.append(child)
+            queue.append(child)
+    return found
+
+
+def sandbox_verdict(processes: list[dict[str, Any]]) -> tuple[bool, str]:
+    """The browser's sandbox is intact when no process was started without it and every renderer is confined by a seccomp filter
+    (Seccomp: 2). With --no-sandbox the renderers show Seccomp: 0, which is what makes this evidence rather than a flag check."""
+    if any(p["no_sandbox_flag"] for p in processes):
+        return False, "the browser is running with --no-sandbox"
+    renderers = [p for p in processes if p["type"] == "renderer"]
+    if not renderers:
+        return False, f"no renderer process was found to inspect among {len(processes)} browser process(es)"
+    loose = [f"pid {p['pid']} Seccomp:{p['seccomp']}" for p in renderers if p["seccomp"] != 2]
+    if loose:
+        return False, "renderer(s) not confined by a seccomp filter: " + ", ".join(loose)
+    return True, f"no process runs with --no-sandbox and all {len(renderers)} renderer process(es) are confined by a seccomp filter (Seccomp: 2)"
+
+
+def memory_verdict(props: dict[str, str], configured: str) -> tuple[bool, str]:
+    """The unit carries the configured memory cap and no swap."""
+    wanted = parse_size(configured)
+    limit, swap = props.get("MemoryMax", ""), props.get("MemorySwapMax", "")
+    if not limit.isdigit():
+        return False, f"the browser has no memory cap (MemoryMax={limit or 'unreadable'!r}); {configured} = {wanted} bytes was configured"
+    if int(limit) != wanted:
+        return False, f"MemoryMax is {limit} bytes but {configured} = {wanted} bytes was configured"
+    if swap != "0":
+        return False, f"the browser's unit may use swap (MemorySwapMax={swap or 'unreadable'!r}), which would hide memory pressure on this host"
+    return True, f"MemoryMax {limit} bytes ({configured}) and MemorySwapMax 0 are applied to the browser's unit; {props.get('MemoryCurrent', 'unknown')} bytes in use"
+
+
 def spki_pin(certificate: Path) -> str:
     """base64(sha256(SubjectPublicKeyInfo)) of the proxy's own certificate: pin exactly it instead of ignoring every certificate error."""
     key = subprocess.run(["openssl", "x509", "-in", str(certificate), "-pubkey", "-noout"], capture_output=True, check=True, timeout=15).stdout
@@ -257,7 +344,8 @@ def browser_flags(user_data_dir: str, spki: str | None, sandbox: bool) -> list[s
 PIPE_WRAPPER = 'exec "$@" 3<&0 4>&1 0</dev/null 1>&2'
 
 
-def build_launch_command(mode: str, browser: str, flags: list[str], unit: str, max_seconds: float, memory_max: str) -> list[str]:
+def build_launch_command(mode: str, browser: str, flags: list[str], unit: str, max_seconds: float, memory_max: str,
+                         systemd_run: str = "systemd-run") -> list[str]:
     inner = ["/bin/sh", "-c", PIPE_WRAPPER, "sh", browser, *flags]
     if mode == "direct":
         return inner
@@ -270,7 +358,7 @@ def build_launch_command(mode: str, browser: str, flags: list[str], unit: str, m
         f"MemoryMax={memory_max}", "MemorySwapMax=0", "TasksMax=300", "CPUWeight=20", "Nice=10", "IOSchedulingClass=idle",
         f"RuntimeMaxSec={int(max_seconds) + 30}", "Environment=HOME=/tmp", "Environment=PULSE_SERVER=none", "WorkingDirectory=/tmp",
     ]
-    command = ["systemd-run", "--quiet", "--collect", "--pipe", f"--unit={unit}"]
+    command = [systemd_run, "--quiet", "--collect", "--pipe", f"--unit={unit}"]
     for prop in properties:
         command += ["-p", prop]
     return command + ["--", *inner]
@@ -525,9 +613,11 @@ class Validator:
         else:
             profile = "/tmp/profile"
         flags = browser_flags(profile, spki, sandbox=not self.args.no_sandbox)
-        command = build_launch_command(self.args.launcher, self.args.browser, flags, self.unit, self.limits["max_seconds"], self.args.memory_max)
+        command = build_launch_command(self.args.launcher, self.args.browser, flags, self.unit, self.limits["max_seconds"], self.args.memory_max,
+                                       self.args.systemd_run)
         self.recorder.log("launch", launcher=self.args.launcher, unit=self.unit, argv=command)
-        self.recorder.update(launcher=self.args.launcher, unit=self.unit)
+        self.recorder.update(launcher=self.args.launcher, unit=self.unit, role_policy=self.args.viewer_role, legacy_fallback_used=False,
+                             sandbox_requested=not self.args.no_sandbox, memory_max_configured=self.args.memory_max)
         env = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": self.profile_dir or "/tmp", "PULSE_SERVER": "none", "LANG": "C"}
         if self.args.launcher == "direct":
             env.update({key: value for key, value in os.environ.items() if key.startswith("FAKE_")})
@@ -663,17 +753,81 @@ class Validator:
                 self.recorder.update(role=role, role_enforced_by_bridge=role == "viewer")
                 if role == "viewer":
                     return self.recorder.condition("session.connected_as_viewer", True, "connected; the Bridge assigned the viewer role and enforces it")
-                if role == "operator" and self.args.viewer_role == "preferred":
+                if role == "operator" and self.args.viewer_role == "legacy-fallback":
+                    # check_guard() has already proven the guard active: a run whose guard is not never gets as far as starting a session
+                    self.recorder.update(legacy_fallback_used=True)
                     return self.recorder.condition(
-                        "session.connected_as_viewer", True,
-                        "connected; the Bridge assigned role 'operator' because it predates viewer enforcement: receive-only rests on the injected guard, "
-                        "the live wire audit and the unchanged-radio check")
+                        "session.role_legacy_fallback", True,
+                        "LEGACY BRIDGE FALLBACK USED: the Bridge assigned the role 'operator' because this release predates viewer-role enforcement. "
+                        "Receive-only rests on the injected guard (proven active), the live wire audit and the unchanged-radio check, not on the Bridge")
                 return self.recorder.condition("session.connected_as_viewer", False, f"connected; the Bridge assigned role {role!r} (a validation session must be a viewer)")
             self.sleep(self.limits["poll_s"])
         if self.stop_requested.is_set():
             return self.interrupted("session.connected_as_viewer", "the session was connecting")
         return self.recorder.condition("session.connected_as_viewer", False,
                                        f"not connected within {self.limits['connect_s']:g} s (connected={snap.get('connected')}, bridgeReady={snap.get('bridgeReady')}, pending={snap.get('connectPending')})")
+
+    def unit_properties(self, names: tuple[str, ...]) -> dict[str, str]:
+        result = subprocess.run([self.args.systemctl, "show", *[f"--property={name}" for name in names], self.unit + ".service"],
+                                capture_output=True, text=True, timeout=10)
+        return {key: value for key, separator, value in (line.partition("=") for line in result.stdout.splitlines()) if separator}
+
+    def browser_pids(self, props: dict[str, str]) -> list[int]:
+        """Every process of the browser: the unit's cgroup when it runs in a unit, otherwise the tree below the process we started."""
+        proc_root = Path(self.args.proc_root)
+        if self.args.launcher == "systemd":
+            group = props.get("ControlGroup", "")
+            if not group:
+                return []
+            try:
+                text = (Path(self.args.cgroup_root) / group.lstrip("/") / "cgroup.procs").read_text()
+            except OSError:
+                return []
+            return [int(line) for line in text.split() if line.isdigit()]
+        return descendants(proc_root, self.process.pid) if self.process is not None else []
+
+    def check_isolation(self) -> bool:
+        """Read, from the host, that the browser's sandbox and memory cap are really in force while the session is running."""
+        if self.args.isolation == "off":
+            self.recorder.log("isolation_not_checked")
+            return True
+        self.recorder.update(phase="isolation")
+        props: dict[str, str] = {}
+        if self.args.launcher == "systemd":
+            try:
+                props = self.unit_properties(("ControlGroup", "MemoryMax", "MemorySwapMax", "MemoryCurrent", "ActiveState"))
+            except (OSError, subprocess.SubprocessError) as error:
+                self.recorder.log("unit_properties_failed", error=str(error))
+        pids = self.browser_pids(props)
+        processes = [p for p in (proc_snapshot(Path(self.args.proc_root), pid) for pid in pids) if p]
+        sandbox_ok, sandbox_detail = sandbox_verdict(processes)
+        if self.args.launcher == "systemd":
+            memory_ok, memory_detail = memory_verdict(props, self.args.memory_max)
+        else:
+            memory_ok, memory_detail = False, "the browser was not started in a systemd unit, so no memory cap is applied to it"
+        self.recorder.update(isolation={
+            "processes": [{k: p[k] for k in ("pid", "type", "seccomp", "no_new_privs")} for p in processes],
+            "memory": {"configured": self.args.memory_max, "max_bytes": props.get("MemoryMax"), "swap_max": props.get("MemorySwapMax"),
+                       "current_bytes": props.get("MemoryCurrent")},
+        })
+        ok = self.recorder.condition("browser.sandbox_intact", sandbox_ok, sandbox_detail)
+        if self.args.isolation == "required":
+            ok &= self.recorder.condition("browser.memory_limit_applied", memory_ok, memory_detail)
+        return bool(ok)
+
+    def record_memory_peak(self) -> None:
+        """How close the browser came to its cap (informational: a browser that hit the cap would already have failed the run)."""
+        if self.args.launcher != "systemd" or self.args.isolation == "off":
+            return
+        try:
+            props = self.unit_properties(("MemoryPeak", "MemoryCurrent"))
+        except (OSError, subprocess.SubprocessError):
+            return
+        isolation = dict(self.recorder.data.get("isolation") or {})
+        memory = dict(isolation.get("memory") or {})
+        memory.update(peak_bytes=props.get("MemoryPeak"), current_bytes_at_end=props.get("MemoryCurrent"))
+        isolation["memory"] = memory
+        self.recorder.update(isolation=isolation)
 
     def measure(self) -> bool:
         self.recorder.update(phase="measuring")
@@ -818,6 +972,7 @@ class Validator:
 
     def shutdown(self) -> None:
         self.recorder.update(phase="stopping")
+        self.record_memory_peak()
         before = self.read_owner_quiet()
         self.connections_before_stop = int(before["metrics"].get("connections") or 0) if before else None
         if self.cdp is not None and not self.cdp.closed.is_set() and not self.cdp.unresponsive and self.session is not None:
@@ -894,6 +1049,8 @@ class Validator:
                 raise _Abort
             self.launch()
             if not self.attach_and_navigate() or not self.check_guard() or not self.start_session() or not self.measure():
+                raise _Abort
+            if not self.check_isolation():
                 raise _Abort
             if not self.check_owner_and_wire():
                 raise _Abort
@@ -1049,15 +1206,22 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--owner-unit", default="saturn-bridge.service", help="the service that owns the FPGA and publishes --perf-json")
     run.add_argument("--auth-unit", default="saturn-go.service", help="the service whose environment holds the proxy credential")
     run.add_argument("--release-root", default="/opt/saturn/releases")
-    run.add_argument("--viewer-role", choices=("required", "preferred"), default="required",
-                     help="required: the Bridge must assign the viewer role. preferred: also accept the operator role from a Bridge that predates viewer "
-                          "enforcement, because the injected guard, the live wire audit and the unchanged-radio check hold the line")
+    run.add_argument("--viewer-role", choices=("required", "legacy-fallback"), default="required",
+                     help="required: the Bridge must assign the viewer role. legacy-fallback: ALSO accept the operator role, only for a release whose "
+                          "Bridge predates viewer-role enforcement; recorded as legacy_fallback_used, and the injected guard must be proven active")
     run.add_argument("--no-exe-check", action="store_true", help="a deployment that predates release directories: trust /readyz alone for the running commit")
     run.add_argument("--tls-cert", default="/var/lib/saturn-state/remote-tls/saturn-remote.crt")
     run.add_argument("--browser", default="/usr/bin/chromium")
     run.add_argument("--launcher", choices=("systemd", "direct"), default="systemd")
     run.add_argument("--memory-max", default="350M")
-    run.add_argument("--no-sandbox", action="store_true", help="only inside the sandboxed unit, if the browser's own sandbox cannot start there")
+    run.add_argument("--no-sandbox", action="store_true", help="test rigs only: under --isolation required it fails browser.sandbox_intact")
+    run.add_argument("--isolation", choices=("required", "sandbox", "off"), default="required",
+                     help="required: verify from the host that the browser's sandbox is in force and its unit carries the memory cap (the update "
+                          "process always uses this). sandbox: the sandbox only, for a rig that runs a real browser outside a unit. off: only for "
+                          "rigs that run a stand-in browser")
+    run.add_argument("--systemd-run", default="systemd-run", help=argparse.SUPPRESS)
+    run.add_argument("--proc-root", default="/proc", help=argparse.SUPPRESS)
+    run.add_argument("--cgroup-root", default="/sys/fs/cgroup", help=argparse.SUPPRESS)
     run.add_argument("--guard-script", default=str(Path(__file__).resolve().with_name("saturn-remote-receive-guard.js")))
     run.add_argument("--systemctl", default="systemctl")
     run.add_argument("--limits", help="JSON object overriding DEFAULT_LIMITS (tests)")

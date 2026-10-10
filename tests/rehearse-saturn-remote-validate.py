@@ -16,7 +16,7 @@ Optional: SATURN_REH_WISDOM (FFTW wisdom file), SATURN_REH_CHROME (default googl
           SATURN_REH_OLD_BRIDGE_BIN (a saturn-bridge built WITHOUT the viewer-role fix: adds the "oldbridge" cases, which are the rollback target's
           situation: the Bridge assigns the operator role and only the injected guard, the live wire audit and the unchanged-radio check hold the line).
 
-Usage: rehearse-saturn-remote-validate.py [new|legacy|stalled|oldbridge|all]
+Usage: rehearse-saturn-remote-validate.py [new|legacy|stalled|nosandbox|oldbridge|all]
 Exit status 0 only if every requested case behaved as required.
 """
 import http.server
@@ -210,13 +210,16 @@ exit 0
                 pass
 
 
-def validator(stack, name, extra=(), limits=None):
+def validator(stack, name, extra=(), limits=None, no_sandbox=False):
     ctrl = stack.dir / f"ctrl-{name}"
     argv = [sys.executable, str(VALIDATOR), "run", "--control-dir", str(ctrl), "--target-commit", stack.commit, "--backend", "xdma",
             "--url", f"https://127.0.0.1:{TLS_PORT}/remote-next?validation=receive&transport=split&display_transport=spectrum",
             "--ready-url", f"http://127.0.0.1:{SHIM_PORT}/readyz", "--perf-url", f"http://127.0.0.1:{SHIM_PORT}/p23_perf",
             "--perf-json", str(stack.work / "perf.json"), "--release-root", str(stack.release_root),
-            "--tls-cert", str(stack.state / "remote-tls/saturn-remote.crt"), "--browser", CHROME, "--launcher", "direct", "--no-sandbox",
+            "--tls-cert", str(stack.state / "remote-tls/saturn-remote.crt"), "--browser", CHROME, "--launcher", "direct",
+            # the real Chrome runs WITH its sandbox; this host has no transient unit, so only the sandbox is verified here (the memory cap is
+            # verified on the appliance, where the production launcher applies it)
+            "--isolation", "sandbox", *(["--no-sandbox"] if no_sandbox else []),
             "--guard-script", str(GUARD), "--systemctl", str(stack.systemctl), "--limits", json.dumps(limits or {}), *extra]
     process = subprocess.Popen(argv, stdout=open(stack.dir / f"validator-{name}.out", "w"), stderr=subprocess.STDOUT, start_new_session=True)
     return ctrl, process
@@ -236,7 +239,7 @@ def chrome_running(stack):
             "--remote-debugging-pipe" in Path(f"/proc/{p}/cmdline").read_text(errors="replace")] if result.stdout else []
 
 
-def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_role="preferred", expect_role="viewer", expect_refusal=False):
+def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_role="required", expect_role="viewer", expect_refusal=False, no_sandbox=False):
     say(f"case {label}: page from {webroot}")
     stack = Stack(webroot, label, bridge_bin)
     try:
@@ -245,7 +248,19 @@ def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_rol
         check(before.get("connections") == 0 and before.get("client") == 0, f"{label}: nothing is connected to the Bridge before validation (connections={before.get('connections')}, client={before.get('client')})")
         radio_before = {k: before.get(k) for k in ("frequency_hz", "sample_rate_hz", "ddc", "adc", "tx_keyed", "tx_stream")}
         ctrl, process = validator(stack, label, extra=("--viewer-role", viewer_role),
-                                  limits={"max_seconds": 150, "data_s": 40, "connect_s": 40, "page_load_s": 40} if stall else {"max_seconds": 150})
+                                  limits={"max_seconds": 150, "data_s": 40, "connect_s": 40, "page_load_s": 40} if stall else {"max_seconds": 150},
+                                  no_sandbox=no_sandbox)
+        if no_sandbox:
+            process.wait(timeout=140)
+            status = json.loads((ctrl / "status.json").read_text())
+            failed = status.get("failed") or {}
+            check(status["state"] == "failed" and failed.get("id") == "browser.sandbox_intact",
+                  f"{label}: a real Chrome started with --no-sandbox is refused: {failed.get('detail')}")
+            check("Seccomp:0" in failed.get("detail", "") or "--no-sandbox" in failed.get("detail", ""), f"{label}: the refusal names what /proc showed")
+            check(not chrome_running(stack), f"{label}: the temporary Chrome is gone after the refusal")
+            time.sleep(2)
+            check(stack.perf()["metrics"].get("connections") == 0, f"{label}: nothing of ours remains at the Bridge")
+            return
         if expect_refusal:
             process.wait(timeout=140)
             status = json.loads((ctrl / "status.json").read_text())
@@ -288,6 +303,12 @@ def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_rol
         check(status.get("role") == expect_role and status.get("role_enforced_by_bridge") == (expect_role == "viewer"),
               f"{label}: the Bridge assigned role {status.get('role')!r}, enforced by the Bridge: {status.get('role_enforced_by_bridge')}")
         check(status["conditions"].get("guard.active", {}).get("ok") is True, f"{label}: the receive-only guard is proven active in the page")
+        check(status.get("legacy_fallback_used") == (expect_role == "operator") and status.get("role_policy") == viewer_role,
+              f"{label}: role policy {status.get('role_policy')!r}, legacy fallback used: {status.get('legacy_fallback_used')}")
+        sandbox = status["conditions"].get("browser.sandbox_intact", {})
+        renderers = [p for p in (status.get("isolation") or {}).get("processes", []) if p["type"] == "renderer"]
+        check(sandbox.get("ok") is True and renderers and all(p["seccomp"] == 2 for p in renderers),
+              f"{label}: the real Chrome's sandbox is verified from /proc: {sandbox.get('detail')}")
         check(all(c["ok"] for c in status["conditions"].values()), f"{label}: every condition holds")
         held = stack.perf()["metrics"]
         check(held.get("client") == 1 and held.get("connections", 0) >= 2, f"{label}: while held, the Bridge sees the session (client={held.get('client')}, connections={held.get('connections')})")
@@ -322,10 +343,12 @@ def main():
              "legacy": lambda: case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "legacy", "legacy"),
              "stalled": lambda: case(Path(ENV["SATURN_REH_WEBROOT"]), "stalled", "native", stall=True),
              "oldbridge": lambda: (
-                 case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "oldbridge", "legacy", bridge_bin=os.environ["SATURN_REH_OLD_BRIDGE_BIN"], expect_role="operator"),
+                 case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "oldbridge", "legacy", bridge_bin=os.environ["SATURN_REH_OLD_BRIDGE_BIN"],
+                      viewer_role="legacy-fallback", expect_role="operator"),
                  case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "oldbridge-required", "legacy", bridge_bin=os.environ["SATURN_REH_OLD_BRIDGE_BIN"],
-                      viewer_role="required", expect_role="operator", expect_refusal=True))}
-    for name in (["new", "legacy", "stalled"] + (["oldbridge"] if os.environ.get("SATURN_REH_OLD_BRIDGE_BIN") else []) if which == "all" else [which]):
+                      viewer_role="required", expect_role="operator", expect_refusal=True)),
+             "nosandbox": lambda: case(Path(ENV["SATURN_REH_WEBROOT"]), "nosandbox", "native", no_sandbox=True)}
+    for name in (["new", "legacy", "stalled", "nosandbox"] + (["oldbridge"] if os.environ.get("SATURN_REH_OLD_BRIDGE_BIN") else []) if which == "all" else [which]):
         try:
             cases[name]()
         except Exception as error:  # a rehearsal that cannot run is a failure, not a pass
