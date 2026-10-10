@@ -1,10 +1,10 @@
-xdma_replay_shim: active: device=/scratch/collector_check/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
+xdma_replay_shim: active: device=/scratch/pin_check2/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
 saturn-bridge: validated FFTW wisdom at /scratch/wisdom_cache/wisdom-x86_64
-xdma_replay_shim: active: device=/scratch/collector_check/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
+xdma_replay_shim: active: device=/scratch/pin_check2/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
 saturn-bridge: imported FFTW wisdom from /scratch/wisdom_cache/wisdom-x86_64
-xdma_replay_shim: active: device=/scratch/collector_check/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
+xdma_replay_shim: active: device=/scratch/pin_check2/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
 saturn-bridge: G2 PCB2 RX headphone / TX MON worker ready (default off)
-xdma_replay_shim: active: device=/scratch/collector_check/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
+xdma_replay_shim: active: device=/scratch/pin_check2/work_1/xdma_c2h.placeholder source=synthetic pacing=realtime tones=1 fake_rt=1
 xdma_replay_shim: Bridge setsockopt(TCP_NODELAY=1) on fd 9 -> ok
 xdma_replay_shim: Bridge setsockopt(TCP_NODELAY=1) on fd 10 -> ok
 saturn-bridge: PureSignal is unavailable on direct XDMA production TX

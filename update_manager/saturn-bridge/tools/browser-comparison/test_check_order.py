@@ -63,9 +63,11 @@ MIRROR_METRICS = {"iq": "iq", "audio": "audio", "connections": "connections", "i
                   "tcp_outq_hwm_bytes": "tcp_outq_hwm_bytes", "out_hwm_bytes": "out_hwm_bytes", "outbound_drops": "outbound_drops"}
 
 
-def collector_answer(meta, b, pi_read, boot, ticks, nodelay):
+def collector_answer(meta, b, pi_read, boot, ticks, nodelay, rxc1=("disabled", 0), fpga=("53460003", 1, 31)):
     metrics = {metric: b[field] for field, metric in MIRROR_METRICS.items() if field in b}
-    metrics.update(pid=meta["bridgePid"], build_git_sha="abc1234")
+    metrics.update(pid=meta["bridgePid"], build_git_sha="abc1234", date_code_hex=fpga[0], firmware_major=fpga[1], firmware_minor=fpga[2])
+    if rxc1 is not None:
+        metrics["rx_counter_v31"] = {"schema": "rxc1-v1", "source_backend": "xdma", "status": rxc1[0], "sampled_at_ms": 0, "host_acquisition_failures": rxc1[1], "ddc": []}
     if nodelay is not None:
         metrics.update(tci_nodelay_enabled=nodelay[0], tci_nodelay_confirmed_total=nodelay[1], tci_nodelay_failed_total=nodelay[2])
     doc = {"schema_version": 1, "updated_at_ms": b["updatedAtMs"], "source": "saturn-bridge", "backend": "xdma", "metrics": metrics}
@@ -86,11 +88,16 @@ def mapped_bridge(b, answer, entry, nodelay):
                collectorSeq=entry["seq"], collectorSpawn=entry["spawn"], collectorReceivedAtMs=entry["receivedAtMs"], requestLatencyMs=entry["latencyMs"])
     if nodelay is not None:
         out.update(nodelayEnabled=nodelay[0], nodelayConfirmedTotal=nodelay[1], nodelayFailedTotal=nodelay[2])
+    mm = answer["document"]["metrics"]
+    out.update(fpgaBuildId=mm["date_code_hex"], firmwareMajor=mm["firmware_major"], firmwareMinor=mm["firmware_minor"])
+    rx = mm.get("rx_counter_v31")
+    if isinstance(rx, dict):
+        out.update(rxc1Status=rx["status"], rxc1HostAcquisitionFailures=rx["host_acquisition_failures"])
     return out
 
 
 def add_collector(w, window_path, *, pi_read=None, boot=BOOT, ticks=None, nodelay="auto", served=1, latency=25, recv_offset=30, warmup_failure=False,
-                  sidecar=True, answer_hook=None, sample_hook=None, summary=True):
+                  sidecar=True, answer_hook=None, sample_hook=None, summary=True, rxc1=("disabled", 0), fpga=("53460003", 1, 31)):
     """Rewrite a window record as if it had been collected, and write its sidecar. Hooks alter the raw answer (so the sample and the
     sidecar agree on the alteration) or only the derived sample (so they disagree)."""
     meta = w["meta"]
@@ -117,7 +124,7 @@ def add_collector(w, window_path, *, pi_read=None, boot=BOOT, ticks=None, nodela
                             "error": "no response within 2000 ms", "raw": None})
             entries.append({"kind": "spawn", "spawn": spawn_no, "readerPid": 4322, "atMs": recv})
             return {"error": "no response within 2000 ms", "collectorSeq": seq, "collectorSpawn": spawn_no - 1, "collectorReceivedAtMs": recv, "requestLatencyMs": lat}
-        answer = collector_answer(meta, b, pi_read(i, {"page": {"t": page_t}, "bridge": b}), boot, ticks, nodelay)
+        answer = collector_answer(meta, b, pi_read(i, {"page": {"t": page_t}, "bridge": b}), boot, ticks, nodelay, rxc1, fpga)
         if hook and answer_hook:
             answer_hook(i, answer)
         entry = {"kind": "read", "seq": seq, "spawn": spawn_no, "spawned": False, "sentAtMs": recv - lat, "receivedAtMs": recv, "latencyMs": lat, "error": None,
@@ -830,20 +837,45 @@ class DataValidation(Base):
         self.assertEqual(code, 1, out)
         self.assertIn("record.finite_numbers", failed_ids(report, 3))
 
-    def test_a_cumulative_bridge_drop_counter_that_decreases(self):
+    def test_a_bridge_drop_count_that_the_bridge_clears_is_valid_and_reported(self):
+        # tci/mod.rs clears drop_count (swap(0)) whenever the Bridge reports rx_drops to its client, so perf.json's outbound_drops is "drops not yet
+        # reported". A real rehearsal window showed 0,...,1,1,0,...: a genuine drop event, not an invalid record.
+        def real_pattern(d):
+            for i, s in enumerate(d["samples"]):
+                s["bridge"]["outbound_drops"] = 1 if i in (14, 15) else 0
+        self.bench.alter(10, real_pattern)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        perf = [w for w in report["windows"] if w["n"] == 10][0]["performance"]
+        self.assertEqual((perf["bridge_outbound_drops_max"], perf["bridge_samples_with_pending_drops"]), (1, 2))
+        self.assertIn("bridge_samples_with_pending_drops 2", out, "the drop event is listed with the performance events")
+
+    def test_a_larger_pending_drop_count_that_falls_back_to_zero_is_also_valid(self):
         def reset(d):
             for i, s in enumerate(d["samples"]):
                 s["bridge"]["outbound_drops"] = 10 if i < 15 else 0
-        self.assertRejectedOnlyIn(1, {"counters.bridge_outbound_drops_monotonic"}, reset)
+        self.bench.alter(1, reset)
+        code, out, report = self.bench.run()
+        self.assertEqual(code, 0, out)
+        self.assertFalse(any(c["check"].startswith("counters.bridge_outbound") for w in report["windows"] for c in w["checks"]), "there is no monotonic rule for it")
+        perf = [w for w in report["windows"] if w["n"] == 1][0]["performance"]
+        self.assertEqual((perf["bridge_outbound_drops_max"], perf["bridge_samples_with_pending_drops"]), (10, 15))
 
-    def test_genuine_bridge_drops_that_only_increase_stay_valid(self):
+    def test_a_cumulative_bridge_row_counter_that_decreases_is_still_rejected(self):
+        def reset(d):
+            for i, s in enumerate(d["samples"]):
+                s["bridge"]["rows_written"] = 100 + 10 * i if i < 15 else 5
+        self.assertRejectedOnlyIn(3, {"counters.bridge_rows_written_monotonic"}, reset)
+
+    def test_genuine_bridge_drops_stay_valid_and_are_reported(self):
         def drops(d):
             for i, s in enumerate(d["samples"]):
                 s["bridge"]["outbound_drops"] = i // 5
         self.bench.alter(5, drops)
         code, out, report = self.bench.run()
         self.assertEqual(code, 0, out)
-        self.assertEqual([w for w in report["windows"] if w["n"] == 5][0]["performance"]["bridge_outbound_drops_delta"], 5)
+        perf = [w for w in report["windows"] if w["n"] == 5][0]["performance"]
+        self.assertEqual((perf["bridge_outbound_drops_max"], perf["bridge_samples_with_pending_drops"]), (5, 25))
 
     def test_per_second_bridge_rates_are_not_cumulative(self):
         def rates(d):
@@ -946,7 +978,8 @@ class LiveFreshness(unittest.TestCase):
             if pi_age is not None and not owner and not (partial and i % 2):
                 s["bridge"]["piSourceAgeMs"] = pi_age(i) if callable(pi_age) else pi_age
             data["samples"].append(s)
-        data["meta"]["rxc1"] = {"state": "polling enabled, valid snapshots", "pid": data["meta"]["bridgePid"] if rxc1_pid is None else rxc1_pid, "identity": "1.31.002 / 0x53460004"}
+        collector.setdefault("rxc1", ("valid", 0))
+        data["meta"]["rxc1"] = {"state": "valid", "pid": data["meta"]["bridgePid"] if rxc1_pid is None else rxc1_pid, "identity": "1.31.002 / 0x53460004"}
         path = os.path.join(self.windows, "w1_C.json")
         if owner:
             age = (lambda i: pi_age(i) if callable(pi_age) else pi_age) if pi_age is not None else (lambda i: 400)
@@ -1574,6 +1607,16 @@ class RealCollectorRun(unittest.TestCase):
         self.assertEqual([w["nodelay"]["source"] for w in report["windows"]], ["Bridge-reported (perf.json)"] * 2)
         self.assertEqual(report["verdict"], "VALID, TCP_NODELAY VERIFIED")
 
+    def test_the_real_collector_output_satisfies_the_planned_rxc1_state_and_fpga_image(self):
+        code, out, report = self.run_checker("--expect-rxc1", "disabled", "--expect-fpga-build", "53460003")
+        self.assertEqual(code, 0, out)
+        code, out, report = self.run_checker("--expect-rxc1", "valid")
+        self.assertEqual(code, 1, out)
+        self.assertIn("rxc1.state_is_the_planned_one", failed_ids(report, 1))
+        code, out, report = self.run_checker("--expect-fpga-build", "53460004")
+        self.assertEqual(code, 1, out)
+        self.assertIn("owner.fpga_image_is_the_planned_one", failed_ids(report, 2))
+
     def test_the_bridges_own_evidence_needs_no_retained_log(self):
         code, out, report = self.run_checker(logs=False)
         self.assertEqual(code, 0, out)
@@ -1590,7 +1633,9 @@ class RealCollectorRun(unittest.TestCase):
                 nodelay = (metrics["tci_nodelay_enabled"], metrics["tci_nodelay_confirmed_total"], metrics["tci_nodelay_failed_total"])
                 self.assertEqual(mapped_bridge(s["bridge"], answer, entry, nodelay), s["bridge"], f"{name} sample {i}")
                 # and the mirror's raw answer has the real answer's shape
-                ours = collector_answer(w["meta"], s["bridge"], answer["piReadAtMs"], answer["owner"]["bootId"], answer["owner"]["startTicks"], nodelay)
+                rx = metrics["rx_counter_v31"]
+                ours = collector_answer(w["meta"], s["bridge"], answer["piReadAtMs"], answer["owner"]["bootId"], answer["owner"]["startTicks"], nodelay,
+                                        (rx["status"], rx["host_acquisition_failures"]), (metrics["date_code_hex"], metrics["firmware_major"], metrics["firmware_minor"]))
                 self.assertEqual(set(ours), set(answer))
                 self.assertEqual(set(ours["owner"]), set(answer["owner"]))
                 self.assertTrue(set(ours["document"]) <= set(answer["document"]))
@@ -1623,6 +1668,177 @@ class RealCollectorRun(unittest.TestCase):
         code, out, report = self.run_checker()
         self.assertEqual(code, 1, out)
         self.assertIn("owner.pid_matches_meta", failed_ids(report, 2))
+
+
+class Rxc1FromTelemetry(unittest.TestCase):
+    """With RXC1 polling ON the recorded state must be the one the owner itself publishes (metrics.rx_counter_v31.status) in every sample."""
+
+    def setUp(self):
+        self.bench = Bench()
+        self.addCleanup(self.bench.cleanup)
+
+    def prepare(self, state="valid", **kw):
+        for path in window_files(self.bench.windows):
+            w = read_json(path)
+            w["meta"]["rxc1"] = {"state": state, "pid": w["meta"]["bridgePid"], "identity": "fw 1.31.002 / 0x53460004"}
+            write_json(path, w)
+        collect_all(self.bench, rxc1=(state, 0), **kw)
+
+    def run_planned(self, expect="valid", *extra):
+        return self.bench.run("--require-owner", "--expect-rxc1", expect, *extra)
+
+    def test_recorded_state_that_the_owner_publishes_in_every_sample_is_valid(self):
+        self.prepare()
+        code, out, report = self.run_planned()
+        self.assertEqual(code, 0, out)
+        self.assertFalse(all_window_failures(report)); self.assertFalse(set_failures(report))
+
+    def test_the_planned_state_is_enforced_on_every_window(self):
+        self.prepare()
+        code, out, report = self.run_planned("unarmed")
+        self.assertEqual(code, 1, out)
+        self.assertTrue(all("rxc1.state_is_the_planned_one" in ids for ids in all_window_failures(report).values()))
+        self.assertEqual(len(all_window_failures(report)), 10)
+
+    def test_expecting_a_state_implies_that_each_window_records_one(self):
+        code, out, report = self.bench.run("--expect-rxc1", "valid")        # the fixture records the string "not applicable (replay)"
+        self.assertEqual(code, 1, out)
+        self.assertIn("rxc1.recorded", failed_ids(report, 4))
+
+    def test_a_window_whose_owner_says_something_else_than_was_recorded(self):
+        self.prepare(per_window=lambda meta: {"rxc1": ("unarmed", 0)} if meta["index"] == 4 else {})
+        code, out, report = self.run_planned()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(failed_ids(report, 4), {"rxc1.status_every_sample_matches_state"})
+
+    def test_polling_that_drops_out_in_the_middle_of_a_window(self):
+        hook = lambda i, a: a["document"]["metrics"]["rx_counter_v31"].update(status="unavailable") if i >= 15 else None
+        self.prepare(per_window=lambda meta: {"answer_hook": hook} if meta["index"] == 4 else {})
+        code, out, report = self.run_planned()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(failed_ids(report, 4), {"rxc1.status_every_sample_matches_state"})
+
+    def test_a_bridge_that_publishes_no_rxc1_state_cannot_back_a_recorded_one(self):
+        self.prepare(per_window=lambda meta: {"rxc1": None} if meta["index"] == 4 else {})
+        code, out, report = self.run_planned()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(failed_ids(report, 4), {"rxc1.status_every_sample_matches_state"})
+        detail = [c["detail"] for w in report["windows"] if w["n"] == 4 for c in w["checks"] if c["check"] == "rxc1.status_every_sample_matches_state"][0]
+        self.assertIn("cannot be verified", detail)
+
+    def test_the_state_present_in_only_some_samples(self):
+        hook = lambda i, a: a["document"]["metrics"].pop("rx_counter_v31") if i == 5 else None
+        self.prepare(per_window=lambda meta: {"answer_hook": hook} if meta["index"] == 4 else {})
+        code, out, report = self.run_planned()
+        self.assertEqual(code, 1, out)
+        self.assertIn("rxc1.telemetry_all_or_none", failed_ids(report, 4))
+
+    def test_a_status_that_is_not_text_or_a_failure_count_that_is_not_a_counter(self):
+        for label, hook in {"status": lambda i, a: a["document"]["metrics"]["rx_counter_v31"].update(status=5) if i == 5 else None,
+                            "failures": lambda i, a: a["document"]["metrics"]["rx_counter_v31"].update(host_acquisition_failures=-1) if i == 5 else None}.items():
+            with self.subTest(field=label):
+                bench = Bench(); self.addCleanup(bench.cleanup)
+                for path in window_files(bench.windows):
+                    w = read_json(path); w["meta"]["rxc1"] = {"state": "valid", "pid": w["meta"]["bridgePid"], "identity": "x"}; write_json(path, w)
+                collect_all(bench, rxc1=("valid", 0), per_window=lambda meta, hook=hook: {"answer_hook": hook} if meta["index"] == 4 else {})
+                code, out, report = bench.run("--require-owner", "--expect-rxc1", "valid")
+                self.assertEqual(code, 1, out)
+                self.assertIn("owner.fields_well_formed", failed_ids(report, 4))
+
+    def test_a_sample_that_differs_from_its_raw_answer_in_the_rxc1_fields(self):
+        for field, bad in (("rxc1Status", "disabled"), ("rxc1HostAcquisitionFailures", 9)):
+            with self.subTest(field=field):
+                bench = Bench(); self.addCleanup(bench.cleanup)
+                for path in window_files(bench.windows):
+                    w = read_json(path); w["meta"]["rxc1"] = {"state": "valid", "pid": w["meta"]["bridgePid"], "identity": "x"}; write_json(path, w)
+                collect_all(bench, rxc1=("valid", 0), per_window=lambda meta, field=field, bad=bad: {"sample_hook": (lambda i, b: b.__setitem__(field, bad) if i == 12 else None)} if meta["index"] == 4 else {})
+                code, out, report = bench.run("--require-owner")
+                self.assertEqual(code, 1, out)
+                self.assertIn("collector.samples_match_raw_documents", failed_ids(report, 4))
+
+    def test_states_that_differ_between_windows_are_a_set_level_failure(self):
+        self.prepare(per_window=lambda meta: {"rxc1": ("partial", 0)} if meta["index"] == 6 else {})
+        for path in window_files(self.bench.windows):
+            w = read_json(path)
+            if w["meta"]["index"] == 6:
+                w["meta"]["rxc1"]["state"] = "partial"
+                write_json(path, w)
+        code, out, report = self.bench.run("--require-owner", "--require-rxc1")
+        self.assertEqual(code, 1, out)
+        self.assertIn("set.rxc1_state_constant", set_failures(report))
+        self.assertFalse(all_window_failures(report), "each window is internally consistent; only the set disagrees")
+
+
+class FpgaImage(unittest.TestCase):
+    """The FPGA image the owner reports (build id and firmware version) is part of what a window ran on."""
+
+    def setUp(self):
+        self.bench = Bench()
+        self.addCleanup(self.bench.cleanup)
+
+    def test_the_planned_image_is_accepted_and_another_is_rejected_on_every_window(self):
+        collect_all(self.bench)
+        code, out, report = self.bench.run("--require-owner", "--expect-fpga-build", "53460003")
+        self.assertEqual(code, 0, out)
+        code, out, report = self.bench.run("--require-owner", "--expect-fpga-build", "53460004")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(len(all_window_failures(report)), 10)
+        self.assertTrue(all(ids == {"owner.fpga_image_is_the_planned_one"} for ids in all_window_failures(report).values()))
+
+    def test_an_image_that_changes_inside_a_window(self):
+        hook = lambda i, a: a["document"]["metrics"].update(date_code_hex="53460004") if i >= 15 else None
+        collect_all(self.bench, per_window=lambda meta: {"answer_hook": hook} if meta["index"] == 4 else {})
+        code, out, report = self.bench.run("--require-owner")
+        self.assertEqual(code, 1, out)
+        self.assertEqual(failed_ids(report, 4), {"owner.fpga_image_constant_in_window"})
+
+    def test_the_planned_image_must_hold_for_every_sample_not_just_some(self):
+        hook = lambda i, a: a["document"]["metrics"].update(date_code_hex="53460004") if i >= 15 else None
+        collect_all(self.bench, per_window=lambda meta: {"answer_hook": hook} if meta["index"] == 4 else {})
+        code, out, report = self.bench.run("--require-owner", "--expect-fpga-build", "53460003")
+        self.assertEqual(code, 1, out)
+        self.assertIn("owner.fpga_image_is_the_planned_one", failed_ids(report, 4))
+
+    def test_a_firmware_version_that_changes_inside_a_window(self):
+        hook = lambda i, a: a["document"]["metrics"].update(firmware_minor=32) if i == 7 else None
+        collect_all(self.bench, per_window=lambda meta: {"answer_hook": hook} if meta["index"] == 4 else {})
+        code, out, report = self.bench.run("--require-owner")
+        self.assertEqual(code, 1, out)
+        self.assertIn("owner.fpga_image_constant_in_window", failed_ids(report, 4))
+
+    def test_a_different_image_in_one_window_of_the_set(self):
+        collect_all(self.bench, per_window=lambda meta: {"fpga": ("53460004", 1, 31)} if meta["index"] == 6 else {})
+        code, out, report = self.bench.run("--require-owner")
+        self.assertEqual(code, 1, out)
+        self.assertIn("set.fpga_image_same_in_every_window", set_failures(report))
+        self.assertFalse(all_window_failures(report), "each window is internally consistent; only the set disagrees")
+
+    def test_a_malformed_or_missing_image_identity(self):
+        cases = {"empty build id": lambda i, a: a["document"]["metrics"].update(date_code_hex="") if i == 5 else None,
+                 "negative firmware": lambda i, a: a["document"]["metrics"].update(firmware_major=-1) if i == 5 else None,
+                 "build id not text": lambda i, a: a["document"]["metrics"].update(date_code_hex=53460003) if i == 5 else None}
+        for label, hook in cases.items():
+            with self.subTest(case=label):
+                bench = Bench(); self.addCleanup(bench.cleanup)
+                collect_all(bench, per_window=lambda meta, hook=hook: {"answer_hook": hook} if meta["index"] == 4 else {})
+                code, out, report = bench.run("--require-owner")
+                self.assertEqual(code, 1, out)
+                self.assertIn("owner.fields_well_formed", failed_ids(report, 4))
+        bench = Bench(); self.addCleanup(bench.cleanup)
+        collect_all(bench)
+        bench.alter(4, lambda d: d["samples"][5]["bridge"].pop("fpgaBuildId"))
+        code, out, report = bench.run("--require-owner")
+        self.assertEqual(code, 1, out)
+        self.assertIn("owner.fields_every_sample", failed_ids(report, 4))
+
+    def test_a_sample_whose_image_differs_from_its_raw_answer(self):
+        for field, bad in (("fpgaBuildId", "53460004"), ("firmwareMajor", 2), ("firmwareMinor", 99)):
+            with self.subTest(field=field):
+                bench = Bench(); self.addCleanup(bench.cleanup)
+                collect_all(bench, per_window=lambda meta, field=field, bad=bad: {"sample_hook": (lambda i, b: b.__setitem__(field, bad) if i == 12 else None)} if meta["index"] == 4 else {})
+                code, out, report = bench.run("--require-owner")
+                self.assertEqual(code, 1, out)
+                self.assertIn("collector.samples_match_raw_documents", failed_ids(report, 4))
 
 
 class MalformedRecords(Base):

@@ -76,7 +76,9 @@ PAGE_NUM = ["t", "iq", "rxIq", "rows", "opusFrames", "pcmFrames", "audioPlayed",
 PAGE_BOOL = ["connected", "iqStreaming"]
 PAGE_STR = ["codec", "renderSource", "echoMode", "worklet", "override"]
 PAGE_OPTIONAL_NUM = ["jitterP50", "jitterP95", "jitterP99"]   # may legitimately be null early on
-BRIDGE_CUMULATIVE = ["rows_written", "outbound_drops"]   # cumulative counters; the *_s fields are rates and are not monotonic
+# Cumulative counters. NOT outbound_drops: the Bridge clears it (tci/mod.rs: drop_count.swap(0)) every time it reports rx_drops to its client, so the
+# published value is "drops not yet reported", which legitimately goes 1, 1, 0. The *_s fields are rates and are not monotonic either.
+BRIDGE_CUMULATIVE = ["rows_written"]
 PAGE_MONOTONIC = ["iq", "rxIq", "rows", "opusFrames", "pcmFrames", "audioPlayed", "lastAudioSeq", "audioGaps",
                   "audioResyncs", "decodeErrors", "lateDrops", "underruns", "overflows", "drops"]
 BRIDGE_NUM = ["updatedAtMs", "iq", "audio", "connections", "iq_tci_frames_s", "rx_audio_frames_s", "rows_written",
@@ -85,13 +87,14 @@ BRIDGE_NUM = ["updatedAtMs", "iq", "audio", "connections", "iq_tci_frames_s", "r
 OWNER_INT_MIN = {"ownerPid": 1, "ownerStartTicks": 0, "collectorSeq": 1, "collectorSpawn": 1}
 OWNER_NUM = ["piReadAtMs", "piSourceUpdatedAtMs", "collectorReceivedAtMs", "requestLatencyMs"]
 OWNER_HASH = ["exeSha256", "documentSha256"]
-OWNER_KEYS = list(OWNER_INT_MIN) + OWNER_NUM + OWNER_HASH + ["ownerAlive", "bootId"]
+OWNER_KEYS = list(OWNER_INT_MIN) + OWNER_NUM + OWNER_HASH + ["ownerAlive", "bootId", "fpgaBuildId", "firmwareMajor", "firmwareMinor"]
 NODELAY_KEYS = ["nodelayEnabled", "nodelayConfirmedTotal", "nodelayFailedTotal"]
 NODELAY_MAP = {"nodelayEnabled": "tci_nodelay_enabled", "nodelayConfirmedTotal": "tci_nodelay_confirmed_total", "nodelayFailedTotal": "tci_nodelay_failed_total"}
 # sample.bridge field -> perf.json metric: the collector's mapping, verified against the raw documents in the sidecar
 METRIC_MAP = {"iq": "iq", "audio": "audio", "connections": "connections", "iq_tci_frames_s": "iq_tci_frames_s", "rx_audio_frames_s": "rx_audio_frames_s",
               "rows_written": "display_spectrum_rows_written", "spectrum_clients": "display_spectrum_clients", "audio_dropped_s": "audio_dropped_s",
               "tcp_outq_hwm_bytes": "tcp_outq_hwm_bytes", "out_hwm_bytes": "out_hwm_bytes", "outbound_drops": "outbound_drops", "buildGitSha": "build_git_sha"}
+FPGA_MAP = {"fpgaBuildId": "date_code_hex", "firmwareMajor": "firmware_major", "firmwareMinor": "firmware_minor"}   # the FPGA image the owner reports
 SIDECAR_SCHEMA = "saturn-collector-v1"
 META_KEYS = ["index", "arm", "bridgeNoDelay", "bridgePid", "bridgeSha256", "bridgeRestartNumber"]
 TOP_KEYS = ["meta", "mode", "url", "atConnect", "atWarm", "start", "samples", "frames"]
@@ -202,7 +205,7 @@ def check_window(w, prof, nodelay_state, sidecar=None):
     r = Checks()
     perf, startup, delivery = {}, {}, {}
     info = {"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "not evaluated"},
-            "owner": {"status": "UNVERIFIED" if prof.get("require_owner") else "NOT COLLECTED", "why": "not evaluated"}, "owner_ident": None}
+            "owner": {"status": "UNVERIFIED" if prof.get("require_owner") else "NOT COLLECTED", "why": "not evaluated"}, "owner_ident": None, "fpga_ident": None}
     # A record whose driver failed carries a `failure`: whatever it recorded is kept, but it is never a measurement.
     r.add("record.no_failure", "failure" not in w, f"the window driver failed: {str(w.get('failure', {}).get('message', ''))[:200]}" if "failure" in w else "")
     bad_numbers = non_finite_paths(w)
@@ -227,6 +230,9 @@ def check_window(w, prof, nodelay_state, sidecar=None):
         rx = meta.get("rxc1")
         have = isinstance(rx, dict) and all(rx.get(k) not in (None, "", {}, []) for k in ("state", "pid", "identity"))
         r.add("rxc1.recorded", have, "meta.rxc1 must be an object with non-empty state, pid and identity" if not have else "")
+        if prof.get("expect_rxc1") is not None:
+            r.add("rxc1.state_is_the_planned_one", have and rx["state"] == prof["expect_rxc1"],
+                  f"RXC1 state {rx.get('state') if isinstance(rx, dict) else None!r}, planned {prof['expect_rxc1']!r}")
     samples = w["samples"]
     if not r.add("record.samples_present", isinstance(samples, list) and len(samples) >= 2,
                  f"{len(samples) if isinstance(samples, list) else 'no'} samples"):
@@ -412,7 +418,9 @@ def check_window(w, prof, nodelay_state, sidecar=None):
         "opus_per_s": round(opus, 1),
         "queue_ms_min_med_max": [round(min(q)), round(statistics.median(q)), round(max(q))] if q else None,
         "bridge_audio_dropped_s_max": max((b["audio_dropped_s"] for _, b in bridges if "audio_dropped_s" in b), default=None),
-        "bridge_outbound_drops_delta": (bridges[-1][1].get("outbound_drops", 0) - bridges[0][1].get("outbound_drops", 0)) if "outbound_drops" in bridges[0][1] else None,
+        # outbound_drops is a per-report count (cleared when the Bridge reports it), so only these two are meaningful; it is never a total.
+        "bridge_outbound_drops_max": max((b["outbound_drops"] for _, b in bridges if "outbound_drops" in b), default=None),
+        "bridge_samples_with_pending_drops": sum(1 for _, b in bridges if b.get("outbound_drops", 0) > 0),
         "jitter_p95_ms_last": last.get("jitterP95"),
     }
     if display_deltas is not None:
@@ -455,6 +463,10 @@ def check_owner(r, info, w, prof, pages, bridges, sidecar):
             problems += [k for k in OWNER_HASH if not (isinstance(b[k], str) and SHA256_RE.match(b[k]))]
             problems += [k for k in ("ownerAlive",) if not isinstance(b[k], bool)]
             problems += [k for k in ("bootId",) if not (isinstance(b[k], str) and b[k])]
+            problems += [k for k in ("fpgaBuildId",) if not (isinstance(b[k], str) and b[k])]
+            problems += [k for k in ("firmwareMajor", "firmwareMinor") if not (is_int(b[k]) and b[k] >= 0)]
+            problems += [k for k in ("rxc1Status",) if k in b and not isinstance(b[k], str)]
+            problems += [k for k in ("rxc1HostAcquisitionFailures",) if k in b and not (is_int(b[k]) and b[k] >= 0)]
             if "exeSha256" in problems and b.get("exeError"):
                 problems.append(f"exeError: {b['exeError']}")   # typically: the reader may not read another user's /proc/<pid>/exe
             if problems:
@@ -490,6 +502,21 @@ def check_owner(r, info, w, prof, pages, bridges, sidecar):
         rx = meta.get("rxc1")
         if prof.get("require_rxc1") and isinstance(rx, dict) and "pid" in rx:
             r.add("rxc1.pid_matches_owner", all(b["ownerPid"] == rx["pid"] for _, b in bridges), f"the RXC1 state is recorded for pid {rx['pid']!r}, not the owner process")
+        fpga = {(b["fpgaBuildId"], b["firmwareMajor"], b["firmwareMinor"]) for _, b in bridges}
+        r.add("owner.fpga_image_constant_in_window", len(fpga) == 1, f"the FPGA image changed during the window: {sorted(map(str, fpga))[:3]}")
+        if prof.get("expect_fpga_build") is not None:
+            r.add("owner.fpga_image_is_the_planned_one", {b["fpgaBuildId"] for _, b in bridges} == {prof["expect_fpga_build"]},
+                  f"the owner reports FPGA build {sorted({b['fpgaBuildId'] for _, b in bridges})}, planned {prof['expect_fpga_build']!r}")
+        if len(fpga) == 1:
+            info["fpga_ident"] = next(iter(fpga))
+        # RXC1 polling state, from each sample's own telemetry (metrics.rx_counter_v31.status), never from what a person typed.
+        carries = ["rxc1Status" in b for _, b in bridges]
+        r.add("rxc1.telemetry_all_or_none", all(carries) or not any(carries), "the owner's RXC1 status is present in only some samples")
+        if prof.get("require_rxc1") and isinstance(rx, dict) and "state" in rx:
+            mismatched = [i for i, b in bridges if b.get("rxc1Status") != rx["state"]]
+            r.add("rxc1.status_every_sample_matches_state", not mismatched,   # a sample without the status counts as a mismatch
+                  f"the owner's RXC1 status differs from the recorded state {rx['state']!r} at samples {indices(mismatched)}" if any(carries)
+                  else "no sample carries the owner's RXC1 status, so the recorded RXC1 state cannot be verified")
         if len(ident) == 1:
             info["owner_ident"] = next(iter(ident))
 
@@ -546,7 +573,9 @@ def raw_differences(b, entry, answer):
              ("ownerPid", owner.get("pid")), ("ownerStartTicks", owner.get("startTicks")), ("ownerAlive", owner.get("alive")), ("bootId", owner.get("bootId")),
              ("exeSha256", owner.get("exeSha256")), ("exeError", owner.get("exeError")), ("mainPidMatches", owner.get("mainPidMatches")),
              ("collectorReceivedAtMs", entry.get("receivedAtMs")), ("requestLatencyMs", entry.get("latencyMs")), ("collectorSpawn", entry.get("spawn"))]
-    pairs += [(field, metrics.get(metric)) for field, metric in {**METRIC_MAP, **NODELAY_MAP}.items()]
+    pairs += [(field, metrics.get(metric)) for field, metric in {**METRIC_MAP, **NODELAY_MAP, **FPGA_MAP}.items()]
+    rx = metrics.get("rx_counter_v31") if isinstance(metrics.get("rx_counter_v31"), dict) else {}
+    pairs += [("rxc1Status", rx.get("status")), ("rxc1HostAcquisitionFailures", rx.get("host_acquisition_failures"))]
     return [field for field, want in pairs if b.get(field) != want]   # absent on both sides is equal
 
 
@@ -681,6 +710,8 @@ def main(argv=None):
     ap.add_argument("--require-owner", action="store_true", help="require the owner collector's evidence per window (always on in the live profile)")
     ap.add_argument("--expect-codec", default="opus")
     ap.add_argument("--require-rxc1", action="store_true", help="require a recorded RXC1 state per window (always on in the live profile)")
+    ap.add_argument("--expect-fpga-build", help="the planned FPGA build id as the owner reports it (date_code_hex, for example 53460004); every collected window must show it")
+    ap.add_argument("--expect-rxc1", help="the planned RXC1 state (the owner's rx_counter_v31.status, for example valid); every window must record it. Implies --require-rxc1")
     ap.add_argument("--order", default=",".join(ORDER), help="comma-separated planned arm order (order mode)")
     args = ap.parse_args(argv)
     if not os.path.isdir(args.windows_dir):
@@ -688,8 +719,12 @@ def main(argv=None):
         return 2
     prof = dict(PROFILES[args.profile])
     prof["expect_codec"] = args.expect_codec
-    if args.require_rxc1:
+    if args.require_rxc1 or args.expect_rxc1 is not None:
         prof["require_rxc1"] = True
+    if args.expect_rxc1 is not None:
+        prof["expect_rxc1"] = args.expect_rxc1
+    if args.expect_fpga_build is not None:
+        prof["expect_fpga_build"] = args.expect_fpga_build
     if args.require_owner:
         prof["require_owner"] = True
     windows = load_windows(args.windows_dir)
@@ -766,6 +801,7 @@ def main(argv=None):
             set_checks.add("set.owner_identity_per_bridge_instance", all(len(v) == 1 for v in by_inst.values()), f"identities per Bridge instance {by_inst}")
             processes = [next(iter(v))[:2] for v in by_inst.values() if len(v) == 1]
             set_checks.add("set.owner_new_process_per_restart", len(set(processes)) == len(processes), "two Bridge instances were served by the same process")
+            set_checks.add("set.fpga_image_same_in_every_window", len({r["info"]["fpga_ident"] for r in results if r["info"].get("fpga_ident")}) <= 1, "the FPGA image differs between windows")
             set_checks.add("set.owner_same_boot", len({i[2] for v in by_inst.values() for i in v}) <= 1, "the Pi rebooted during the comparison")
         c_nd = {r["meta"].get("bridgeNoDelay") for r in results if r["arm"] == "C" and r.get("meta")}
         set_checks.add("set.arm_c_has_nodelay_on_at_both_ends", c_nd == {1} if c_nd else False, f"arm C labels {c_nd}")
@@ -814,7 +850,7 @@ def main(argv=None):
         verdict += ", FRESHNESS UNVERIFIED"
     if not any_invalid and owner_unverified:
         verdict += ", OWNER IDENTITY UNVERIFIED"
-    event_keys = ("underruns", "overflows", "drops", "audio_gaps", "audio_resyncs", "decode_errors", "late_drops", "stalled_seconds",
+    event_keys = ("underruns", "overflows", "drops", "audio_gaps", "audio_resyncs", "decode_errors", "late_drops", "stalled_seconds", "bridge_samples_with_pending_drops",
                   "display_stalled_seconds", "display_delivered_nothing", "audio_slow", "display_rate_outside_expected_band")
     perf_flags = [f"window {r['n']} ({r['arm']}): " + ", ".join(f"{k} {v}" for k, v in r["perf"].items() if k in event_keys and v)
                   for r in results if r["perf"] and any(r["perf"].get(k) for k in event_keys)]

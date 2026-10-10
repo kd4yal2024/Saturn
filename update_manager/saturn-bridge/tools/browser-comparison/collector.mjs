@@ -32,6 +32,9 @@ export const NODELAY_FIELDS = {
   nodelayEnabled: 'tci_nodelay_enabled', nodelayConfirmedTotal: 'tci_nodelay_confirmed_total', nodelayFailedTotal: 'tci_nodelay_failed_total',
 };
 
+// The FPGA image the owner reports, carried with every reading (it decides what RXC1 can mean).
+export const IDENTITY_FIELDS = { fpgaBuildId: 'date_code_hex', firmwareMajor: 'firmware_major', firmwareMinor: 'firmware_minor' };
+
 function drop(obj) {
   for (const k of Object.keys(obj)) if (obj[k] === undefined) delete obj[k];
   return obj;
@@ -82,6 +85,13 @@ export function mapReading(answer, receipt) {
     collectorSeq: receipt.seq, collectorSpawn: receipt.spawn, collectorReceivedAtMs: receipt.receivedAtMs, requestLatencyMs: receipt.latencyMs,
   });
   for (const [field, metric] of Object.entries(NODELAY_FIELDS)) out[field] = m[metric];
+  for (const [field, metric] of Object.entries(IDENTITY_FIELDS)) out[field] = m[metric];
+  // RXC1 polling state as the owner itself publishes it (metrics.rx_counter_v31): absent on a Bridge without it, never defaulted.
+  const rx = m.rx_counter_v31;
+  if (rx && typeof rx === 'object') {
+    out.rxc1Status = rx.status;
+    out.rxc1HostAcquisitionFailures = rx.host_acquisition_failures;
+  }
   return drop(out);
 }
 

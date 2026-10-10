@@ -92,6 +92,34 @@ test('a real reader answer becomes a bridge record with the Pi-side age, the own
   } finally { await c.close(); clean(dir); }
 });
 
+test('the FPGA image the owner reports travels with every reading, and is absent when not published', async () => {
+  const dir = tmp(); const c = local(dir, writeDoc(dir, { extra: { date_code_hex: '53460004', firmware_major: 1, firmware_minor: 31 } }));
+  try {
+    const r = await c.read();
+    assert.equal(r.fpgaBuildId, '53460004'); assert.equal(r.firmwareMajor, 1); assert.equal(r.firmwareMinor, 31);
+    const bare = writeDoc(dir);
+    const c2 = new Collector({ command: PYTHON, args: [READER, '--path', bare], sidecar: path.join(dir, 's2.jsonl') });
+    const r2 = await c2.read();
+    assert.ok(!('fpgaBuildId' in r2) && !('firmwareMajor' in r2) && !('firmwareMinor' in r2));
+    await c2.close();
+  } finally { await c.close(); clean(dir); }
+});
+
+test('the owner\'s RXC1 state is carried as published, and absent when the Bridge does not publish it', async () => {
+  const dir = tmp(); const file = writeDoc(dir, { extra: { rx_counter_v31: { schema: 'rxc1-v1', source_backend: 'xdma', status: 'valid', sampled_at_ms: 1, host_acquisition_failures: 3, ddc: [] } } });
+  const c = local(dir, file);
+  try {
+    const r = await c.read();
+    assert.equal(r.rxc1Status, 'valid'); assert.equal(r.rxc1HostAcquisitionFailures, 3);
+    fs.rmSync(path.join(dir, 'w.collector.jsonl'));
+    const bare = writeDoc(dir);                     // a document with no rx_counter_v31 at all
+    const c2 = new Collector({ command: PYTHON, args: [READER, '--path', bare], sidecar: path.join(dir, 's2.jsonl') });
+    const r2 = await c2.read();
+    assert.ok(!('rxc1Status' in r2) && !('rxc1HostAcquisitionFailures' in r2), 'no RXC1 evidence is invented');
+    await c2.close();
+  } finally { await c.close(); clean(dir); }
+});
+
 test('a Bridge that predates the NODELAY metrics yields no NODELAY fields: absent, never zero', async () => {
   const dir = tmp(); const c = local(dir, writeDoc(dir, { nodelay: false }));
   try {

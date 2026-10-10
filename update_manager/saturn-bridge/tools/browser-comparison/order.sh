@@ -81,7 +81,7 @@ for ENTRY in C:1 A-off:0 B-off:0 B-on:1 A-on:1 A-on:1 B-on:1 B-off:0 A-off:0 C:1
   NAME=${ENTRY%%:*}; ND=${ENTRY##*:}; IDX=$((IDX + 1))
   [ "$CUR" != "$ND" ] && start_bridge "$ND"
   case $NAME in A-*) DISP=iq; MODE=normal;; B-*) DISP=spectrum; MODE=normal;; C) DISP=iq; MODE=c;; esac
-  META="{\"index\":$IDX,\"arm\":\"$NAME\",\"bridgeNoDelay\":$ND,\"bridgePid\":$(cat "$SATURN_CMP_OUT/bridge.pid"),\"bridgeSha256\":\"$BSHA\",\"bridgeRestartNumber\":$N,\"rxc1\":\"not applicable (replay)\"}"
+  META="{\"index\":$IDX,\"arm\":\"$NAME\",\"bridgeNoDelay\":$ND,\"bridgePid\":$(cat "$SATURN_CMP_OUT/bridge.pid"),\"bridgeSha256\":\"$BSHA\",\"bridgeRestartNumber\":$N,\"rxc1\":{\"state\":\"disabled\",\"pid\":$(cat "$SATURN_CMP_OUT/bridge.pid"),\"identity\":\"replay Bridge, baseline FPGA image, no RXC1 bank\"}}"
   run_window "$IDX" "$NAME" node "$HERE/window.mjs" "$CDP_PORT" "$LOGIN" \
     "https://127.0.0.1:$TLS_PORT/remote-next?transport=split&tx_opus=1&tx_cfc=1&display_transport=$DISP" \
     "$SATURN_CMP_OUT/work_$N" "$SECS" "$SATURN_CMP_OUT/windows/w${IDX}_$NAME" "$MODE" "$META"
