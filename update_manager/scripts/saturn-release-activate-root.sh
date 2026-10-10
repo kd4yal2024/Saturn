@@ -838,8 +838,11 @@ validation_preflight(){
 
 # Start a receive-only session in the background. $1 labels the evidence, $2 is the commit that must be running.
 validation_start(){
-  local label="$1" commit="$2" stamp dir
+  local label="$1" commit="$2" stamp dir expect_rxc1="any"
   local -a args
+  # The intended RXC1 state is a property of the release being installed. The release restored by a rollback (or merely checked) may
+  # legitimately report another state, and an older one has no RXC1 at all.
+  [[ "$label" == "target" ]] && expect_rxc1="$VALIDATION_EXPECT_RXC1"
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   if (( EUID == 0 )); then
     install -d -m 0750 -o root -g "$TRANSACTION_GROUP" "$VALIDATION_LOG_ROOT" || return 1
@@ -856,7 +859,7 @@ validation_start(){
   VALIDATION_LABEL="$label"
   args=(
     run --control-dir "$dir" --target-commit "$commit" --backend "$SELECTED_BACKEND"
-    --expect-rxc1 "$VALIDATION_EXPECT_RXC1" --viewer-role "$VALIDATION_VIEWER_ROLE" --url "$VALIDATION_URL"
+    --expect-rxc1 "$expect_rxc1" --viewer-role "$VALIDATION_VIEWER_ROLE" --url "$VALIDATION_URL"
     --ready-url "${SATURN_GO_READY_URL%%\?*}" --perf-url "$P23_PERF_URL" --perf-json "$VALIDATION_PERF_JSON"
     --unit "$BRIDGE_SERVICE" --unit "$SATURN_GO_SERVICE" --owner-unit "$BRIDGE_SERVICE" --auth-unit "$SATURN_GO_SERVICE"
     --release-root "$RELEASES_ROOT" --tls-cert "$VALIDATION_TLS_CERT" --browser "$VALIDATION_BROWSER"

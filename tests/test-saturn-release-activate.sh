@@ -782,6 +782,7 @@ with open(args_log, encoding="utf-8") as handle:
     runs = [json.loads(line) for line in handle if line.strip()]
 assert [run[run.index("--target-commit") + 1] for run in runs] == [target, previous], runs
 assert "--no-exe-check" not in runs[1]   # the previous release is a release directory
+assert runs[1][runs[1].index("--expect-rxc1") + 1] == "any"      # the intended RXC1 state belongs to the target only
 PY
 
 # --- The restored release also cannot be proven to receive: reported as such (exit 71), not as a failed restoration.

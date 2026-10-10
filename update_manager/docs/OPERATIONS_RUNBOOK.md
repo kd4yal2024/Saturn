@@ -134,7 +134,8 @@ Validation passes only when the target release is the one running, the page
 loads without fatal errors, **fresh display data and decoded audio are
 advancing**, the owner's telemetry is fresh and counts the session, the owner's
 own readiness gate holds with the session attached, and the RXC1 status is the
-intended one (`VALIDATION_EXPECT_RXC1`, default `any`). A connected socket or an
+intended one (`VALIDATION_EXPECT_RXC1`, default `any`; it applies to the target
+release only, because a restored or merely checked release may report another state). A connected socket or an
 HTTP 200 alone proves nothing. The session is held until the helper's own
 readiness check has finished, then ended and cleaned up on success, failure or
 timeout. The exact failed condition and the validator's log are kept under
