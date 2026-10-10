@@ -2588,6 +2588,291 @@ fn split_control_lane_reclaims_operator_from_media_lane() {
     }
 }
 
+fn client_with_state(clients: &ClientRegistry, client_id: u64, eligible: bool) {
+    let mut state = ClientState::default();
+    state.operator_eligible = eligible;
+    clients.lock_unpoisoned().insert(
+        client_id,
+        ClientConnection {
+            outbound: ClientOutbound::new(),
+            state,
+        },
+    );
+}
+
+fn drain_role_messages(clients: &ClientRegistry, client_id: u64) -> Vec<String> {
+    let outbound = clients
+        .lock_unpoisoned()
+        .get(&client_id)
+        .unwrap()
+        .outbound
+        .clone();
+    let mut roles = Vec::new();
+    while let Some(next) = outbound.next_message(true) {
+        if let OutboundMessage::SafetyText(text) = next.message {
+            roles.push(text);
+        }
+    }
+    roles
+}
+
+fn text_message(text: &str) -> Message {
+    Message::Text(text.into())
+}
+
+#[test]
+fn viewer_session_open_releases_the_operator_slot_it_got_at_registration() {
+    let (tx, rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 31, true);
+    let operator_client_id = Arc::new(AtomicU64::new(31)); // registration made it the operator
+    let operator_control_at = Arc::new(Mutex::new(None));
+
+    // As the operator it may tune: this reaches the radio.
+    assert!(handle_incoming_message(
+        text_message("vfo:0,0,14074000;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        31
+    ));
+    let tuned: Vec<_> = rx.try_iter().collect();
+    assert!(
+        !tuned.is_empty(),
+        "the operator's tuning must reach the radio before it declares itself a viewer"
+    );
+
+    // The same client declaring a viewer session gives the slot up at once.
+    assert!(handle_incoming_message(
+        text_message("session_open:validate-1,viewer;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        31
+    ));
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 0);
+    let commands: Vec<_> = rx.try_iter().collect();
+    assert!(
+        commands.iter().any(|c| matches!(
+            c,
+            TciCommand::SplitSessionOpen {
+                client_id: 31,
+                role: TciClientRole::Viewer,
+                ..
+            }
+        )),
+        "{commands:?}"
+    );
+    assert!(
+        commands
+            .iter()
+            .any(|c| matches!(c, TciCommand::SetTxEnabled(false))),
+        "nothing may stay keyed: {commands:?}"
+    );
+    assert_eq!(commands.len(), 2, "{commands:?}");
+    assert_eq!(
+        drain_role_messages(&clients, 31),
+        vec!["remote_client_role:0,viewer,31;".to_string()]
+    );
+
+    // What follows, even in the same message as the session_open, is refused: tuning, mode, transmit.
+    assert!(handle_incoming_message(
+        text_message("vfo:0,0,7074000;modulation:0,lsb;trx:0,true;tx_drive:0,100;rx_volume:0,0;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        31
+    ));
+    assert!(handle_incoming_message(
+        text_message("session_open:validate-1,viewer;vfo:0,0,3573000;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        31
+    ));
+    let after: Vec<_> = rx.try_iter().collect();
+    assert!(
+        after
+            .iter()
+            .all(|c| matches!(c, TciCommand::SplitSessionOpen { .. })),
+        "a viewer's tuning, mode and transmit commands must be refused: {after:?}"
+    );
+
+    // Receiving is still allowed.
+    assert!(handle_incoming_message(
+        text_message("audio_start:0;iq_start:0;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        31
+    ));
+    assert!(
+        rx.try_iter().next().is_some(),
+        "a viewer must still be able to start its audio and display streams"
+    );
+}
+
+#[test]
+fn viewer_session_open_hands_the_slot_to_the_next_eligible_client() {
+    let (tx, rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 41, true); // the viewer session's control client, operator by registration order
+    client_with_state(&clients, 42, true); // an ordinary client that registered second and was told viewer
+    client_with_state(&clients, 43, false); // a LAN client: never eligible
+    let operator_client_id = Arc::new(AtomicU64::new(41));
+
+    parse_tci_command_with_roles(
+        "session_open:validate-2,viewer;",
+        &tx,
+        &clients,
+        41,
+        true,
+        Some(&operator_client_id),
+    );
+
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 42);
+    assert_eq!(
+        drain_role_messages(&clients, 41),
+        vec!["remote_client_role:0,viewer,41;".to_string()]
+    );
+    assert_eq!(
+        drain_role_messages(&clients, 42),
+        vec!["remote_client_role:0,operator,42;".to_string()]
+    );
+    assert!(drain_role_messages(&clients, 43).is_empty());
+    drop(rx);
+}
+
+#[test]
+fn viewer_session_open_never_promotes_a_viewer_a_media_lane_or_a_lan_client() {
+    let (tx, _rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 51, true);
+    client_with_state(&clients, 52, true);
+    client_with_state(&clients, 53, true);
+    client_with_state(&clients, 54, false);
+    client_with_state(&clients, 55, true);
+    clients
+        .lock_unpoisoned()
+        .get_mut(&52)
+        .unwrap()
+        .state
+        .connect_lane_hint = Some(SplitSocketKind::Media);
+    // 55 declared its lane in-band (session_lane) instead of by connect path.
+    parse_tci_command("session_lane:media-sess,media;", &tx, &clients, 55, false);
+    let operator_client_id = Arc::new(AtomicU64::new(51));
+
+    // 53 already declared a viewer session of its own.
+    parse_tci_command_with_roles(
+        "session_open:other,viewer;",
+        &tx,
+        &clients,
+        53,
+        false,
+        Some(&operator_client_id),
+    );
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 51);
+    parse_tci_command_with_roles(
+        "session_open:validate-3,viewer;",
+        &tx,
+        &clients,
+        51,
+        true,
+        Some(&operator_client_id),
+    );
+
+    assert_eq!(
+        operator_client_id.load(Ordering::SeqCst),
+        0,
+        "nobody suitable: the slot stays empty"
+    );
+    for id in [52, 53, 54, 55] {
+        assert!(
+            !drain_role_messages(&clients, id)
+                .iter()
+                .any(|m| m.contains("operator")),
+            "client {id} must not be told it is the operator"
+        );
+    }
+}
+
+#[test]
+fn viewer_session_open_from_a_client_that_is_not_the_operator_changes_nothing() {
+    let (tx, rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 61, true); // a person operating
+    client_with_state(&clients, 62, true); // the viewer session, registered second
+    let operator_client_id = Arc::new(AtomicU64::new(61));
+
+    parse_tci_command_with_roles(
+        "session_open:validate-4,viewer;",
+        &tx,
+        &clients,
+        62,
+        false,
+        Some(&operator_client_id),
+    );
+
+    assert_eq!(
+        operator_client_id.load(Ordering::SeqCst),
+        61,
+        "the person keeps the radio"
+    );
+    assert!(drain_role_messages(&clients, 61).is_empty());
+    assert!(drain_role_messages(&clients, 62).is_empty());
+    let commands: Vec<_> = rx.try_iter().collect();
+    assert!(
+        !commands
+            .iter()
+            .any(|c| matches!(c, TciCommand::SetTxEnabled(_))),
+        "a transmitting operator must not be interrupted: {commands:?}"
+    );
+}
+
+#[test]
+fn operator_session_open_keeps_the_operator_slot() {
+    let (tx, rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 71, true);
+    let operator_client_id = Arc::new(AtomicU64::new(71));
+
+    parse_tci_command_with_roles(
+        "session_open:ordinary,operator;",
+        &tx,
+        &clients,
+        71,
+        true,
+        Some(&operator_client_id),
+    );
+    parse_tci_command_with_roles(
+        "session_open:ordinary,operator;",
+        &tx,
+        &clients,
+        71,
+        true,
+        Some(&operator_client_id),
+    );
+    parse_tci_command_with_roles(
+        "session_open:no-role-given;",
+        &tx,
+        &clients,
+        71,
+        true,
+        Some(&operator_client_id),
+    );
+
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 71);
+    assert!(drain_role_messages(&clients, 71).is_empty());
+    assert!(!rx
+        .try_iter()
+        .any(|c| matches!(c, TciCommand::SetTxEnabled(_))));
+}
+
 #[test]
 fn split_paired_media_socket_can_supply_mic_binary() {
     let (tx, rx) = mpsc::channel();

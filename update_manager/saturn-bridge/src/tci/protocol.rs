@@ -221,6 +221,12 @@ pub(crate) fn parse_tci_command_with_roles(
     if let Some((session_id, role)) = parse_split_session_open(command) {
         if let Some(role) = set_client_split_session_open(clients, client_id, &session_id, role) {
             if let Some(operator_client_id) = operator_client_id {
+                if role == TciClientRole::Viewer
+                    && release_operator_for_viewer_session(clients, operator_client_id, client_id)
+                {
+                    // The role held in the instant before the session declared itself a viewer must leave nothing keyed.
+                    let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+                }
                 reconcile_split_operator_role(clients, operator_client_id, client_id);
             }
             let _ = command_tx.send(TciCommand::SplitSessionOpen {

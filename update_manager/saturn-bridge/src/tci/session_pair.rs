@@ -248,6 +248,55 @@ pub(crate) fn parse_split_session_lane(command: &str) -> Option<(String, SplitSo
     Some((session_id, lane))
 }
 
+/// A session that declares itself a viewer must never keep the operator role. Registration makes the first operator-eligible client the
+/// operator before any `session_open` has been read, so a viewer-declared session that happened to register first would otherwise stay
+/// operator, with every command that comes with it, for as long as nobody else connects. This releases the slot if `client_id` holds it,
+/// hands it to another eligible client that has not itself declared viewer (never a media lane), and tells the clients concerned.
+/// Returns true when the slot was released.
+pub(crate) fn release_operator_for_viewer_session(
+    clients: &ClientRegistry,
+    operator_client_id: &Arc<AtomicU64>,
+    client_id: u64,
+) -> bool {
+    let promoted = {
+        // Registration decides the operator under this same lock, so the check and the hand-over cannot interleave with it.
+        let clients = clients.lock_unpoisoned();
+        if operator_client_id.load(Ordering::SeqCst) != client_id {
+            return false;
+        }
+        let promoted = clients
+            .iter()
+            .find(|(&id, client)| {
+                id != client_id
+                    && client.state.operator_eligible
+                    && !client_is_split_media(client)
+                    && client.state.connect_lane_hint != Some(SplitSocketKind::Media)
+                    && client.state.split.as_ref().and_then(|split| split.role)
+                        != Some(TciClientRole::Viewer)
+            })
+            .map(|(&id, _)| id);
+        operator_client_id.store(promoted.unwrap_or(0), Ordering::SeqCst);
+        promoted
+    };
+    send_role_to_client(
+        clients,
+        client_id,
+        TciClientRole::Viewer,
+        &format!(
+            "saturn-bridge: TCI client {client_id} declared a viewer session and released the operator role"
+        ),
+    );
+    if let Some(promoted_id) = promoted {
+        send_role_to_client(
+            clients,
+            promoted_id,
+            TciClientRole::Operator,
+            &format!("saturn-bridge: TCI promoted client {promoted_id} to operator"),
+        );
+    }
+    true
+}
+
 pub(crate) fn reconcile_split_operator_role(
     clients: &ClientRegistry,
     operator_client_id: &Arc<AtomicU64>,
