@@ -97,6 +97,24 @@ sys.exit(0 if r.get('failure',{}).get('message') and r['meta']['arm']=='C' and r
   mkdir -p "$tmp/failedwin"; cp "$tmp/w1_C.json" "$tmp/failedwin/"
   python3 "$HERE/check_order.py" "$tmp/failedwin" --mode single --report-dir "$tmp/failedwin/report" > /dev/null 2>&1
   expect "the checker rejects a record that carries a failure" 1 "$?"
+  # The collector switch: a bad setting is a recorded failure, never a silent fallback to the file read.
+  SATURN_CMP_COLLECTOR=carrier-pigeon node "$HERE/window.mjs" 59998 user:pw http://127.0.0.1:1/x "$tmp/none" 1 "$tmp/w2_bogus" c '{"index":2,"arm":"C"}' > /dev/null 2>&1
+  expect "an unknown SATURN_CMP_COLLECTOR makes window.mjs fail" 1 "$?"
+  python3 -c "
+import json,sys
+r=json.load(open('$tmp/w2_bogus.json'))
+sys.exit(0 if '\"local\" or \"ssh\"' in r.get('failure',{}).get('message','') else 1)" && ok || fail "the failure record names the bad collector setting"
+  SATURN_CMP_COLLECTOR=ssh node "$HERE/window.mjs" 59998 user:pw http://127.0.0.1:1/x "$tmp/none" 1 "$tmp/w3_nohost" c '{"index":3,"arm":"C"}' > /dev/null 2>&1
+  expect "SATURN_CMP_COLLECTOR=ssh without a host makes window.mjs fail" 1 "$?"
+  # local collector, Chrome unreachable: the record carries the failure AND the collector's summary, and the sidecar exists with its start entry.
+  mkdir -p "$tmp/work"
+  SATURN_CMP_COLLECTOR=local node "$HERE/window.mjs" 59998 user:pw http://127.0.0.1:1/x "$tmp/work" 1 "$tmp/w4_local" c '{"index":4,"arm":"C"}' > /dev/null 2>&1
+  expect "a failed window with the local collector still exits nonzero" 1 "$?"
+  python3 -c "
+import json,sys
+r=json.load(open('$tmp/w4_local.json'))
+s=[json.loads(l) for l in open('$tmp/w4_local.collector.jsonl')]
+sys.exit(0 if r.get('failure') and r.get('collector',{}).get('schema')=='saturn-collector-v1' and s and s[0]['kind']=='start' else 1)" && ok || fail "the failed record keeps the collector summary and the sidecar keeps its start entry"
 else
   echo "node not found: skipping the window.mjs failure test"
 fi

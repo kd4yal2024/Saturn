@@ -12,7 +12,9 @@
 #   SATURN_CMP_STATE_DIR   scratch state directory for the proxy
 #   SATURN_CMP_LOGIN_FILE  file containing user:password for the proxy's basic auth (throwaway)
 # Optional: SATURN_CMP_WISDOM (FFTW wisdom file), SATURN_CMP_SECONDS (default 30), SATURN_CMP_PROFILE (default
-# rehearsal), SATURN_CMP_CHROME (default google-chrome).
+# rehearsal), SATURN_CMP_CHROME (default google-chrome), SATURN_CMP_CHECKER_ARGS (extra arguments for check_order.py,
+# for example "--require-owner"), SATURN_CMP_COLLECTOR=local (read the Bridge's telemetry through the owner reader; see
+# window.mjs and collector.mjs).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=order_lib.sh
@@ -26,6 +28,7 @@ source "$HERE/order_lib.sh"
 SECS="${SATURN_CMP_SECONDS:-30}"
 PROFILE="${SATURN_CMP_PROFILE:-rehearsal}"
 CHROME="${SATURN_CMP_CHROME:-google-chrome}"
+CHECK_ARGS=(); [ -n "${SATURN_CMP_CHECKER_ARGS:-}" ] && read -r -a CHECK_ARGS <<< "$SATURN_CMP_CHECKER_ARGS"
 REPO_ROOT="$(cd "$HERE/../../../.." && pwd)"
 RUNNER="$HERE/../replay/run_replay_bridge.sh"
 if [ -n "$(ls -A "$SATURN_CMP_OUT" 2>/dev/null)" ]; then echo "SATURN_CMP_OUT must be empty: $SATURN_CMP_OUT" >&2; exit 2; fi
@@ -85,7 +88,7 @@ for ENTRY in C:1 A-off:0 B-off:0 B-on:1 A-on:1 A-on:1 B-on:1 B-off:0 A-off:0 C:1
 done
 
 finish_order python3 "$HERE/check_order.py" "$SATURN_CMP_OUT/windows" --bridge-logs "$SATURN_CMP_OUT/bridge-logs" \
-  --profile "$PROFILE" --report-dir "$SATURN_CMP_OUT/check_report"
+  --profile "$PROFILE" --report-dir "$SATURN_CMP_OUT/check_report" ${CHECK_ARGS[@]+"${CHECK_ARGS[@]}"}
 STATUS=$?
-echo "ORDER FINISHED with status $STATUS (0 valid and verified, 1 failed or invalid, 3 valid but TCP_NODELAY unverified)"
+echo "ORDER FINISHED with status $STATUS (0 valid and verified, 1 failed or invalid, 3 valid but something is UNVERIFIED: TCP_NODELAY, freshness or the owner identity)"
 exit "$STATUS"

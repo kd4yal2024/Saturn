@@ -24,9 +24,10 @@ Exit status
   0  every window is valid and the TCP_NODELAY state of every window is VERIFIED
   1  invalid evidence: a failed window, a failed set-level rule, or a contradicted label
   2  usage error or unreadable input
-  3  every window is valid but TCP_NODELAY (logs not retained) or, in the live profile, telemetry freshness
-     (no Pi-side source age) is UNVERIFIED for at least one window; 0 instead if --allow-unverified-nodelay /
-     --allow-unverified-freshness is given (the report still says UNVERIFIED)
+  3  every window is valid but TCP_NODELAY (neither Bridge-reported evidence nor retained logs) or, in the live profile,
+     telemetry freshness (no Pi-side source age) or the owner's process identity (no collector evidence) is UNVERIFIED
+     for at least one window; 0 instead if --allow-unverified-nodelay / --allow-unverified-freshness /
+     --allow-unverified-owner is given (the report still says UNVERIFIED)
 
 Limits are fixed here, before any live window is evaluated, in PROFILES. `rehearsal` is the
 30-second local rehearsal; `live` is the planned ten-minute window. Nothing is tuned per run.
@@ -41,8 +42,8 @@ import statistics
 import sys
 
 PROFILES = {
-    "rehearsal": dict(duration_s=30, span_low=-3.0, span_high=2.0, min_samples=28, same_clock=True, require_rxc1=False),
-    "live": dict(duration_s=600, span_low=-5.0, span_high=5.0, min_samples=595, same_clock=False, require_rxc1=True),
+    "rehearsal": dict(duration_s=30, span_low=-3.0, span_high=2.0, min_samples=28, same_clock=True, require_rxc1=False, require_owner=False),
+    "live": dict(duration_s=600, span_low=-5.0, span_high=5.0, min_samples=595, same_clock=False, require_rxc1=True, require_owner=True),
 }
 # Limits common to both profiles.
 INTERVAL_MIN_S = 0.5            # sampling is nominally 1 Hz
@@ -52,6 +53,9 @@ MAX_UNCHANGED_BRIDGE = 2        # at most this many consecutive samples with an 
 BRIDGE_AGE_MAX_MS = 3000        # same-clock profiles only: sample time minus the Bridge's update time
 BRIDGE_AGE_MIN_MS = -1000
 PI_AGE_MIN_MS = -50             # live profile: age computed on the Pi (read time minus the document's own update time)
+COLLECTOR_LATENCY_MAX_MS = 2000  # one collector request, as bounded by the client (a slower one is a failure record anyway)
+COLLECTOR_PAIR_MAX_MS = 3000    # the collector's receive time minus the page sample's time: both on the browser's computer
+PI_CLOCK_TRACK_MS = 3000        # the Pi's read-time span vs the page's span over a window: durations only, the clocks are never compared
 DISPLAY_FPS = (24.0, 36.0)      # expected display frames or rows per second (cap is 30): only a performance flag
 AUDIO_NOMINAL_FPS = 46.9        # 1024-sample frames at 48 kHz
 AUDIO_SLOW_FRACTION = 0.8       # below this share of nominal, audio is flagged slow: only a performance flag
@@ -77,13 +81,45 @@ PAGE_MONOTONIC = ["iq", "rxIq", "rows", "opusFrames", "pcmFrames", "audioPlayed"
                   "audioResyncs", "decodeErrors", "lateDrops", "underruns", "overflows", "drops"]
 BRIDGE_NUM = ["updatedAtMs", "iq", "audio", "connections", "iq_tci_frames_s", "rx_audio_frames_s", "rows_written",
               "spectrum_clients", "audio_dropped_s", "tcp_outq_hwm_bytes", "out_hwm_bytes", "outbound_drops"]
+# The collector contract v1 (draft): what a sample's `bridge` carries when it was read through collector.mjs / owner_reader.py.
+OWNER_INT_MIN = {"ownerPid": 1, "ownerStartTicks": 0, "collectorSeq": 1, "collectorSpawn": 1}
+OWNER_NUM = ["piReadAtMs", "piSourceUpdatedAtMs", "collectorReceivedAtMs", "requestLatencyMs"]
+OWNER_HASH = ["exeSha256", "documentSha256"]
+OWNER_KEYS = list(OWNER_INT_MIN) + OWNER_NUM + OWNER_HASH + ["ownerAlive", "bootId"]
+NODELAY_KEYS = ["nodelayEnabled", "nodelayConfirmedTotal", "nodelayFailedTotal"]
+NODELAY_MAP = {"nodelayEnabled": "tci_nodelay_enabled", "nodelayConfirmedTotal": "tci_nodelay_confirmed_total", "nodelayFailedTotal": "tci_nodelay_failed_total"}
+# sample.bridge field -> perf.json metric: the collector's mapping, verified against the raw documents in the sidecar
+METRIC_MAP = {"iq": "iq", "audio": "audio", "connections": "connections", "iq_tci_frames_s": "iq_tci_frames_s", "rx_audio_frames_s": "rx_audio_frames_s",
+              "rows_written": "display_spectrum_rows_written", "spectrum_clients": "display_spectrum_clients", "audio_dropped_s": "audio_dropped_s",
+              "tcp_outq_hwm_bytes": "tcp_outq_hwm_bytes", "out_hwm_bytes": "out_hwm_bytes", "outbound_drops": "outbound_drops", "buildGitSha": "build_git_sha"}
+SIDECAR_SCHEMA = "saturn-collector-v1"
 META_KEYS = ["index", "arm", "bridgeNoDelay", "bridgePid", "bridgeSha256", "bridgeRestartNumber"]
 TOP_KEYS = ["meta", "mode", "url", "atConnect", "atWarm", "start", "samples", "frames"]
+
+
+def is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
 
 
 def is_num(v):
     """A real, finite number. NaN and infinity (including 1e999) are not measurements."""
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def meta_problems(meta):
+    """Type problems in a window's identity record (the keys that are present). Empty when it is usable for grouping and comparison."""
+    if not isinstance(meta, dict):
+        return ["meta is not an object"]
+    bad = [k for k in ("index", "bridgePid", "bridgeRestartNumber") if k in meta and not is_int(meta[k])]
+    bad += [k for k in ("arm",) if k in meta and not isinstance(meta[k], str)]
+    if "bridgeNoDelay" in meta and not (is_int(meta["bridgeNoDelay"]) and meta["bridgeNoDelay"] in (0, 1)):
+        bad.append("bridgeNoDelay")
+    return bad
+
+
+def hashable(v):
+    """A hashable stand-in for any JSON value, so a malformed record is a failed check and never a crash."""
+    return v if v is None or isinstance(v, (str, int, float, bool)) else json.dumps(v, sort_keys=True, default=str)
 
 
 def non_finite_paths(obj, path="$", limit=5):
@@ -160,12 +196,13 @@ def validate_sample(s):
     return problems
 
 
-def check_window(w, prof, nodelay_state):
+def check_window(w, prof, nodelay_state, sidecar=None):
     """All checks of one window. Returns (Checks, performance, startup counters, delivery, info), where info holds
-    the window's reported outcomes (for example a disconnect) and the status of its freshness evidence."""
+    the window's reported outcomes (for example a disconnect) and the status of its freshness and owner evidence."""
     r = Checks()
     perf, startup, delivery = {}, {}, {}
-    info = {"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "not evaluated"}}
+    info = {"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "not evaluated"},
+            "owner": {"status": "UNVERIFIED" if prof.get("require_owner") else "NOT COLLECTED", "why": "not evaluated"}, "owner_ident": None}
     # A record whose driver failed carries a `failure`: whatever it recorded is kept, but it is never a measurement.
     r.add("record.no_failure", "failure" not in w, f"the window driver failed: {str(w.get('failure', {}).get('message', ''))[:200]}" if "failure" in w else "")
     bad_numbers = non_finite_paths(w)
@@ -176,6 +213,9 @@ def check_window(w, prof, nodelay_state):
     meta = w["meta"]
     missing_meta = [k for k in META_KEYS if k not in meta]
     if not r.add("record.meta_fields", not missing_meta, f"missing: {missing_meta}" if missing_meta else ""):
+        return r, perf, startup, delivery, info
+    bad_types = meta_problems(meta)
+    if not r.add("record.meta_types", not bad_types, f"wrong types in meta: {bad_types}" if bad_types else ""):
         return r, perf, startup, delivery, info
     r.add("record.bridge_sha256_valid", isinstance(meta["bridgeSha256"], str) and SHA256_RE.match(meta["bridgeSha256"]) is not None,
           f"bridgeSha256 {meta['bridgeSha256']!r} is not a 64-hex SHA-256")
@@ -257,6 +297,9 @@ def check_window(w, prof, nodelay_state):
                 info["freshness"] = {"status": "CONTRADICTED", "why": "Pi-side source age present in only some samples"}
             else:
                 info["freshness"] = {"status": "UNVERIFIED", "why": "no Pi-side source-age evidence (bridge.piSourceAgeMs): advancing timestamps alone cannot prove freshness across two computers"}
+
+    # --- the owner's process identity, the collector's timing and the retained raw answers
+    check_owner(r, info, w, prof, pages, bridges, sidecar)
 
     # --- browser connection and the audio format, per sample
     gone = [i for i, p in pages if not p["connected"]]
@@ -346,9 +389,14 @@ def check_window(w, prof, nodelay_state):
     label = meta["bridgeNoDelay"]
     r.add("nodelay.label_matches_arm", label == arm["nodelay"], f"label {label}, arm {meta['arm']} requires {arm['nodelay']}")
     # UNVERIFIED is not a failed check: it is reported in the window's nodelay field and decides exit status 3.
-    if nodelay_state["status"] != "UNVERIFIED":
-        # The label/log comparison itself lives in read_nodelay_evidence (one place, not two).
-        r.add("nodelay.log_matches_label", nodelay_state["status"] == "VERIFIED", nodelay_state["why"])
+    # Two sources, each compared with the label in one place: the Bridge's own socket read-back counters carried in the
+    # samples (nodelay_from_samples) and the retained Bridge logs (read_nodelay_evidence).
+    log_state = nodelay_state.get("log_state", nodelay_state)
+    sample_state = nodelay_state.get("sample_state")
+    if log_state["status"] != "UNVERIFIED":
+        r.add("nodelay.log_matches_label", log_state["status"] == "VERIFIED", log_state["why"])
+    if sample_state is not None:
+        r.add("nodelay.bridge_reported_matches_label", sample_state["status"] == "VERIFIED", sample_state["why"])
 
     # --- performance: reported, never a reason to reject
     first, last = pages[0][1], pages[-1][1]
@@ -380,6 +428,194 @@ def check_window(w, prof, nodelay_state):
                     rx_iq_s=round((last["rxIq"] - first["rxIq"]) / secs, 1))
     delivery["bridge_iq_audio"] = f'{bridges[-1][1].get("iq")}/{bridges[-1][1].get("audio")}'
     return r, perf, startup, delivery, info
+
+
+def check_owner(r, info, w, prof, pages, bridges, sidecar):
+    """The owner's process identity, the collector's timing and the retained raw answers.
+
+    Evidence is in play when any sample carries a collector field or a sidecar exists, and then every rule applies. With
+    none of it, the live profile (or --require-owner) reports UNVERIFIED; other runs report NOT COLLECTED."""
+    meta = w["meta"]
+    sidecar_present = bool(sidecar and sidecar.get("present"))
+    if not any(k in b for _, b in bridges for k in OWNER_KEYS) and not sidecar_present:
+        if prof.get("require_owner"):
+            info["owner"] = {"status": "UNVERIFIED", "why": "no owner-identity evidence (the collector's ownerPid, start ticks, boot id and running-image hash)"}
+        else:
+            info["owner"] = {"status": "NOT COLLECTED", "why": "this window was taken without the owner collector"}
+        return
+    failed_before = len(r.failed())
+    missing_at = [i for i, b in bridges if not all(k in b for k in OWNER_KEYS)]
+    r.add("owner.fields_every_sample", not missing_at, f"owner/collector fields missing at samples {indices(missing_at)}")
+    well_formed = False
+    if not missing_at:
+        bad_at = []
+        for i, b in bridges:
+            problems = [k for k, low in OWNER_INT_MIN.items() if not (is_int(b[k]) and b[k] >= low)]
+            problems += [k for k in OWNER_NUM if not is_num(b[k])]
+            problems += [k for k in OWNER_HASH if not (isinstance(b[k], str) and SHA256_RE.match(b[k]))]
+            problems += [k for k in ("ownerAlive",) if not isinstance(b[k], bool)]
+            problems += [k for k in ("bootId",) if not (isinstance(b[k], str) and b[k])]
+            if "exeSha256" in problems and b.get("exeError"):
+                problems.append(f"exeError: {b['exeError']}")   # typically: the reader may not read another user's /proc/<pid>/exe
+            if problems:
+                bad_at.append((i, problems))
+        well_formed = r.add("owner.fields_well_formed", not bad_at, "; ".join(f"sample {i}: {ps}" for i, ps in bad_at[:3]))
+    if well_formed:
+        ident = {(b["ownerPid"], b["ownerStartTicks"], b["bootId"], b["exeSha256"]) for _, b in bridges}
+        r.add("owner.alive_every_sample", all(b["ownerAlive"] for _, b in bridges), "the owner process was not alive at some sample")
+        r.add("owner.constant_in_window", len(ident) == 1, f"the owner changed during the window: {sorted(map(str, ident))[:3]}")
+        r.add("owner.pid_matches_meta", all(b["ownerPid"] == meta["bridgePid"] for _, b in bridges),
+              f"owner pid {sorted({b['ownerPid'] for _, b in bridges})} but the window's meta says bridgePid {meta['bridgePid']}")
+        r.add("owner.exe_matches_meta", all(b["exeSha256"] == meta["bridgeSha256"] for _, b in bridges),
+              "the running executable's hash is not the one the window's meta names")
+        bad_main = [i for i, b in bridges if not (b.get("mainPidMatches") is None or b.get("mainPidMatches") is True)]
+        r.add("owner.service_main_pid", not bad_main, f"the service's MainPID differs from the document's pid at samples {indices(bad_main)}")
+        late = [i for i, b in bridges if not (0 <= b["requestLatencyMs"] <= COLLECTOR_LATENCY_MAX_MS)]
+        r.add("collector.latency_bounded", not late, f"request latency outside 0..{COLLECTOR_LATENCY_MAX_MS} ms at samples {indices(late)}")
+        unpaired = [i for (i, p), (_, b) in zip(pages, bridges) if not (0 <= b["collectorReceivedAtMs"] - p["t"] <= COLLECTOR_PAIR_MAX_MS)]
+        r.add("collector.paired_with_page_sample", not unpaired,
+              f"collector answer not received within 0..{COLLECTOR_PAIR_MAX_MS} ms after its page sample, at samples {indices(unpaired)}")
+        seqs = [b["collectorSeq"] for _, b in bridges]
+        r.add("collector.seq_strictly_increasing", all(y > x for x, y in zip(seqs, seqs[1:])), "collector sequence numbers do not strictly increase")
+        reads = [b["piReadAtMs"] for _, b in bridges]
+        r.add("collector.pi_read_time_advances", all(y > x for x, y in zip(reads, reads[1:])), "the Pi's read time does not strictly increase (a repeated answer or a clock step)")
+        d_pi, d_page = reads[-1] - reads[0], pages[-1][1]["t"] - pages[0][1]["t"]
+        r.add("collector.pi_clock_tracks_window", abs(d_pi - d_page) <= PI_CLOCK_TRACK_MS,
+              f"the Pi's clock advanced {d_pi / 1000:.1f}s while the page's advanced {d_page / 1000:.1f}s (limit {PI_CLOCK_TRACK_MS / 1000:.0f}s)")
+        aged = [b for _, b in bridges if is_num(b.get("piSourceAgeMs"))]
+        r.add("bridge.pi_age_arithmetic", all(b["piSourceAgeMs"] == b["piReadAtMs"] - b["piSourceUpdatedAtMs"] for b in aged),
+              "piSourceAgeMs is not the Pi's read time minus the document's own update time")
+        r.add("bridge.pi_updated_matches_document", all(b["piSourceUpdatedAtMs"] == b["updatedAtMs"] for _, b in bridges),
+              "the Pi-side update time is not the document's updatedAtMs")
+        rx = meta.get("rxc1")
+        if prof.get("require_rxc1") and isinstance(rx, dict) and "pid" in rx:
+            r.add("rxc1.pid_matches_owner", all(b["ownerPid"] == rx["pid"] for _, b in bridges), f"the RXC1 state is recorded for pid {rx['pid']!r}, not the owner process")
+        if len(ident) == 1:
+            info["owner_ident"] = next(iter(ident))
+
+    # --- the retained raw answers
+    retained = sidecar_present and sidecar.get("error") is None and sidecar.get("starts") == 1 and sidecar["entries"][0].get("kind") == "start" \
+        and sidecar["entries"][0].get("schema") == SIDECAR_SCHEMA
+    r.add("collector.sidecar_retained", retained,
+          "no collector sidecar was retained for this window" if not sidecar_present else f"the sidecar is unusable: {sidecar.get('error') or 'no single start entry'}")
+    if retained:
+        entries = sidecar["entries"]
+        reads = [e for e in entries if e.get("kind") == "read"]
+        seqs = [e.get("seq") for e in reads]
+        r.add("collector.sidecar_seq_unique", len(set(map(str, seqs))) == len(seqs), "the sidecar repeats a sequence number")
+        failures = sum(1 for e in reads if e.get("error"))
+        summary = w.get("collector")
+        r.add("collector.sidecar_complete", isinstance(summary, dict) and summary.get("reads") == len(reads) and summary.get("failures") == failures,
+              f"the record's collector summary {summary!r} does not match the sidecar ({len(reads)} reads, {failures} failed)")
+        if well_formed:
+            by_seq = {e["seq"]: e for e in reads if is_int(e.get("seq"))}
+            unmatched, mismatched = [], []
+            for i, b in bridges:
+                e = by_seq.get(b["collectorSeq"])
+                answer = None
+                if e is not None and not e.get("error") and isinstance(e.get("raw"), str):
+                    try:
+                        answer = json.loads(e["raw"], parse_constant=_reject_constant)
+                    except ValueError:
+                        answer = None
+                if not isinstance(answer, dict) or answer.get("ok") is not True:
+                    unmatched.append(i)
+                    continue
+                diffs = raw_differences(b, e, answer)
+                if diffs:
+                    mismatched.append((i, diffs))
+            r.add("collector.sidecar_entry_for_every_sample", not unmatched, f"no usable raw answer in the sidecar for samples {indices(unmatched)}")
+            r.add("collector.samples_match_raw_documents", not mismatched, "; ".join(f"sample {i}: {d[:4]}" for i, d in mismatched[:3]))
+        spawns = [e for e in entries if e.get("kind") == "spawn"]
+        events = [e for e in entries if e.get("kind") == "event"]
+        if failures or events or len(spawns) > 1:
+            info["outcomes"].append(f"collector: {failures} failed read(s), {len(events)} reader event(s), {len(spawns)} reader start(s) recorded in the sidecar")
+    info["owner"] = {"status": "CONTRADICTED" if len(r.failed()) > failed_before else "VERIFIED", "why": "see the failed owner./collector. checks"}
+    if info["owner"]["status"] == "VERIFIED":
+        pid, ticks, boot, exe = info["owner_ident"]
+        info["owner"]["why"] = f"pid {pid}, start ticks {ticks}, boot {boot[:8]}, running image {exe[:12]} constant over {len(bridges)} raw answers"
+
+
+def raw_differences(b, entry, answer):
+    """Fields of a sample's bridge record that differ from the raw answer the collector retained for it."""
+    doc = answer.get("document") if isinstance(answer.get("document"), dict) else {}
+    metrics = doc.get("metrics") if isinstance(doc.get("metrics"), dict) else {}
+    owner = answer.get("owner") if isinstance(answer.get("owner"), dict) else {}
+    pairs = [("documentSha256", answer.get("documentSha256")), ("piSourceAgeMs", answer.get("piSourceAgeMs")), ("piReadAtMs", answer.get("piReadAtMs")),
+             ("piSourceUpdatedAtMs", answer.get("piSourceUpdatedAtMs")), ("updatedAtMs", doc.get("updated_at_ms")),
+             ("ownerPid", owner.get("pid")), ("ownerStartTicks", owner.get("startTicks")), ("ownerAlive", owner.get("alive")), ("bootId", owner.get("bootId")),
+             ("exeSha256", owner.get("exeSha256")), ("exeError", owner.get("exeError")), ("mainPidMatches", owner.get("mainPidMatches")),
+             ("collectorReceivedAtMs", entry.get("receivedAtMs")), ("requestLatencyMs", entry.get("latencyMs")), ("collectorSpawn", entry.get("spawn"))]
+    pairs += [(field, metrics.get(metric)) for field, metric in {**METRIC_MAP, **NODELAY_MAP}.items()]
+    return [field for field, want in pairs if b.get(field) != want]   # absent on both sides is equal
+
+
+def read_sidecar(window_file):
+    """The collector's sidecar next to a window record (w<N>_<ARM>.collector.jsonl), strictly parsed, or {"present": False}."""
+    if not window_file.endswith(".json"):
+        return {"present": False}
+    path = window_file[: -len(".json")] + ".collector.jsonl"
+    if not os.path.exists(path):
+        return {"present": False}
+    entries, error = [], None
+    try:
+        with open(path) as fh:
+            for line in fh:
+                if line.strip():
+                    entries.append(json.loads(line, parse_constant=_reject_constant))
+    except (OSError, ValueError) as e:
+        error = f"{os.path.basename(path)}: {e}"
+    if error is None and not all(isinstance(e, dict) for e in entries):
+        error = f"{os.path.basename(path)}: a line is not a JSON object"
+    entries = [e for e in entries if isinstance(e, dict)]
+    return {"present": True, "entries": entries, "error": error, "starts": sum(1 for e in entries if e.get("kind") == "start")}
+
+
+def nodelay_from_samples(w, label, windows_served):
+    """TCP_NODELAY as the Bridge itself reports it in the samples (perf.json: the setting, and the sockets whose option it set
+    and then read back with getsockopt). None when the samples carry no such fields.
+    `windows_served`: how many windows this Bridge instance has served, this one included."""
+    samples = w.get("samples") if isinstance(w, dict) else None
+    if not isinstance(samples, list):
+        return None
+    bridges = [s["bridge"] for s in samples if isinstance(s, dict) and isinstance(s.get("bridge"), dict) and "error" not in s["bridge"]]
+    if not any(k in b for b in bridges for k in NODELAY_KEYS):
+        return None
+
+    def verdict(status, why):
+        return {"status": status, "why": why, "logged": None}
+
+    if not all(all(k in b for k in NODELAY_KEYS) for b in bridges):
+        return verdict("CONTRADICTED", "the Bridge-reported TCP_NODELAY fields are present in only some samples")
+    if not all(is_int(b[k]) and b[k] >= 0 for b in bridges for k in NODELAY_KEYS):
+        return verdict("CONTRADICTED", "the Bridge-reported TCP_NODELAY fields are not non-negative counters")
+    enabled = {b["nodelayEnabled"] for b in bridges}
+    confirmed = [b["nodelayConfirmedTotal"] for b in bridges]
+    failed = [b["nodelayFailedTotal"] for b in bridges]
+    if enabled != {label}:
+        return verdict("CONTRADICTED", f"the Bridge reports tci_nodelay_enabled {sorted(enabled)}, the label says {label!r}")
+    if any(failed):
+        return verdict("CONTRADICTED", f"the Bridge counted {max(failed)} socket(s) whose TCP_NODELAY could not be set or read back")
+    if any(y < x for x, y in zip(confirmed, confirmed[1:])):
+        return verdict("CONTRADICTED", "the Bridge's confirmed-socket counter went backwards (a restart inside the window)")
+    if label == 1 and confirmed[0] < windows_served:
+        return verdict("CONTRADICTED", f"only {confirmed[0]} socket(s) confirmed at the first sample, but this Bridge instance has served {windows_served} window(s)")
+    if label == 0 and confirmed[-1] != 0:
+        return verdict("CONTRADICTED", f"{confirmed[-1]} socket(s) confirmed with TCP_NODELAY off")
+    what = f"{confirmed[0]}..{confirmed[-1]} accepted socket(s) set and read back as on, none failed" if label == 1 else "setting off, no socket changed"
+    return verdict("VERIFIED", f"the Bridge reports tci_nodelay_enabled={label}: {what}")
+
+
+def combine_nodelay(log_state, sample_state):
+    """One state for the report and the exit status: the Bridge-reported evidence first, the retained logs second, else UNVERIFIED.
+    A source that contradicts the other makes the window CONTRADICTED."""
+    out = dict(log_state, log_state=log_state, sample_state=sample_state, source="retained Bridge logs")
+    if sample_state is None:
+        return out
+    out.update(status=sample_state["status"], why=sample_state["why"], logged=sample_state.get("logged"), source="Bridge-reported (perf.json)")
+    if sample_state["status"] == "VERIFIED" and log_state["status"] == "CONTRADICTED":
+        out.update(status="CONTRADICTED", why=f"the Bridge reports it verified, but the retained logs contradict: {log_state['why']}")
+    return out
 
 
 def read_nodelay_evidence(restart_number, windows_served, label, log_dirs):
@@ -441,6 +677,8 @@ def main(argv=None):
     ap.add_argument("--report-dir", help="where to write order_check.json and order_summary.txt (default: <windows_dir>/check_report)")
     ap.add_argument("--allow-unverified-nodelay", action="store_true", help="exit 0 when only TCP_NODELAY is UNVERIFIED (still reported)")
     ap.add_argument("--allow-unverified-freshness", action="store_true", help="exit 0 when only live telemetry freshness is UNVERIFIED (still reported)")
+    ap.add_argument("--allow-unverified-owner", action="store_true", help="exit 0 when only the owner's process identity is UNVERIFIED (still reported)")
+    ap.add_argument("--require-owner", action="store_true", help="require the owner collector's evidence per window (always on in the live profile)")
     ap.add_argument("--expect-codec", default="opus")
     ap.add_argument("--require-rxc1", action="store_true", help="require a recorded RXC1 state per window (always on in the live profile)")
     ap.add_argument("--order", default=",".join(ORDER), help="comma-separated planned arm order (order mode)")
@@ -452,6 +690,8 @@ def main(argv=None):
     prof["expect_codec"] = args.expect_codec
     if args.require_rxc1:
         prof["require_rxc1"] = True
+    if args.require_owner:
+        prof["require_owner"] = True
     windows = load_windows(args.windows_dir)
     if not windows:
         print("check_order: no w<N>_<ARM>.json records found", file=sys.stderr)
@@ -459,22 +699,34 @@ def main(argv=None):
     log_dirs = args.bridge_logs + [args.windows_dir, os.path.join(args.windows_dir, "..", "bridge-logs")]
 
     results, set_checks = [], Checks()
-    served = {}
+    served, seen = {}, {}
     for _, _, _, w in windows:
-        n = w.get("meta", {}).get("bridgeRestartNumber") if isinstance(w, dict) else None
-        served[n] = served.get(n, 0) + 1
+        m = w.get("meta") if isinstance(w, dict) and not meta_problems(w.get("meta")) else {}
+        served[m.get("bridgeRestartNumber")] = served.get(m.get("bridgeRestartNumber"), 0) + 1
     for idx, arm_name, path, w in windows:
         if "_unreadable" in w:
             c = Checks()
             c.add("record.readable", False, w["_unreadable"])
             results.append(dict(n=idx, arm=arm_name, file=os.path.basename(path), checks=c, perf={}, startup={}, delivery={}, nodelay={"status": "UNVERIFIED", "why": "unreadable record"},
-                                info={"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "unreadable record"}}))
+                                info={"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "unreadable record"}, "owner": {"status": "UNVERIFIED", "why": "unreadable record"}, "owner_ident": None}))
             continue
-        meta = w.get("meta", {})
-        nd = read_nodelay_evidence(meta.get("bridgeRestartNumber"), served.get(meta.get("bridgeRestartNumber"), 1), meta.get("bridgeNoDelay"), log_dirs) \
-            if all(k in meta for k in ("bridgeRestartNumber", "bridgeNoDelay")) else {"status": "UNVERIFIED", "why": "meta lacks restart number or label", "logged": None}
-        c, perf, startup, delivery, info = check_window(w, prof, nd)
-        c.add("record.file_name_matches_meta", meta.get("arm") == arm_name and meta.get("index") == idx, f"file w{idx}_{arm_name} vs meta {meta.get('index')}/{meta.get('arm')}")
+        raw_meta = w.get("meta") if isinstance(w.get("meta"), dict) else {}
+        meta = raw_meta if not meta_problems(raw_meta) else {}   # a malformed identity is excluded from grouping; check_window fails it
+        seen[meta.get("bridgeRestartNumber")] = seen.get(meta.get("bridgeRestartNumber"), 0) + 1
+        has_label = all(k in meta for k in ("bridgeRestartNumber", "bridgeNoDelay"))
+        try:
+            log_nd = read_nodelay_evidence(meta.get("bridgeRestartNumber"), served.get(meta.get("bridgeRestartNumber"), 1), meta.get("bridgeNoDelay"), log_dirs) \
+                if has_label else {"status": "UNVERIFIED", "why": "meta lacks restart number or label", "logged": None}
+            sample_nd = nodelay_from_samples(w, meta.get("bridgeNoDelay"), seen[meta.get("bridgeRestartNumber")]) if has_label else None
+            nd = combine_nodelay(log_nd, sample_nd)
+            c, perf, startup, delivery, info = check_window(w, prof, nd, read_sidecar(path))
+        except Exception as error:   # a record the checker cannot interpret is INVALID with a reason: never a crash, never a pass
+            c, perf, startup, delivery = Checks(), {}, {}, {}
+            c.add("record.interpretable", False, f"the checker could not interpret this record: {type(error).__name__}: {error}")
+            nd = {"status": "UNVERIFIED", "why": "record not interpretable", "logged": None}
+            info = {"outcomes": [], "freshness": {"status": "UNVERIFIED", "why": "record not interpretable"},
+                    "owner": {"status": "UNVERIFIED", "why": "record not interpretable"}, "owner_ident": None}
+        c.add("record.file_name_matches_meta", raw_meta.get("arm") == arm_name and raw_meta.get("index") == idx, f"file w{idx}_{arm_name} vs meta {raw_meta.get('index')}/{raw_meta.get('arm')}")
         results.append(dict(n=idx, arm=arm_name, file=os.path.basename(path), checks=c, perf=perf, startup=startup, delivery=delivery, nodelay=nd, info=info, meta=meta))
 
     if args.mode == "order":
@@ -487,7 +739,7 @@ def main(argv=None):
         missing = [i + 1 for i, a in enumerate(planned) if i >= len(got)]
         set_checks.add("set.no_missing_windows", not missing, f"missing windows {missing}")
         metas = [r.get("meta", {}) for r in results if r.get("meta")]
-        shas = {m.get("bridgeSha256") for m in metas}
+        shas = {hashable(m.get("bridgeSha256")) for m in metas}
         set_checks.add("set.one_bridge_binary", len(shas) == 1 and all(isinstance(s, str) and SHA256_RE.match(s) for s in shas),
                        f"Bridge binary hashes {sorted(map(str, shas))} (one valid 64-hex SHA-256 required)")
         restarts = [m.get("bridgeRestartNumber") for m in metas]
@@ -503,13 +755,27 @@ def main(argv=None):
         if prof.get("require_rxc1"):
             states = {json.dumps(m.get("rxc1", {}).get("state") if isinstance(m.get("rxc1"), dict) else None, sort_keys=True) for m in metas}
             set_checks.add("set.rxc1_state_constant", len(states) == 1 and "null" not in states, f"RXC1 states seen: {sorted(states)}")
+        collected = [r["info"]["owner"]["status"] in ("VERIFIED", "CONTRADICTED") for r in results]
+        if any(collected):
+            # The same process serves every window of a Bridge instance, and a restart is a new process on the same boot.
+            set_checks.add("set.owner_identity_every_window", all(collected), f"owner evidence missing in windows {[r['n'] for r, c_ in zip(results, collected) if not c_]}")
+            by_inst = {}
+            for r in results:
+                if r["info"].get("owner_ident") is not None:
+                    by_inst.setdefault(r.get("meta", {}).get("bridgeRestartNumber"), set()).add(r["info"]["owner_ident"])
+            set_checks.add("set.owner_identity_per_bridge_instance", all(len(v) == 1 for v in by_inst.values()), f"identities per Bridge instance {by_inst}")
+            processes = [next(iter(v))[:2] for v in by_inst.values() if len(v) == 1]
+            set_checks.add("set.owner_new_process_per_restart", len(set(processes)) == len(processes), "two Bridge instances were served by the same process")
+            set_checks.add("set.owner_same_boot", len({i[2] for v in by_inst.values() for i in v}) <= 1, "the Pi rebooted during the comparison")
         c_nd = {r["meta"].get("bridgeNoDelay") for r in results if r["arm"] == "C" and r.get("meta")}
         set_checks.add("set.arm_c_has_nodelay_on_at_both_ends", c_nd == {1} if c_nd else False, f"arm C labels {c_nd}")
 
     any_invalid = bool(set_checks.failed()) or any(r["checks"].failed() for r in results)
     nodelay_unverified = any(r["nodelay"]["status"] == "UNVERIFIED" for r in results)
     fresh_unverified = any(r["info"]["freshness"]["status"] == "UNVERIFIED" for r in results)
-    any_unverified = (nodelay_unverified and not args.allow_unverified_nodelay) or (fresh_unverified and not args.allow_unverified_freshness)
+    owner_unverified = any(r["info"]["owner"]["status"] == "UNVERIFIED" for r in results)
+    any_unverified = (nodelay_unverified and not args.allow_unverified_nodelay) or (fresh_unverified and not args.allow_unverified_freshness) \
+        or (owner_unverified and not args.allow_unverified_owner)
 
     # --- report
     rows = []
@@ -517,7 +783,7 @@ def main(argv=None):
         failed = r["checks"].failed()
         p, d, st = r["perf"], r["delivery"], r["startup"]
         rows.append({
-            "n": r["n"], "arm": r["arm"], "evidence": "INVALID" if failed else "valid", "nodelay": r["nodelay"]["status"], "fresh": r["info"]["freshness"]["status"],
+            "n": r["n"], "arm": r["arm"], "evidence": "INVALID" if failed else "valid", "nodelay": r["nodelay"]["status"], "fresh": r["info"]["freshness"]["status"], "owner": r["info"]["owner"]["status"],
             "render": d.get("render", "-"), "rows/s": d.get("rows_s", "-"), "rxIQ/s": d.get("rx_iq_s", "-"), "codec": d.get("codec", "-"),
             "played/s": p.get("played_per_s", "-"),
             "underruns": p.get("underruns", "-"), "overflows": p.get("overflows", "-"), "drops": p.get("drops", "-"), "gaps": p.get("audio_gaps", "-"),
@@ -537,6 +803,8 @@ def main(argv=None):
             notes.append(f"window {r['n']} ({r['arm']}) TCP_NODELAY {r['nodelay']['status']}: {r['nodelay']['why']}")
         if r["info"]["freshness"]["status"] != "VERIFIED":
             notes.append(f"window {r['n']} ({r['arm']}) telemetry freshness {r['info']['freshness']['status']}: {r['info']['freshness']['why']}")
+        if r["info"]["owner"]["status"] not in ("VERIFIED", "NOT COLLECTED"):
+            notes.append(f"window {r['n']} ({r['arm']}) owner identity {r['info']['owner']['status']}: {r['info']['owner']['why']}")
         for o in r["info"]["outcomes"]:
             notes.append(f"window {r['n']} ({r['arm']}) OUTCOME: {o}")
     for c in set_checks.failed():
@@ -544,6 +812,8 @@ def main(argv=None):
     verdict = "INVALID EVIDENCE" if any_invalid else ("VALID, TCP_NODELAY UNVERIFIED" if nodelay_unverified else "VALID, TCP_NODELAY VERIFIED")
     if not any_invalid and fresh_unverified:
         verdict += ", FRESHNESS UNVERIFIED"
+    if not any_invalid and owner_unverified:
+        verdict += ", OWNER IDENTITY UNVERIFIED"
     event_keys = ("underruns", "overflows", "drops", "audio_gaps", "audio_resyncs", "decode_errors", "late_drops", "stalled_seconds",
                   "display_stalled_seconds", "display_delivered_nothing", "audio_slow", "display_rate_outside_expected_band")
     perf_flags = [f"window {r['n']} ({r['arm']}): " + ", ".join(f"{k} {v}" for k, v in r["perf"].items() if k in event_keys and v)
@@ -561,7 +831,7 @@ def main(argv=None):
                    "set_checks": set_checks.items,
                    "windows": [{"n": r["n"], "arm": r["arm"], "file": r["file"], "checks": r["checks"].items, "nodelay": r["nodelay"],
                                 "performance": r["perf"], "startup_counters": r["startup"], "delivery": r["delivery"],
-                                "outcomes": r["info"]["outcomes"], "freshness": r["info"]["freshness"]} for r in results]},
+                                "outcomes": r["info"]["outcomes"], "freshness": r["info"]["freshness"], "owner": r["info"]["owner"]} for r in results]},
                   fh, indent=1, default=str)
     if any_invalid:
         return 1
