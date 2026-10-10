@@ -233,13 +233,25 @@ def cli(command, ctrl, *extra, timeout=120):
         return result.returncode, {"raw": result.stdout, "err": result.stderr}
 
 
-def chrome_running(stack):
-    result = subprocess.run(["pgrep", "-f", f"saturn-validate-.*|{stack.dir}"], capture_output=True, text=True)
-    return [p for p in result.stdout.split() if p and int(p) != os.getpid() and "pgrep" not in p and
-            "--remote-debugging-pipe" in Path(f"/proc/{p}/cmdline").read_text(errors="replace")] if result.stdout else []
+def chrome_running(stack, grace=10.0):
+    """Browser processes of this run that are still alive. A browser started directly (as here; the update process uses a transient unit, whose
+    cgroup is emptied synchronously) leaves the processes it forked to notice that their parent is gone, so they are given a few seconds."""
+    deadline = time.time() + grace
+    while True:
+        result = subprocess.run(["pgrep", "-f", f"saturn-validate-.*|{stack.dir}"], capture_output=True, text=True)
+        alive = []
+        for p in result.stdout.split() if result.stdout else []:
+            try:
+                if int(p) != os.getpid() and "--remote-debugging-pipe" in Path(f"/proc/{p}/cmdline").read_text(errors="replace"):
+                    alive.append(p)
+            except OSError:
+                pass            # exited between the listing and the read
+        if not alive or time.time() >= deadline:
+            return alive
+        time.sleep(0.5)
 
 
-def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_role="required", expect_role="viewer", expect_refusal=False, no_sandbox=False):
+def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_role="required", expect_role="viewer", no_sandbox=False):
     say(f"case {label}: page from {webroot}")
     stack = Stack(webroot, label, bridge_bin)
     try:
@@ -257,16 +269,6 @@ def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_rol
             check(status["state"] == "failed" and failed.get("id") == "browser.sandbox_intact",
                   f"{label}: a real Chrome started with --no-sandbox is refused: {failed.get('detail')}")
             check("Seccomp:0" in failed.get("detail", "") or "--no-sandbox" in failed.get("detail", ""), f"{label}: the refusal names what /proc showed")
-            check(not chrome_running(stack), f"{label}: the temporary Chrome is gone after the refusal")
-            time.sleep(2)
-            check(stack.perf()["metrics"].get("connections") == 0, f"{label}: nothing of ours remains at the Bridge")
-            return
-        if expect_refusal:
-            process.wait(timeout=140)
-            status = json.loads((ctrl / "status.json").read_text())
-            failed = (status.get("failed") or {}).get("id")
-            check(status["state"] == "failed" and failed == "session.connected_as_viewer",
-                  f"{label}: --viewer-role {viewer_role} refuses a Bridge that assigns {status.get('role')!r}: {(status.get('failed') or {}).get('detail')}")
             check(not chrome_running(stack), f"{label}: the temporary Chrome is gone after the refusal")
             time.sleep(2)
             check(stack.perf()["metrics"].get("connections") == 0, f"{label}: nothing of ours remains at the Bridge")
@@ -336,17 +338,72 @@ def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_rol
         stack.stop()
 
 
+def oldbridge_case():
+    """The rollback target's situation: a Bridge that predates viewer-role enforcement, and a page that predates validation mode.
+
+    Which role that Bridge gives the page's control connection is a race it does not decide: the page opens a control and a media connection, and
+    whichever registers first becomes the operator (found by running it: the order flipped when the browser ran with its sandbox). So each policy is
+    run repeatedly until the Bridge has been seen to give the operator role, and every run is judged by what the Bridge did in that run:
+      operator role: `required` refuses it; `legacy-fallback` accepts it, says so, and every other condition (guard, wire audit, radio) holds;
+      viewer role:   both accept it and no fallback is recorded."""
+    label = "oldbridge"
+    say(f"case {label}: the page and Bridge of the release a rollback returns to")
+    stack = Stack(Path(ENV["SATURN_REH_OLD_WEBROOT"]), label, os.environ["SATURN_REH_OLD_BRIDGE_BIN"])
+    try:
+        stack.start()
+        before = stack.perf()["metrics"]
+        radio_before = {k: before.get(k) for k in ("frequency_hz", "sample_rate_hz", "ddc", "adc", "tx_keyed", "tx_stream")}
+        refused = accepted_as_fallback = 0
+        for attempt in range(1, 9):
+            for policy in ("required", "legacy-fallback"):
+                tag = f"{label}-{policy}-{attempt}"
+                if (policy == "required" and refused) or (policy == "legacy-fallback" and accepted_as_fallback):
+                    continue
+                ctrl, process = validator(stack, tag, extra=("--viewer-role", policy), limits={"max_seconds": 150})
+                code, answer = cli("wait", ctrl, "--timeout", "120")
+                if answer.get("state") == "ready":
+                    cli("stop", ctrl, "--timeout", "60")
+                process.wait(timeout=60)
+                status = json.loads((ctrl / "status.json").read_text())
+                role, failed = status.get("role"), (status.get("failed") or {}).get("id")
+                if role == "operator" and policy == "required":
+                    refused += 1
+                    check(status["state"] == "failed" and failed == "session.connected_as_viewer",
+                          f"{tag}: the Bridge gave the operator role and `required` refused it: {(status.get('failed') or {}).get('detail')}")
+                elif role == "operator":
+                    accepted_as_fallback += 1
+                    check(status["state"] == "done" and status.get("legacy_fallback_used") is True and status["conditions"]["session.role_legacy_fallback"]["ok"]
+                          and "session.connected_as_viewer" not in status["conditions"],
+                          f"{tag}: the Bridge gave the operator role; accepted as a recorded LEGACY FALLBACK (state {status['state']}, used {status.get('legacy_fallback_used')})")
+                    check(all(c["ok"] for c in status["conditions"].values()), f"{tag}: every other condition holds, guard and wire audit included")
+                    check(status["conditions"]["wire.only_allowed_commands"]["ok"], f"{tag}: {status['conditions']['wire.only_allowed_commands']['detail']}")
+                else:
+                    check(status["state"] == "done" and status.get("legacy_fallback_used") is False and status["conditions"]["session.connected_as_viewer"]["ok"],
+                          f"{tag}: the Bridge gave the role {role!r}; accepted as an ordinary session with no fallback recorded (state {status['state']})")
+                    check(all(c["ok"] for c in status["conditions"].values()), f"{tag}: every condition holds")
+                check(status["conditions"].get("guard.active", {}).get("ok") is True, f"{tag}: the receive-only guard is proven active before anything is sent")
+                if status["state"] == "done":       # a refused session never gets as far as the isolation check
+                    check(status["conditions"]["browser.sandbox_intact"]["ok"] is True, f"{tag}: {status['conditions']['browser.sandbox_intact']['detail']}")
+                check(not chrome_running(stack), f"{tag}: the temporary Chrome is gone")
+                time.sleep(2.5)
+                after = stack.perf()["metrics"]
+                check(after.get("connections") == 0 and after.get("client") == 0, f"{tag}: nothing of ours remains at the Bridge (connections={after.get('connections')})")
+                check({k: after.get(k) for k in radio_before} == radio_before, f"{tag}: the radio is as it was")
+            if refused and accepted_as_fallback:
+                break
+        check(refused >= 1, f"{label}: the operator role was seen and refused under `required` ({refused} time(s))")
+        check(accepted_as_fallback >= 1, f"{label}: the operator role was seen and accepted as a recorded fallback ({accepted_as_fallback} time(s))")
+    finally:
+        stack.stop()
+
+
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
     OUT.mkdir(parents=True, exist_ok=True)
     cases = {"new": lambda: case(Path(ENV["SATURN_REH_WEBROOT"]), "new", "native"),
              "legacy": lambda: case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "legacy", "legacy"),
              "stalled": lambda: case(Path(ENV["SATURN_REH_WEBROOT"]), "stalled", "native", stall=True),
-             "oldbridge": lambda: (
-                 case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "oldbridge", "legacy", bridge_bin=os.environ["SATURN_REH_OLD_BRIDGE_BIN"],
-                      viewer_role="legacy-fallback", expect_role="operator"),
-                 case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "oldbridge-required", "legacy", bridge_bin=os.environ["SATURN_REH_OLD_BRIDGE_BIN"],
-                      viewer_role="required", expect_role="operator", expect_refusal=True)),
+             "oldbridge": oldbridge_case,
              "nosandbox": lambda: case(Path(ENV["SATURN_REH_WEBROOT"]), "nosandbox", "native", no_sandbox=True)}
     for name in (["new", "legacy", "stalled", "nosandbox"] + (["oldbridge"] if os.environ.get("SATURN_REH_OLD_BRIDGE_BIN") else []) if which == "all" else [which]):
         try:
