@@ -108,6 +108,79 @@ The durable transaction record is
 resolves it. The rollback snapshot is stored beside that record under
 `rollback-current/`. Activation never prunes installed immutable releases.
 
+### Reception is proven by the updater, not by a person
+
+The activation gate requires an active receive client at the selected owner
+(`state.sdr_active`), which exists only while something is receiving. The
+updater therefore proves reception itself. After the target services start it
+launches a temporary headless browser (a transient systemd unit with a dynamic
+user, no network except loopback, a memory cap and a hard lifetime), loads the
+installed Saturn Remote page through its normal authenticated proxy, and
+connects through the **existing** Bridge. It never starts another Bridge or
+opens XDMA. The session is receive-only by construction:
+
+* the page opens it as a Bridge **viewer** (the Bridge releases the operator
+  role of a session that declares itself a viewer, and discards every command a
+  viewer may not send);
+* a deny-by-default guard (`saturn-remote-receive-guard.js`) is injected before
+  any page script and drops every command outside the audio/display allowlist,
+  every binary uplink frame and every write request, and the validator watches the
+  frames that really leave the browser and fails on anything outside the allowlist;
+* no saved settings or profile is loaded or written;
+* the radio's frequency, sample rate, DDC, ADC and TX flags are read from the
+  owner before and after and must not differ.
+
+Validation passes only when the target release is the one running, the page
+loads without fatal errors, **fresh display data and decoded audio are
+advancing**, the owner's telemetry is fresh and counts the session, the owner's
+own readiness gate holds with the session attached, and the RXC1 status is the
+intended one (`VALIDATION_EXPECT_RXC1`, default `any`). A connected socket or an
+HTTP 200 alone proves nothing. The session is held until the helper's own
+readiness check has finished, then ended and cleaned up on success, failure or
+timeout. The exact failed condition and the validator's log are kept under
+`/var/lib/saturn-state/deployments/validation/<time>-<label>-<commit>.<random>/`
+(`status.json`, `validation.log`) and summarised in the transaction record's
+`validation` object. The proxy credential is read from the Saturn Go service's
+own environment and handed to the browser over the DevTools pipe; it never
+appears in an argument, a file or a log.
+
+After a rollback the same validation runs against the restored release, and the
+record reports two separate facts under `rollback`: `release_restored`
+(pointer, drop-ins, services and the running commit are back) and
+`receive_verified` (`true`, `false`, or `not_attempted`). Exit status `70` means
+the previous release could **not** be restored (`rollback_failed`). Exit status
+`71` means it was restored but reception on it could not be proven
+(`rolled_back`, `receive_verified: false`): inspect the validation evidence before
+trusting it. Any other non-zero status is the activation's own failure with a
+verified rollback.
+
+A `rollback_failed` record blocks further activations. Clear it only through the
+supported path, which refuses unless the recorded previous release is verifiably
+running (pointer, drop-ins identical to the rollback snapshot, services as they
+were, exact running commit, healthy selected owner) **and** receiving (the same
+validation) and which preserves the original record as
+`current.json.rollback-failed.<time>`:
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
+  --reconcile-rollback
+```
+
+Install the validator with the activator (each file is pinned by its own hash):
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-release-install-activator-root.sh \
+  <full-commit> <activator-sha256> <validator-sha256> <guard-sha256>
+```
+
+Prerequisites (checked before any service is touched; the update refuses with
+the exact missing item): the validator and guard installed root-owned, the
+browser (`VALIDATION_BROWSER`, default `/usr/bin/chromium`), `systemd-run`, the
+proxy certificate and the owner's `perf.json`. Validation supports the
+direct-XDMA owner; for a P2-selected host the previous gate (an attached receive
+client) still applies. Set `VALIDATION_ENABLED="0"` in the root-owned config only
+to return to that gate deliberately.
+
 REM-0205 adds a persistent-state contract to every new application release.
 The current contract is state schema 1, an initial metadata-only marker over
 the existing state schema 0; the managed settings formats themselves are

@@ -61,6 +61,31 @@ STATE_TOOL_ARGS=()
 STATE_BACKUP_DIR=""
 STATE_MIGRATED=0
 SELECTED_BACKEND=""
+RECONCILE_ROLLBACK=0
+CHECK_RECEPTION=0
+VALIDATION_ENABLED=1
+VALIDATOR="/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py"
+VALIDATOR_GUARD="/usr/local/lib/saturn-go/scripts/saturn-remote-receive-guard.js"
+VALIDATION_TIMEOUT_SECONDS=150
+VALIDATION_EXPECT_RXC1="any"
+VALIDATION_VIEWER_ROLE="preferred"
+VALIDATION_LAUNCHER="systemd"
+VALIDATION_BROWSER="/usr/bin/chromium"
+VALIDATION_URL="https://127.0.0.1:8443/remote-next?validation=receive&transport=split&display_transport=spectrum"
+VALIDATION_TLS_CERT="/var/lib/saturn-state/remote-tls/saturn-remote.crt"
+VALIDATION_PERF_JSON="/run/saturn-bridge/perf.json"
+VALIDATION_LOG_ROOT="/var/lib/saturn-state/deployments/validation"
+VALIDATION_MEMORY_MAX="350M"
+VALIDATION_NO_SANDBOX=0
+VALIDATION_CONTROL_DIR=""
+VALIDATION_LABEL=""
+VALIDATOR_PID=""
+VALIDATION_WAITER_PID=""
+VALIDATION_RECORD_JSON="{}"
+ROLLBACK_RELEASE_RESTORED=""
+ROLLBACK_RECEIVE_VERIFIED=""
+ROLLBACK_RECEIVE_UNVERIFIED=0
+RECONCILED_FROM=""
 
 log(){ printf '[saturn-release-activate] %s\n' "$*"; }
 die(){ printf '[saturn-release-activate] ERROR: %s\n' "$*" >&2; return 1; }
@@ -72,11 +97,26 @@ Usage:
   saturn-release-activate-root.sh <full-commit>
   saturn-release-activate-root.sh --approve-one-way-migration <full-commit>
   saturn-release-activate-root.sh --validate <full-commit>
+  saturn-release-activate-root.sh --reconcile-rollback
+  saturn-release-activate-root.sh --check-reception
 
 The validation form verifies an installed immutable release without changing
 the host. Activation requires ACTIVATION_ENABLED=1 in the root-owned config.
 The one-way form is accepted only when the release documents that rollback
 compatibility will be lost and records the operator's explicit approval.
+
+Activation proves reception itself: after the target services start, a
+temporary receive-only headless browser session is attached to the existing
+Bridge (see saturn-remote-validate.py) and held while the readiness gate runs,
+so no person has to keep a browser connected. The same proof follows a rollback,
+reported separately from the restoration of the previous release.
+
+--reconcile-rollback clears a "rollback_failed" record, and only when the
+recorded previous release is verifiably the one running and receiving.
+
+--check-reception proves reception on the release that is running now, with
+exactly the launcher an activation uses, and changes nothing: no pointer,
+service, drop-in or transaction record.
 EOF
 }
 
@@ -126,6 +166,20 @@ load_config(){
       READY_TIMEOUT_SECONDS) READY_TIMEOUT_SECONDS="$value" ;;
       P2APP_PANEL_ENABLED) P2APP_PANEL_ENABLED="$value" ;;
       TRANSACTION_GROUP) TRANSACTION_GROUP="$value" ;;
+      VALIDATION_ENABLED) VALIDATION_ENABLED="$value" ;;
+      VALIDATOR) VALIDATOR="$value" ;;
+      VALIDATOR_GUARD) VALIDATOR_GUARD="$value" ;;
+      VALIDATION_TIMEOUT_SECONDS) VALIDATION_TIMEOUT_SECONDS="$value" ;;
+      VALIDATION_EXPECT_RXC1) VALIDATION_EXPECT_RXC1="$value" ;;
+      VALIDATION_VIEWER_ROLE) VALIDATION_VIEWER_ROLE="$value" ;;
+      VALIDATION_LAUNCHER) VALIDATION_LAUNCHER="$value" ;;
+      VALIDATION_BROWSER) VALIDATION_BROWSER="$value" ;;
+      VALIDATION_URL) VALIDATION_URL="$value" ;;
+      VALIDATION_TLS_CERT) VALIDATION_TLS_CERT="$value" ;;
+      VALIDATION_PERF_JSON) VALIDATION_PERF_JSON="$value" ;;
+      VALIDATION_LOG_ROOT) VALIDATION_LOG_ROOT="$value" ;;
+      VALIDATION_MEMORY_MAX) VALIDATION_MEMORY_MAX="$value" ;;
+      VALIDATION_NO_SANDBOX) VALIDATION_NO_SANDBOX="$value" ;;
       *) die "unsupported activation config key: $key" ;;
     esac
   done <"$CONFIG_FILE"
@@ -140,10 +194,32 @@ validate_configuration(){
   [[ "$READY_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
     || die "READY_TIMEOUT_SECONDS must be a positive integer"
   (( READY_TIMEOUT_SECONDS <= 300 )) || die "READY_TIMEOUT_SECONDS must not exceed 300"
+  [[ "$VALIDATION_ENABLED" == "0" || "$VALIDATION_ENABLED" == "1" ]] \
+    || die "VALIDATION_ENABLED must be 0 or 1"
+  [[ "$VALIDATION_NO_SANDBOX" == "0" || "$VALIDATION_NO_SANDBOX" == "1" ]] \
+    || die "VALIDATION_NO_SANDBOX must be 0 or 1"
+  [[ "$VALIDATION_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+    || die "VALIDATION_TIMEOUT_SECONDS must be a positive integer"
+  (( VALIDATION_TIMEOUT_SECONDS <= 600 )) || die "VALIDATION_TIMEOUT_SECONDS must not exceed 600"
+  [[ "$VALIDATION_EXPECT_RXC1" =~ ^(any|valid|unarmed|disabled|unsupported|unavailable|partial)$ ]] \
+    || die "VALIDATION_EXPECT_RXC1 must be any, valid, unarmed, disabled, unsupported, unavailable or partial"
+  [[ "$VALIDATION_VIEWER_ROLE" == "required" || "$VALIDATION_VIEWER_ROLE" == "preferred" ]] \
+    || die "VALIDATION_VIEWER_ROLE must be required or preferred"
+  [[ "$VALIDATION_LAUNCHER" == "systemd" || "$VALIDATION_LAUNCHER" == "direct" ]] \
+    || die "VALIDATION_LAUNCHER must be systemd or direct"
+  if [[ "$VALIDATION_LAUNCHER" == "direct" ]] && (( EUID == 0 )); then
+    die "the direct validation launcher would run the browser as root; use systemd"
+  fi
+  [[ "$VALIDATION_MEMORY_MAX" =~ ^[1-9][0-9]*[MG]$ ]] \
+    || die "VALIDATION_MEMORY_MAX must look like 350M"
+  local url_re='^https://127\.0\.0\.1:[0-9]+/[A-Za-z0-9_./-]+(\?[A-Za-z0-9_=&.-]*)?$'
+  [[ "$VALIDATION_URL" =~ $url_re ]] || die "VALIDATION_URL must be an explicit loopback HTTPS URL"
   for path in \
     "$SATURN_ROOT" "$RELEASES_ROOT" "$CURRENT_LINK" "$TRANSACTION_FILE" "$LOCK_FILE" \
     "$MANIFEST_TOOL" "$COMPONENTS_FILE" "$SYSTEMD_ROOT" \
-    "$STATE_TOOL" "$STATE_ROOT" "$STATE_BACKUP_ROOT" "$BACKEND_STATUS_HELPER"
+    "$STATE_TOOL" "$STATE_ROOT" "$STATE_BACKUP_ROOT" "$BACKEND_STATUS_HELPER" \
+    "$VALIDATOR" "$VALIDATOR_GUARD" "$VALIDATION_BROWSER" "$VALIDATION_TLS_CERT" \
+    "$VALIDATION_PERF_JSON" "$VALIDATION_LOG_ROOT"
   do
     [[ "$path" == /* && "$path" != *[$'\t\r\n ']* ]] || die "unsafe configured path: $path"
   done
@@ -302,7 +378,9 @@ write_transaction(){
     "$ACTIVATION_FAILURE_PHASE" "$ACTIVATION_FAILURE_COMMAND" \
     "$ACTIVATION_FAILURE_STATUS" "$ROLLBACK_STATUS" "$ROLLBACK_MESSAGE" \
     "$STATE_PLAN_JSON" "$STATE_BACKUP_DIR" "$STATE_MIGRATED" \
-    "$APPROVE_ONE_WAY_MIGRATION" <<'PY'
+    "$APPROVE_ONE_WAY_MIGRATION" \
+    "$VALIDATION_RECORD_JSON" "$ROLLBACK_RELEASE_RESTORED" "$ROLLBACK_RECEIVE_VERIFIED" \
+    "$RECONCILED_FROM" <<'PY'
 import json
 import os
 import sys
@@ -323,6 +401,7 @@ from pathlib import Path
     rollback_status, rollback_message,
     state_plan_json, state_backup_directory, state_migrated,
     one_way_approved,
+    validation_json, release_restored, receive_verified, reconciled_from,
 ) = sys.argv[1:]
 path = Path(path_text)
 path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +470,18 @@ if rollback_status:
         "message": rollback_message,
         "updated_at": now,
     }
+    # Restoring the previous release and proving that it receives are different facts, so they are recorded as different fields.
+    if release_restored in ("true", "false"):
+        value["rollback"]["release_restored"] = release_restored == "true"
+    if receive_verified in ("true", "false"):
+        value["rollback"]["receive_verified"] = receive_verified == "true"
+    elif receive_verified:
+        value["rollback"]["receive_verified"] = receive_verified
+validation = json.loads(validation_json or "{}")
+if validation:
+    value["validation"] = validation
+if reconciled_from:
+    value["reconciliation"] = {"at": now, "original_record": reconciled_from}
 state_plan = json.loads(state_plan_json)
 value["state_compatibility"] = {
     "plan": state_plan,
@@ -719,6 +810,152 @@ wait_for_selected_owner(){
   selected_owner_receiving "$backend"
 }
 
+validation_enabled(){
+  [[ "$VALIDATION_ENABLED" == "1" && "$SELECTED_BACKEND" == "xdma" ]]
+}
+
+# Every prerequisite is checked before the first service is touched: an update that cannot prove reception must not start.
+validation_preflight(){
+  local path mode
+  [[ -f "$VALIDATOR" && ! -L "$VALIDATOR" ]] || die "receive validator is not installed: $VALIDATOR (install it with saturn-release-install-activator-root.sh, or set VALIDATION_ENABLED=0)"
+  [[ -f "$VALIDATOR_GUARD" && ! -L "$VALIDATOR_GUARD" ]] || die "receive-only guard script is not installed: $VALIDATOR_GUARD"
+  if (( EUID == 0 )); then
+    for path in "$VALIDATOR" "$VALIDATOR_GUARD"; do
+      [[ "$(stat -c '%u' "$path")" == "0" ]] || die "validator component is not root-owned: $path"
+      mode="$(stat -c '%a' "$path")"
+      (( (8#$mode & 8#022) == 0 )) || die "validator component is group/world writable: $path"
+    done
+  fi
+  python3 -c 'import ast, sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$VALIDATOR" \
+    || die "receive validator does not parse: $VALIDATOR"
+  [[ -x "$VALIDATION_BROWSER" ]] || die "validation browser is not executable: $VALIDATION_BROWSER"
+  [[ -r "$VALIDATION_TLS_CERT" ]] || die "remote proxy certificate is not readable: $VALIDATION_TLS_CERT"
+  [[ -r "$VALIDATION_PERF_JSON" ]] || die "the selected owner's telemetry is not readable: $VALIDATION_PERF_JSON"
+  if [[ "$VALIDATION_LAUNCHER" == "systemd" ]]; then
+    need_cmd systemd-run || return 1
+  fi
+}
+
+# Start a receive-only session in the background. $1 labels the evidence, $2 is the commit that must be running.
+validation_start(){
+  local label="$1" commit="$2" stamp dir
+  local -a args
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  if (( EUID == 0 )); then
+    install -d -m 0750 -o root -g "$TRANSACTION_GROUP" "$VALIDATION_LOG_ROOT" || return 1
+  else
+    install -d -m 0750 "$VALIDATION_LOG_ROOT" || return 1
+  fi
+  # Unique for every run: two validations of the same commit in the same second must never share (and read each other's) status files.
+  dir="$(mktemp -d "$VALIDATION_LOG_ROOT/$stamp-$label-${commit:0:12}.XXXXXX")" || return 1
+  chmod 0750 "$dir" || return 1
+  if (( EUID == 0 )); then
+    chgrp "$TRANSACTION_GROUP" "$dir" || return 1
+  fi
+  VALIDATION_CONTROL_DIR="$dir"
+  VALIDATION_LABEL="$label"
+  args=(
+    run --control-dir "$dir" --target-commit "$commit" --backend "$SELECTED_BACKEND"
+    --expect-rxc1 "$VALIDATION_EXPECT_RXC1" --viewer-role "$VALIDATION_VIEWER_ROLE" --url "$VALIDATION_URL"
+    --ready-url "${SATURN_GO_READY_URL%%\?*}" --perf-url "$P23_PERF_URL" --perf-json "$VALIDATION_PERF_JSON"
+    --unit "$BRIDGE_SERVICE" --unit "$SATURN_GO_SERVICE" --owner-unit "$BRIDGE_SERVICE" --auth-unit "$SATURN_GO_SERVICE"
+    --release-root "$RELEASES_ROOT" --tls-cert "$VALIDATION_TLS_CERT" --browser "$VALIDATION_BROWSER"
+    --launcher "$VALIDATION_LAUNCHER" --memory-max "$VALIDATION_MEMORY_MAX" --guard-script "$VALIDATOR_GUARD"
+  )
+  (( VALIDATION_NO_SANDBOX )) && args+=(--no-sandbox)
+  [[ "$label" != "target" && -z "$PREVIOUS_RELEASE" ]] && args+=(--no-exe-check)
+  log "starting receive validation ($label) for $commit; evidence: $dir"
+  python3 "$VALIDATOR" "${args[@]}" >"$dir/validator.out" 2>&1 &
+  VALIDATOR_PID=$!
+}
+
+# Block until the session has proven reception, bounded. The session then stays attached until validation_stop_record.
+validation_wait_ready(){
+  local output rc=0 out_file="$VALIDATION_CONTROL_DIR/wait.out"
+  # Run in the background and use the `wait` builtin: bash defers a trapped signal until a foreground command ends, and this one may take
+  # minutes. An interrupted helper must end the session at once.
+  python3 "$VALIDATOR" wait --control-dir "$VALIDATION_CONTROL_DIR" --timeout "$VALIDATION_TIMEOUT_SECONDS" >"$out_file" 2>&1 &
+  VALIDATION_WAITER_PID=$!
+  wait "$VALIDATION_WAITER_PID" || rc=$?
+  VALIDATION_WAITER_PID=""
+  output="$(cat "$out_file" 2>/dev/null || true)"
+  if (( rc == 0 )); then
+    log "receive validation ($VALIDATION_LABEL) established reception: $output"
+    return 0
+  fi
+  log "receive validation ($VALIDATION_LABEL) did not establish reception: $output"
+  return 1
+}
+
+# End the session, wait for its cleanup, and keep what it found in the transaction record. Succeeds only if the validator finished cleanly.
+validation_stop_record(){
+  local rc=0 output
+  [[ -n "$VALIDATION_CONTROL_DIR" ]] || return 0
+  output="$(python3 "$VALIDATOR" stop --control-dir "$VALIDATION_CONTROL_DIR" --timeout 60)" || rc=$?
+  if [[ -n "$VALIDATOR_PID" ]]; then
+    wait "$VALIDATOR_PID" 2>/dev/null || true
+  fi
+  VALIDATION_RECORD_JSON="$(python3 - "$VALIDATION_RECORD_JSON" "$VALIDATION_LABEL" "$VALIDATION_CONTROL_DIR" <<'PY'
+import json
+import sys
+record = json.loads(sys.argv[1])
+label, directory = sys.argv[2], sys.argv[3]
+try:
+    with open(f"{directory}/status.json", encoding="utf-8") as handle:
+        status = json.load(handle)
+except (OSError, ValueError):
+    status = {"state": "missing"}
+record[label] = {
+    "control_directory": directory,
+    "final_state": status.get("state"),
+    "exit_code": status.get("exit_code"),
+    "driver": status.get("driver"),
+    "failed": status.get("failed"),
+    "role": status.get("role"),
+    "role_enforced_by_bridge": status.get("role_enforced_by_bridge"),
+    "conditions": {key: value.get("ok") for key, value in sorted((status.get("conditions") or {}).items())},
+    "started_at": status.get("started_at"),
+    "ready_at": status.get("ready_at"),
+    "finished_at": status.get("finished_at"),
+}
+print(json.dumps(record, sort_keys=True))
+PY
+)" || true
+  log "receive validation ($VALIDATION_LABEL) finished: $output"
+  VALIDATION_CONTROL_DIR=""
+  VALIDATOR_PID=""
+  return "$rc"
+}
+
+# Last resort for an interrupted helper: never leave a browser session attached.
+validation_abort(){
+  if [[ -n "$VALIDATION_WAITER_PID" ]]; then
+    kill "$VALIDATION_WAITER_PID" 2>/dev/null || true
+    VALIDATION_WAITER_PID=""
+  fi
+  [[ -n "$VALIDATION_CONTROL_DIR" ]] || return 0
+  python3 "$VALIDATOR" stop --control-dir "$VALIDATION_CONTROL_DIR" --timeout 60 >/dev/null 2>&1 || true
+  if [[ -n "$VALIDATOR_PID" ]]; then
+    wait "$VALIDATOR_PID" 2>/dev/null || true
+  fi
+  VALIDATION_CONTROL_DIR=""
+  VALIDATOR_PID=""
+}
+
+# Reception must be proven with the validation session attached: the readiness gate counts that session as the receive client.
+prove_reception(){
+  local label="$1" commit="$2" rc=1
+  if validation_enabled; then
+    if validation_start "$label" "$commit" && validation_wait_ready && wait_for_selected_owner "$SELECTED_BACKEND"; then
+      rc=0
+    fi
+    validation_stop_record || rc=1
+  else
+    wait_for_selected_owner "$SELECTED_BACKEND" && rc=0
+  fi
+  return "$rc"
+}
+
 restore_dropin(){
   local destination="$1" existed="$2" backup="$3"
   if [[ "$existed" == "1" ]]; then
@@ -861,13 +1098,32 @@ rollback_activation(){
   restore_previous_services || rc=1
   if [[ "$SATURN_GO_WAS_ACTIVE" == "1" ]]; then
     wait_for_commit "$PREVIOUS_READY_COMMIT" || rc=1
-    wait_for_selected_owner "$SELECTED_BACKEND" || rc=1
   fi
 
+  # "Release restored" (pointer, drop-ins, services and the running commit) and "receive verified" are separate facts. A restored release
+  # whose reception could not be proven is reported as exactly that, not as a failed restoration.
   if (( rc == 0 )); then
+    ROLLBACK_RELEASE_RESTORED="true"
+    if [[ "$SATURN_GO_WAS_ACTIVE" == "1" ]]; then
+      if prove_reception rollback "$PREVIOUS_READY_COMMIT"; then
+        ROLLBACK_RECEIVE_VERIFIED="true"
+      else
+        ROLLBACK_RECEIVE_VERIFIED="false"
+        ROLLBACK_RECEIVE_UNVERIFIED=1
+      fi
+    else
+      ROLLBACK_RECEIVE_VERIFIED="not_attempted"
+    fi
     ROLLBACK_STATUS="succeeded"
-    ROLLBACK_MESSAGE="Previous release and services restored after activation failure"
+    if [[ "$ROLLBACK_RECEIVE_VERIFIED" == "false" ]]; then
+      ROLLBACK_MESSAGE="Previous release and services restored after activation failure; reception on the restored release was NOT verified"
+    else
+      ROLLBACK_MESSAGE="Previous release and services restored after activation failure"
+    fi
     write_transaction "rolled_back" "rollback-complete" "$ROLLBACK_MESSAGE" || rc=1
+  else
+    ROLLBACK_RELEASE_RESTORED="false"
+    ROLLBACK_RECEIVE_VERIFIED="not_attempted"
   fi
   if (( rc != 0 )); then
     ROLLBACK_STATUS="failed"
@@ -876,6 +1132,121 @@ rollback_activation(){
   fi
   set -e
   return "$rc"
+}
+
+# Modes that attach a validation session without an activation transaction still must not leave it attached if they are interrupted.
+install_interrupt_traps(){
+  trap validation_abort EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+  trap 'exit 129' HUP
+}
+
+# Prove reception on the release that is running now, with the launcher an activation uses and nothing else: no pointer, drop-in, service
+# or transaction record is touched. It is how a host's browser sandbox, memory cap and credentials are tried out before an update.
+check_reception(){
+  local running identity
+  [[ "$VALIDATION_ENABLED" == "1" ]] || die "receive validation is disabled by root-owned policy (VALIDATION_ENABLED)"
+  SELECTED_BACKEND="$(selected_backend_status)" || die "no healthy selected radio owner"
+  validation_enabled || die "receive validation supports the direct-XDMA owner only; the selected backend is $SELECTED_BACKEND"
+  validation_preflight
+  running="$(probe_running_commit)" || die "Saturn Go is not ready"
+  identity="$(current_release_identity)" || die "cannot resolve the current release"
+  IFS=$'\t' read -r PREVIOUS_COMMIT PREVIOUS_RELEASE <<<"$identity"
+  install_interrupt_traps
+  log "checking reception on the running release $running (nothing is changed)"
+  if prove_reception check "$running"; then
+    log "reception verified on $running; evidence is under $VALIDATION_LOG_ROOT"
+  else
+    die "reception could not be proven on $running; see the evidence under $VALIDATION_LOG_ROOT"
+  fi
+}
+
+# Clear a "rollback_failed" record the supported way: only if the recorded previous release is verifiably the one running, wired as it was,
+# healthy, and receiving, proven with the same validation an activation uses. Anything else leaves the record exactly as it is.
+reconcile_rollback(){
+  local fields identity cur_commit cur_release running selected backup stamp service
+  [[ "$ACTIVATION_ENABLED" == "1" ]] \
+    || die "reconciliation is disabled by root-owned policy (ACTIVATION_ENABLED)"
+  [[ "$(transaction_status)" == "rollback_failed" ]] \
+    || die "nothing to reconcile: the deployment transaction status is '$(transaction_status)', not rollback_failed"
+  prepare_transaction_directory
+  fields="$(python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+services = value["services"]
+active = services["previously_active"]
+names = services["stop_order"]  # saturn-go, bridge, p2app
+dropins = value["service_dropins"]
+def flag(x):
+    return "1" if x else "0"
+state = value.get("state_compatibility") or {}
+# A non-whitespace delimiter keeps empty fields (a legacy deployment has no previous commit or release); the JSON goes last.
+print("|".join([
+    value.get("previous_commit") or "", value.get("previous_release") or "", value["previous_ready_commit"],
+    services["selected_backend"], value["target_commit"], value["target_release"], value["rollback_directory"],
+    flag(active[names[0]]), flag(active[names[1]]), flag(active[names[2]]),
+    flag(dropins[names[0]]["previously_existed"]), flag(dropins[names[1]]["previously_existed"]), flag(dropins[names[2]]["previously_existed"]),
+    state.get("backup_directory") or "", flag(state.get("migrated")), flag(state.get("one_way_operator_approval")),
+    json.dumps(state.get("plan") or {}),
+]))
+PY
+)" || die "the deployment record cannot be read"
+  IFS='|' read -r PREVIOUS_COMMIT PREVIOUS_RELEASE PREVIOUS_READY_COMMIT SELECTED_BACKEND TARGET_COMMIT TARGET_RELEASE ROLLBACK_DIR \
+    SATURN_GO_WAS_ACTIVE BRIDGE_WAS_ACTIVE P2APP_WAS_ACTIVE \
+    SATURN_GO_DROPIN_EXISTED BRIDGE_DROPIN_EXISTED P2APP_DROPIN_EXISTED \
+    STATE_BACKUP_DIR STATE_MIGRATED APPROVE_ONE_WAY_MIGRATION STATE_PLAN_JSON <<<"$fields"
+  SATURN_GO_DROPIN="$SYSTEMD_ROOT/$SATURN_GO_SERVICE.d/50-saturn-release.conf"
+  BRIDGE_DROPIN="$SYSTEMD_ROOT/$BRIDGE_SERVICE.d/50-saturn-release.conf"
+  P2APP_DROPIN="$SYSTEMD_ROOT/$P2APP_SERVICE.d/50-saturn-release.conf"
+  log "reconciling the failed rollback of $TARGET_COMMIT: the previous release ${PREVIOUS_COMMIT:-<legacy deployment>} must be running and receiving"
+
+  identity="$(current_release_identity)" || die "cannot resolve the current release"
+  IFS=$'\t' read -r cur_commit cur_release <<<"$identity"
+  [[ "$cur_commit" == "$PREVIOUS_COMMIT" && "$cur_release" == "$PREVIOUS_RELEASE" ]] \
+    || die "the active release (${cur_commit:-none}) is not the recorded previous release (${PREVIOUS_COMMIT:-none}); the record is left unchanged"
+  if [[ -n "$PREVIOUS_COMMIT" ]]; then
+    validate_release "$PREVIOUS_COMMIT" >/dev/null || die "the previous release failed validation; the record is left unchanged"
+  fi
+  for service in "$SATURN_GO_SERVICE:$SATURN_GO_WAS_ACTIVE" "$BRIDGE_SERVICE:$BRIDGE_WAS_ACTIVE" "$P2APP_SERVICE:$P2APP_WAS_ACTIVE"; do
+    if [[ "${service#*:}" == "1" ]]; then
+      systemctl is-active --quiet "${service%%:*}" || die "${service%%:*} was active before the activation and is not now; the record is left unchanged"
+    else
+      ! systemctl is-active --quiet "${service%%:*}" || die "${service%%:*} was inactive before the activation and is active now; the record is left unchanged"
+    fi
+  done
+  verify_restored_dropin "$SATURN_GO_DROPIN" "$SATURN_GO_DROPIN_EXISTED" "$ROLLBACK_DIR/$SATURN_GO_SERVICE.conf" \
+    || die "the $SATURN_GO_SERVICE drop-in differs from its rollback backup; the record is left unchanged"
+  verify_restored_dropin "$BRIDGE_DROPIN" "$BRIDGE_DROPIN_EXISTED" "$ROLLBACK_DIR/$BRIDGE_SERVICE.conf" \
+    || die "the $BRIDGE_SERVICE drop-in differs from its rollback backup; the record is left unchanged"
+  verify_restored_dropin "$P2APP_DROPIN" "$P2APP_DROPIN_EXISTED" "$ROLLBACK_DIR/$P2APP_SERVICE.conf" \
+    || die "the $P2APP_SERVICE drop-in differs from its rollback backup; the record is left unchanged"
+  running="$(probe_running_commit)" || die "Saturn Go is not ready; the record is left unchanged"
+  [[ "$running" == "$PREVIOUS_READY_COMMIT" ]] \
+    || die "the running commit $running is not the recorded previous commit $PREVIOUS_READY_COMMIT; the record is left unchanged"
+  selected="$(selected_backend_status)" || die "no healthy selected radio owner; the record is left unchanged"
+  [[ "$selected" == "$SELECTED_BACKEND" ]] || die "the selected backend is $selected, the record says $SELECTED_BACKEND; the record is left unchanged"
+
+  if validation_enabled; then
+    validation_preflight
+  fi
+  install_interrupt_traps
+  if ! prove_reception reconcile "$PREVIOUS_READY_COMMIT"; then
+    die "reception on the previous release could not be proven; the record is left unchanged (see ${VALIDATION_LOG_ROOT})"
+  fi
+
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  backup="$TRANSACTION_FILE.rollback-failed.$stamp"
+  cp -a -- "$TRANSACTION_FILE" "$backup" || die "cannot preserve the original record"
+  RECONCILED_FROM="$backup"
+  ROLLBACK_RELEASE_RESTORED="true"
+  ROLLBACK_RECEIVE_VERIFIED="true"
+  ROLLBACK_STATUS="succeeded"
+  ROLLBACK_MESSAGE="Reconciled: the previous release is running, wired as before the activation, and verified receiving"
+  write_transaction "rolled_back" "reconciled" "$ROLLBACK_MESSAGE" || die "cannot write the reconciled record"
+  log "reconciled: the record is now rolled_back; the original is preserved at $backup"
 }
 
 mark_failed(){
@@ -888,9 +1259,17 @@ mark_failed(){
     ACTIVATION_FAILURE_PHASE="$PHASE"
     ACTIVATION_FAILURE_COMMAND="$command"
     ACTIVATION_FAILURE_STATUS="$activation_rc"
+    # A validation session still attached when the activation failed is ended first, and what it found is kept as evidence.
+    if [[ -n "$VALIDATION_CONTROL_DIR" ]]; then
+      validation_stop_record || true
+    fi
     rollback_activation || rollback_rc=$?
   fi
   if (( rollback_rc == 0 )); then
+    if (( ROLLBACK_RECEIVE_UNVERIFIED )); then
+      log "activation failed during $PHASE; the previous release was restored but reception on it was NOT verified"
+      exit 71
+    fi
     log "activation failed during $PHASE; automatic rollback succeeded"
     exit "$activation_rc"
   fi
@@ -910,6 +1289,12 @@ while [[ "${1:-}" == --* ]]; do
     --approve-one-way-migration)
       APPROVE_ONE_WAY_MIGRATION=1
       ;;
+    --reconcile-rollback)
+      RECONCILE_ROLLBACK=1
+      ;;
+    --check-reception)
+      CHECK_RECEPTION=1
+      ;;
     *)
       usage >&2
       exit 2
@@ -917,11 +1302,17 @@ while [[ "${1:-}" == --* ]]; do
   esac
   shift
 done
-[[ $# -eq 1 ]] || { usage >&2; exit 2; }
-if (( VALIDATE_ONLY && APPROVE_ONE_WAY_MIGRATION )); then
-  die "--validate cannot be combined with --approve-one-way-migration"
+if (( RECONCILE_ROLLBACK || CHECK_RECEPTION )); then
+  [[ $# -eq 0 ]] || { usage >&2; exit 2; }
+  (( ! VALIDATE_ONLY && ! APPROVE_ONE_WAY_MIGRATION && ! (RECONCILE_ROLLBACK && CHECK_RECEPTION) )) \
+    || die "--reconcile-rollback and --check-reception cannot be combined with other options"
+else
+  [[ $# -eq 1 ]] || { usage >&2; exit 2; }
+  if (( VALIDATE_ONLY && APPROVE_ONE_WAY_MIGRATION )); then
+    die "--validate cannot be combined with --approve-one-way-migration"
+  fi
+  TARGET_COMMIT="$1"
 fi
-TARGET_COMMIT="$1"
 
 need_cmd curl
 need_cmd cmp
@@ -942,6 +1333,14 @@ flock -n 9 || die "another release activation is already running"
 [[ -x "$MANIFEST_TOOL" ]] || die "trusted manifest validator not executable: $MANIFEST_TOOL"
 [[ -x "$STATE_TOOL" ]] || die "trusted state compatibility tool not executable: $STATE_TOOL"
 [[ -f "$COMPONENTS_FILE" ]] || die "trusted component policy missing: $COMPONENTS_FILE"
+if (( RECONCILE_ROLLBACK )); then
+  reconcile_rollback
+  exit 0
+fi
+if (( CHECK_RECEPTION )); then
+  check_reception
+  exit 0
+fi
 TARGET_RELEASE="$(validate_release "$TARGET_COMMIT")" || die "target release validation failed"
 if (( VALIDATE_ONLY )); then
   log "installed release validation passed: $TARGET_RELEASE"
@@ -972,6 +1371,11 @@ else
 fi
 [[ "$SATURN_GO_WAS_ACTIVE" == "1" ]] \
   || die "cannot activate from an unhealthy baseline: $SATURN_GO_SERVICE is not active"
+if validation_enabled; then
+  validation_preflight
+elif [[ "$VALIDATION_ENABLED" == "1" ]]; then
+  log "receive validation supports the direct-XDMA owner only; $SELECTED_BACKEND keeps the readiness gate that needs an attached receive client"
+fi
 PREVIOUS_READY_COMMIT="$(probe_running_commit)" \
   || die "cannot resolve the currently ready Saturn Go commit"
 if [[ -n "$PREVIOUS_COMMIT" ]]; then
@@ -995,6 +1399,11 @@ prepare_rollback_snapshot
 PHASE="prepare"
 write_transaction "prepared" "$PHASE" "Validated target and persisted deployment intent" prepare
 TRANSACTION_PREPARED=1
+# A helper that is interrupted must not leave a validation browser session attached to the radio.
+trap validation_abort EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 trap mark_failed ERR
 
 PHASE="service-stop"
@@ -1049,8 +1458,30 @@ if ! probe_web_pages; then
   log "activated Saturn Go cannot serve Radio Telemetry and Settings"
   false
 fi
-if ! wait_for_selected_owner "$SELECTED_BACKEND"; then
-  false
+if validation_enabled; then
+  PHASE="receive-validation"
+  write_transaction "verifying" "$PHASE" "Proving reception with a temporary receive-only browser session"
+  if ! validation_start target "$TARGET_COMMIT"; then
+    validation_stop_record || true
+    false
+  fi
+  if ! validation_wait_ready; then
+    validation_stop_record || true
+    false
+  fi
+  # The session stays attached while the helper's own readiness gate runs: it is what makes the owner report an active receive client.
+  if ! wait_for_selected_owner "$SELECTED_BACKEND"; then
+    validation_stop_record || true
+    false
+  fi
+  if ! validation_stop_record; then
+    log "the receive validation session did not end cleanly"
+    false
+  fi
+else
+  if ! wait_for_selected_owner "$SELECTED_BACKEND"; then
+    false
+  fi
 fi
 
 PHASE="commit"

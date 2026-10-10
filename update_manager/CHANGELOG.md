@@ -4,6 +4,20 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- Release activation now proves reception itself. After the target services start,
+  the root activation helper runs a temporary receive-only headless browser session
+  (`saturn-remote-validate.py`) against the existing Bridge, so keeping a person's
+  browser connected is no longer an installation prerequisite. It requires fresh
+  display data, decoded audio, fresh owner telemetry that counts the session, the
+  owner's readiness gate, the intended RXC1 state, an unchanged radio and a clean
+  wire audit, holds the session while the helper's own check runs, and cleans up on
+  success, failure or timeout. The same proof follows a rollback, and the transaction
+  record reports `release_restored` separately from `receive_verified` (exit 70: not
+  restored; 71: restored but reception unproven). `--reconcile-rollback` clears a
+  `rollback_failed` record only after verifying the previous release is running and
+  receiving. Saturn Remote gains `?validation=receive` (viewer role, deny-by-default
+  command guard, no saved settings or profile). The Bridge now releases the operator
+  role of a session that declares itself a viewer.
 - App/Firmware Info now omits historical P2 startup banners when P2 is
   inactive, avoiding a misleading stale image ID while Direct XDMA is active.
 - Add negotiated RX Opus audio over the existing WebSocket media lane for

@@ -107,6 +107,16 @@ BACKEND_STATUS_HELPER="$FAKE_BIN/backend-status"
 READY_TIMEOUT_SECONDS="2"
 P2APP_PANEL_ENABLED="0"
 TRANSACTION_GROUP="$(id -gn)"
+VALIDATION_ENABLED="${SATURN_TEST_VALIDATION_ENABLED:-0}"
+VALIDATOR="$FAKE_BIN/fake-validator"
+VALIDATOR_GUARD="$TMP_ROOT/receive-guard.js"
+VALIDATION_LAUNCHER="direct"
+VALIDATION_BROWSER="$FAKE_BIN/fake-browser"
+VALIDATION_TLS_CERT="$TMP_ROOT/remote.crt"
+VALIDATION_PERF_JSON="$TMP_ROOT/perf.json"
+VALIDATION_LOG_ROOT="$TMP_ROOT/state/deployments/validation"
+VALIDATION_TIMEOUT_SECONDS="20"
+VALIDATION_EXPECT_RXC1="${SATURN_TEST_EXPECT_RXC1:-any}"
 EOF
   chmod 0644 "$CONFIG_FILE"
 }
@@ -174,6 +184,13 @@ if [[ "$*" == *'/p23_perf'* ]]; then
   active=true
   current="$(readlink -f "$SATURN_TEST_CURRENT_LINK" 2>/dev/null || true)"
   if [[ "$current" == *"/${SATURN_TEST_OWNER_UNAVAILABLE_COMMIT:-not-a-commit}" ]]; then active=false; fi
+  if [[ "${SATURN_TEST_REQUIRE_CLIENT:-0}" == 1 ]]; then
+    if [[ -e "${SATURN_TEST_CLIENT_MARKER:-/nonexistent}" ]]; then
+      printf 'gate-with-client\n' >>"$SATURN_TEST_SYSTEMCTL_LOG"
+    else
+      active=false
+    fi
+  fi
   printf '{"perf":{"workload":{"selected_app":"%s","service_main_pid":123},"app_telemetry":{"snapshot_readable":true,"pid_matches_service":true,"age_seconds":0.1,"current":{"app":"%s","pid":123,"state":{"sdr_active":%s,"thread_error":false}}}}}\n' \
     "$backend" "$app" "$active"
   exit 0
@@ -621,6 +638,572 @@ assert value["activation_failure"]["phase"] == "readiness"
 assert value["rollback"]["status"] == "succeeded"
 PY
 
+# =====================================================================================================================
+# Automatic headless receive validation.
+#
+# Nobody has a browser open anywhere in this section: with SATURN_TEST_REQUIRE_CLIENT=1 the fake owner reports no
+# receive client (sdr_active false) unless the validation session has attached one. The activation that failed on the
+# appliance failed exactly this way. The updater must establish and verify reception itself, in activation and again
+# after a rollback, and report "release restored" separately from "receive verified".
+# =====================================================================================================================
+cp "$REPO_ROOT/tests/fake-saturn-remote-validate.py" "$FAKE_BIN/fake-validator"
+chmod 0755 "$FAKE_BIN/fake-validator"
+printf '// receive-only guard stand-in\n' >"$TMP_ROOT/receive-guard.js"
+: >"$TMP_ROOT/remote.crt"
+printf '{}\n' >"$TMP_ROOT/perf.json"
+printf '#!/bin/sh\n' >"$FAKE_BIN/fake-browser"
+chmod 0755 "$FAKE_BIN/fake-browser"
+export SATURN_TEST_CLIENT_MARKER="$TMP_ROOT/client-attached"
+export SATURN_TEST_VALIDATOR_ARGS_LOG="$TMP_ROOT/validator-args.log"
+export SATURN_TEST_REQUIRE_CLIENT=1
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
+txn_snapshot(){ cp -a "$TRANSACTION_FILE" "$TMP_ROOT/transaction.snapshot"; }
+expect_failure(){
+  local expected="$1"; shift
+  local rc=0
+  "$@" >"$TMP_ROOT/last-run.log" 2>&1 || rc=$?
+  if [[ "$expected" == "nonzero" ]]; then
+    [[ "$rc" != 0 ]] || { printf 'expected a failure but the command succeeded: %s\n' "$*" >&2; exit 1; }
+  else
+    [[ "$rc" == "$expected" ]] || { printf 'expected exit %s, got %s: %s\n' "$expected" "$rc" "$*" >&2; cat "$TMP_ROOT/last-run.log" >&2; exit 1; }
+  fi
+}
+assert_dropins_unchanged(){
+  cmp "$TMP_ROOT/saturn-go.expected" "$SYSTEMD_ROOT/saturn-go.service.d/50-saturn-release.conf"
+  cmp "$TMP_ROOT/saturn-bridge.expected" "$SYSTEMD_ROOT/saturn-bridge.service.d/50-saturn-release.conf"
+  cmp "$TMP_ROOT/p2app.expected" "$SYSTEMD_ROOT/p2app.service.d/50-saturn-release.conf"
+}
+
+# --- Control: this is the incident. Validation off, nobody connected. The release is restored, but reception cannot be proven.
+# It used to be reported as "rollback_failed" (exit 70, activation blocked); it is now exactly what it is.
+export SATURN_TEST_VALIDATION_ENABLED=0
+write_config 1
+expect_failure 71 "$ACTIVATOR" "$STARTUP_COMMIT"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+assert_dropins_unchanged
+[[ ! -s "$SATURN_TEST_VALIDATOR_ARGS_LOG" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back", value["status"]
+assert value["activation_failure"]["phase"] == "readiness"
+assert value["rollback"]["status"] == "succeeded"
+assert value["rollback"]["release_restored"] is True
+assert value["rollback"]["receive_verified"] is False
+assert "NOT verified" in value["rollback"]["message"]
+assert "validation" not in value
+PY
+
+# --- Success with every human browser closed.
+export SATURN_TEST_VALIDATION_ENABLED=1 SATURN_TEST_EXPECT_RXC1=unarmed
+write_config 1
+: >"$SYSTEMCTL_LOG"
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+"$ACTIVATOR" "$STARTUP_COMMIT" >"$TMP_ROOT/last-run.log"
+export SATURN_TEST_RUNNING_COMMIT="$STARTUP_COMMIT"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$STARTUP_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+python3 - "$TRANSACTION_FILE" "$STARTUP_COMMIT" "$SATURN_TEST_VALIDATOR_ARGS_LOG" "$SYSTEMCTL_LOG" "$TMP_ROOT/receive-guard.js" <<'PY'
+import json
+import sys
+record, commit, args_log, shared_log, guard = sys.argv[1:]
+with open(record, encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "committed" and value["phase"] == "commit"
+target = value["validation"]["target"]
+assert target["final_state"] == "done" and target["exit_code"] == 0 and target["failed"] is None
+assert target["driver"] == "native" and target["ready_at"] and target["finished_at"]
+assert "role" in target and "role_enforced_by_bridge" in target
+assert all(target["conditions"].values()) and "data.audio_frames_arriving" in target["conditions"]
+assert "rollback" not in value
+with open(args_log, encoding="utf-8") as handle:
+    runs = [json.loads(line) for line in handle if line.strip()]
+assert len(runs) == 1, runs
+argv = runs[0]
+def option(flag):
+    return argv[argv.index(flag) + 1]
+assert argv[0] == "run"
+assert option("--target-commit") == commit and option("--backend") == "xdma"
+assert option("--expect-rxc1") == "unarmed" and option("--launcher") == "direct"
+assert option("--viewer-role") == "preferred"      # the default: a Bridge that predates viewer enforcement must still validate
+assert option("--guard-script") == guard
+assert option("--ready-url").endswith("/readyz") and "?" not in option("--ready-url")
+assert option("--owner-unit") == "saturn-bridge.service" and option("--auth-unit") == "saturn-go.service"
+assert argv.count("--unit") == 2
+assert "--no-exe-check" not in argv and "--no-sandbox" not in argv
+with open(shared_log, encoding="utf-8") as handle:
+    lines = [line.strip() for line in handle if line.strip()]
+def first(prefix, after=-1):
+    return next(i for i, line in enumerate(lines) if i > after and line.startswith(prefix))
+started = max(i for i, line in enumerate(lines) if line == "start saturn-go.service")
+ran = first("validator-run", started)
+ready = first("validator-ready", ran)
+gate = first("gate-with-client", ready)
+stopped = first("validator-stopped", gate)
+assert started < ran < ready < gate < stopped, lines
+PY
+# return to the original release (also without a person)
+"$ACTIVATOR" "$NEW_COMMIT" >"$TMP_ROOT/last-run.log"
+export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+
+# --- Failed media delivery: the session attaches (so the owner's own gate would pass) but the target never delivers decoded audio.
+# Only the validator's verdict can stop the commit. The failed condition is kept exactly; the previous release is restored and its
+# reception is proven by the same validation.
+export SATURN_TEST_VALIDATOR_STALL_COMMITS="$STARTUP_COMMIT"
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+assert_dropins_unchanged
+python3 - "$TRANSACTION_FILE" "$STARTUP_COMMIT" "$NEW_COMMIT" "$SATURN_TEST_VALIDATOR_ARGS_LOG" <<'PY'
+import json
+import sys
+record, target, previous, args_log = sys.argv[1:]
+with open(record, encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["target_commit"] == target
+assert value["activation_failure"]["phase"] == "receive-validation"
+validation = value["validation"]
+assert validation["target"]["final_state"] == "failed"
+assert validation["target"]["failed"]["id"] == "audio.decoded_progress"
+assert "advanced by 0" in validation["target"]["failed"]["detail"]
+assert validation["rollback"]["final_state"] == "done" and validation["rollback"]["failed"] is None
+assert value["rollback"]["status"] == "succeeded"
+assert value["rollback"]["release_restored"] is True
+assert value["rollback"]["receive_verified"] is True
+assert "NOT verified" not in value["rollback"]["message"]
+with open(args_log, encoding="utf-8") as handle:
+    runs = [json.loads(line) for line in handle if line.strip()]
+assert [run[run.index("--target-commit") + 1] for run in runs] == [target, previous], runs
+assert "--no-exe-check" not in runs[1]   # the previous release is a release directory
+PY
+
+# --- The restored release also cannot be proven to receive: reported as such (exit 71), not as a failed restoration.
+unset SATURN_TEST_VALIDATOR_STALL_COMMITS
+export SATURN_TEST_VALIDATOR_FAIL_COMMITS="$STARTUP_COMMIT $NEW_COMMIT"
+expect_failure 71 "$ACTIVATOR" "$STARTUP_COMMIT"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+assert_dropins_unchanged
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["rollback"]["status"] == "succeeded"
+assert value["rollback"]["release_restored"] is True
+assert value["rollback"]["receive_verified"] is False
+assert value["validation"]["rollback"]["failed"]["id"] == "data.audio_frames_arriving"
+assert value["validation"]["target"]["failed"]["id"] == "data.audio_frames_arriving"
+PY
+
+# --- A session that cannot be cleaned up fails the activation too: nothing may be left attached to the radio.
+export SATURN_TEST_VALIDATOR_FAIL_COMMITS=""
+export SATURN_TEST_VALIDATOR_STOP_FAIL_COMMITS="$STARTUP_COMMIT"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+unset SATURN_TEST_VALIDATOR_STOP_FAIL_COMMITS
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["activation_failure"]["phase"] == "receive-validation"
+assert value["validation"]["target"]["failed"]["id"] == "cleanup.client_released"
+assert value["rollback"]["receive_verified"] is True
+PY
+
+# --- A validation that never becomes ready is bounded by VALIDATION_TIMEOUT_SECONDS, ended, and rolled back.
+export SATURN_TEST_VALIDATOR_HANG_COMMITS="$STARTUP_COMMIT"
+sed -i 's/^VALIDATION_TIMEOUT_SECONDS=.*/VALIDATION_TIMEOUT_SECONDS="2"/' "$CONFIG_FILE"
+started_at=$SECONDS
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+(( SECONDS - started_at < 60 ))
+unset SATURN_TEST_VALIDATOR_HANG_COMMITS
+write_config 1
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back"
+assert value["activation_failure"]["phase"] == "receive-validation"
+assert value["validation"]["target"]["final_state"] == "failed"
+assert value["rollback"]["receive_verified"] is True
+PY
+
+# --- Missing prerequisites refuse the activation before anything is touched.
+txn_snapshot
+mv "$FAKE_BIN/fake-validator" "$FAKE_BIN/fake-validator.away"
+: >"$SYSTEMCTL_LOG"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+grep -Fq 'receive validator is not installed' "$TMP_ROOT/last-run.log"
+mv "$FAKE_BIN/fake-validator.away" "$FAKE_BIN/fake-validator"
+mv "$FAKE_BIN/fake-browser" "$FAKE_BIN/fake-browser.away"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+grep -Fq 'validation browser is not executable' "$TMP_ROOT/last-run.log"
+mv "$FAKE_BIN/fake-browser.away" "$FAKE_BIN/fake-browser"
+mv "$TMP_ROOT/remote.crt" "$TMP_ROOT/remote.crt.away"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+grep -Fq 'remote proxy certificate is not readable' "$TMP_ROOT/last-run.log"
+mv "$TMP_ROOT/remote.crt.away" "$TMP_ROOT/remote.crt"
+if grep -Eq '^(start|stop) ' "$SYSTEMCTL_LOG"; then
+  printf 'a missing validation prerequisite changed service state\n' >&2
+  exit 1
+fi
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+# bad validation policy is refused as well
+sed -i 's/^VALIDATION_EXPECT_RXC1=.*/VALIDATION_EXPECT_RXC1="maybe"/' "$CONFIG_FILE"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+grep -Fq 'VALIDATION_EXPECT_RXC1' "$TMP_ROOT/last-run.log"
+write_config 1
+printf 'VALIDATION_VIEWER_ROLE="whenever"\n' >>"$CONFIG_FILE"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+grep -Fq 'VALIDATION_VIEWER_ROLE must be required or preferred' "$TMP_ROOT/last-run.log"
+write_config 1
+
+# --- An interrupted helper must not leave a validation session attached to the radio.
+export SATURN_TEST_VALIDATOR_HANG_COMMITS="$STARTUP_COMMIT"
+sed -i 's/^VALIDATION_TIMEOUT_SECONDS=.*/VALIDATION_TIMEOUT_SECONDS="120"/' "$CONFIG_FILE"
+: >"$SYSTEMCTL_LOG"
+"$ACTIVATOR" "$STARTUP_COMMIT" >"$TMP_ROOT/term-run.log" 2>&1 &
+helper_pid=$!
+for _ in $(seq 1 100); do
+  grep -q "^validator-run $STARTUP_COMMIT" "$SYSTEMCTL_LOG" && break
+  sleep 0.1
+done
+grep -q "^validator-run $STARTUP_COMMIT" "$SYSTEMCTL_LOG"
+term_started=$SECONDS
+kill -TERM "$helper_pid"
+term_rc=0
+wait "$helper_pid" || term_rc=$?
+[[ "$term_rc" == 143 ]]
+# the validation wait was 120 s: an interrupted helper must not sit through it
+(( SECONDS - term_started < 30 ))
+python3 - "$(ls -d "$TMP_ROOT"/state/deployments/validation/*-target-"${STARTUP_COMMIT:0:12}".* | tail -1)/status.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    status = json.load(handle)
+assert status["state"] == "failed", status   # the fake validator was told to stop and finished
+PY
+[[ -z "$(pgrep -f "fake-validator run --control-dir $TMP_ROOT/" || true)" ]]
+unset SATURN_TEST_VALIDATOR_HANG_COMMITS
+# the interrupted activation is abandoned mid-way by design; put the fixture back as it was
+rm -f -- "$TRANSACTION_FILE" "$TRANSACTION_FILE.last-good"
+ln -sfn "$RELEASES_ROOT/$NEW_COMMIT" "$CURRENT_LINK"
+cp "$TMP_ROOT/saturn-go.expected" "$SYSTEMD_ROOT/saturn-go.service.d/50-saturn-release.conf"
+cp "$TMP_ROOT/saturn-bridge.expected" "$SYSTEMD_ROOT/saturn-bridge.service.d/50-saturn-release.conf"
+cp "$TMP_ROOT/p2app.expected" "$SYSTEMD_ROOT/p2app.service.d/50-saturn-release.conf"
+: >"$SYSTEMCTL_STATE/saturn-go.service"
+: >"$SYSTEMCTL_STATE/saturn-bridge.service"
+rm -f -- "$SYSTEMCTL_STATE/p2app.service" "$SATURN_TEST_CLIENT_MARKER"
+write_config 1
+
+# --- A deployment that predates release directories has no release path to hold its binaries to: only its rollback validation says so.
+(
+  # shellcheck disable=SC1090
+  source "$ACTIVATOR"
+  VALIDATION_LOG_ROOT="$TMP_ROOT/legacy-validation"
+  VALIDATOR="$FAKE_BIN/fake-validator"
+  VALIDATOR_GUARD="$TMP_ROOT/receive-guard.js"
+  SELECTED_BACKEND=xdma
+  PREVIOUS_RELEASE=""
+  : >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+  validation_start rollback "$OLD_COMMIT"
+  validation_wait_ready >/dev/null
+  validation_stop_record
+  PREVIOUS_RELEASE="$RELEASES_ROOT/$NEW_COMMIT"
+  validation_start rollback "$NEW_COMMIT"
+  validation_wait_ready >/dev/null
+  validation_stop_record
+  validation_start target "$NEW_COMMIT"
+  validation_wait_ready >/dev/null
+  validation_stop_record
+  # Two validations of the same commit with the same label in the same second must not share a control directory: the second would
+  # read the first one's finished status instead of its own.
+  date(){ printf '20990101T000000Z\n'; }
+  export SATURN_TEST_VALIDATOR_FAIL_COMMITS="$NEW_COMMIT"
+  validation_start reconcile "$NEW_COMMIT"
+  first_dir="$VALIDATION_CONTROL_DIR"
+  validation_wait_ready >/dev/null || true
+  validation_stop_record || true
+  unset SATURN_TEST_VALIDATOR_FAIL_COMMITS
+  validation_start reconcile "$NEW_COMMIT"
+  [[ "$VALIDATION_CONTROL_DIR" != "$first_dir" ]]
+  validation_wait_ready >/dev/null
+  validation_stop_record
+  # The target is always a release directory, even when the deployment it replaces is a legacy one; a check of a legacy host is not.
+  PREVIOUS_RELEASE=""
+  validation_start target "$NEW_COMMIT"
+  validation_wait_ready >/dev/null
+  validation_stop_record
+  validation_start check "$NEW_COMMIT"
+  validation_wait_ready >/dev/null
+  validation_stop_record
+) >/dev/null
+python3 - "$SATURN_TEST_VALIDATOR_ARGS_LOG" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    runs = [json.loads(line) for line in handle if line.strip()]
+assert [("--no-exe-check" in run) for run in runs] == [True, False, False, False, False, False, True], runs
+PY
+
+# --- The helper and the real validator agree on the command line. The fake validator above stands in for the program; this guards
+# against the two drifting apart.
+python3 - "$ACTIVATOR" "$REPO_ROOT/update_manager/scripts/saturn-remote-validate.py" <<'PY'
+import re
+import subprocess
+import sys
+helper = open(sys.argv[1], encoding="utf-8").read()
+block = helper[helper.index("  args=(\n    run --control-dir"):]
+block = block[:block.index("\n  )\n")]
+used = set(re.findall(r"--[a-z0-9-]+", block)) | {"--no-sandbox", "--no-exe-check"}
+for subcommand in ("run", "wait", "stop"):
+    text = subprocess.run([sys.executable, sys.argv[2], subcommand, "--help"], capture_output=True, text=True, check=True).stdout
+    offered = set(re.findall(r"--[a-z0-9-]+", text))
+    if subcommand == "run":
+        missing = used - offered
+        assert not missing, f"the helper passes options the validator does not accept: {sorted(missing)}"
+for flag in ("--control-dir", "--timeout"):
+    for subcommand in ("wait", "stop"):
+        text = subprocess.run([sys.executable, sys.argv[2], subcommand, "--help"], capture_output=True, text=True, check=True).stdout
+        assert flag in text, (subcommand, flag)
+PY
+
+# --- Reconciling a failed rollback. A restoration that failed only for want of a receive client is the same situation as the one
+# found on the appliance: everything is back, but the record says rollback_failed and blocks every update. The supported path clears it,
+# and only when the previous release is verifiably running and receiving.
+export SATURN_TEST_READY_FAIL_COMMITS="$ROLLBACK_FAIL_COMMIT $NEW_COMMIT"
+expect_failure 70 "$ACTIVATOR" "$ROLLBACK_FAIL_COMMIT"
+unset SATURN_TEST_READY_FAIL_COMMITS
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rollback_failed"
+assert value["rollback"]["status"] == "failed"
+assert value["rollback"]["release_restored"] is False
+assert value["rollback"]["receive_verified"] == "not_attempted"
+PY
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"      # a failed rollback still blocks another activation
+grep -Fq "unresolved deployment transaction has status 'rollback_failed'" "$TMP_ROOT/last-run.log"
+txn_snapshot
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+
+# refusals leave the record exactly as it was
+ln -sfn "$RELEASES_ROOT/$STARTUP_COMMIT" "$CURRENT_LINK"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
+grep -Fq 'is not the recorded previous release' "$TMP_ROOT/last-run.log"
+ln -sfn "$RELEASES_ROOT/$NEW_COMMIT" "$CURRENT_LINK"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+
+rm -f -- "$SYSTEMCTL_STATE/saturn-bridge.service"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
+grep -Fq 'was active before the activation and is not now' "$TMP_ROOT/last-run.log"
+: >"$SYSTEMCTL_STATE/saturn-bridge.service"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+
+printf '# tampered\n' >>"$SYSTEMD_ROOT/saturn-bridge.service.d/50-saturn-release.conf"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
+grep -Fq 'differs from its rollback backup' "$TMP_ROOT/last-run.log"
+cp "$TMP_ROOT/saturn-bridge.expected" "$SYSTEMD_ROOT/saturn-bridge.service.d/50-saturn-release.conf"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+
+export SATURN_TEST_RUNNING_COMMIT="$STARTUP_COMMIT"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
+grep -Fq 'is not the recorded previous commit' "$TMP_ROOT/last-run.log"
+export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+
+export SATURN_TEST_VALIDATOR_FAIL_COMMITS="$NEW_COMMIT"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
+grep -Fq 'reception on the previous release could not be proven' "$TMP_ROOT/last-run.log"
+unset SATURN_TEST_VALIDATOR_FAIL_COMMITS
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+
+# a previous release that no longer validates is not "running and receiving", whatever else holds
+printf 'tampered previous payload\n' >>"$RELEASES_ROOT/$NEW_COMMIT/bin/p2app"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
+grep -Fq 'the previous release failed validation' "$TMP_ROOT/last-run.log"
+create_release "$NEW_COMMIT"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+
+# a service that was inactive before the activation and is active now
+: >"$SYSTEMCTL_STATE/p2app.service"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback
+grep -Fq 'was inactive before the activation and is active now' "$TMP_ROOT/last-run.log"
+rm -f -- "$SYSTEMCTL_STATE/p2app.service"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+
+# no extra arguments, no other mode
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback "$NEW_COMMIT"
+expect_failure nonzero "$ACTIVATOR" --validate --reconcile-rollback
+
+# the supported path: verified, then the record is cleared, with the original preserved
+"$ACTIVATOR" --reconcile-rollback >"$TMP_ROOT/last-run.log"
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+assert_dropins_unchanged
+python3 - "$TRANSACTION_FILE" "$TMP_ROOT/transaction.snapshot" "$NEW_COMMIT" "$ROLLBACK_FAIL_COMMIT" <<'PY'
+import json
+import os
+import sys
+record, snapshot, previous, target = sys.argv[1:]
+with open(record, encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back" and value["phase"] == "reconciled"
+assert value["target_commit"] == target
+assert value["rollback"]["status"] == "succeeded"
+assert value["rollback"]["release_restored"] is True and value["rollback"]["receive_verified"] is True
+assert value["validation"]["reconcile"]["final_state"] == "done"
+assert value["activation_failure"]["phase"] == "readiness"           # what actually failed is not rewritten
+original = value["reconciliation"]["original_record"]
+assert os.path.basename(original).startswith("current.json.rollback-failed.")
+with open(original, encoding="utf-8") as handle:
+    kept = json.load(handle)
+with open(snapshot, encoding="utf-8") as handle:
+    before = json.load(handle)
+assert kept == before and kept["status"] == "rollback_failed"       # preserved byte for byte
+assert oct(os.stat(record).st_mode & 0o777) == "0o640"
+PY
+cmp "$TRANSACTION_FILE" "$TRANSACTION_FILE.last-good"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback            # nothing left to reconcile
+grep -Fq "not rollback_failed" "$TMP_ROOT/last-run.log"
+# ...and updates are possible again
+"$ACTIVATOR" "$STARTUP_COMMIT" >"$TMP_ROOT/last-run.log"
+export SATURN_TEST_RUNNING_COMMIT="$STARTUP_COMMIT"
+"$ACTIVATOR" "$NEW_COMMIT" >"$TMP_ROOT/last-run.log"
+export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+
+# --- --check-reception tries the production launcher out on the release that is running, and changes nothing. A host's browser sandbox,
+# memory cap and credentials can be settled with it before any update is attempted.
+txn_snapshot
+: >"$SYSTEMCTL_LOG"
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+"$ACTIVATOR" --check-reception >"$TMP_ROOT/last-run.log"
+grep -Fq "reception verified on $NEW_COMMIT" "$TMP_ROOT/last-run.log"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+if grep -Eq '^(start|stop|daemon-reload)' "$SYSTEMCTL_LOG"; then
+  printf 'a reception check changed service state\n' >&2
+  exit 1
+fi
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" && ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+assert_dropins_unchanged
+python3 - "$SATURN_TEST_VALIDATOR_ARGS_LOG" "$NEW_COMMIT" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    runs = [json.loads(line) for line in handle if line.strip()]
+assert len(runs) == 1 and runs[0][runs[0].index("--target-commit") + 1] == sys.argv[2], runs
+assert "--no-exe-check" not in runs[0]
+PY
+ls -d "$TMP_ROOT"/state/deployments/validation/*-check-"${NEW_COMMIT:0:12}".* >/dev/null
+
+export SATURN_TEST_VALIDATOR_STALL_COMMITS="$NEW_COMMIT"
+expect_failure nonzero "$ACTIVATOR" --check-reception
+unset SATURN_TEST_VALIDATOR_STALL_COMMITS
+grep -Fq 'reception could not be proven' "$TMP_ROOT/last-run.log"
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+expect_failure nonzero "$ACTIVATOR" --check-reception "$NEW_COMMIT"
+expect_failure nonzero "$ACTIVATOR" --check-reception --reconcile-rollback
+expect_failure nonzero "$ACTIVATOR" --check-reception --validate
+export SATURN_TEST_VALIDATION_ENABLED=0
+write_config 1
+expect_failure nonzero "$ACTIVATOR" --check-reception
+grep -Fq 'disabled by root-owned policy' "$TMP_ROOT/last-run.log"
+export SATURN_TEST_VALIDATION_ENABLED=1
+write_config 1
+
+# An interrupted check must not leave its session attached either.
+export SATURN_TEST_VALIDATOR_HANG_COMMITS="$NEW_COMMIT"
+sed -i 's/^VALIDATION_TIMEOUT_SECONDS=.*/VALIDATION_TIMEOUT_SECONDS="120"/' "$CONFIG_FILE"
+: >"$SYSTEMCTL_LOG"
+"$ACTIVATOR" --check-reception >"$TMP_ROOT/term-check.log" 2>&1 &
+check_pid=$!
+for _ in $(seq 1 100); do
+  grep -q "^validator-run $NEW_COMMIT" "$SYSTEMCTL_LOG" && break
+  sleep 0.1
+done
+grep -q "^validator-run $NEW_COMMIT" "$SYSTEMCTL_LOG"
+check_term_started=$SECONDS
+kill -TERM "$check_pid"
+check_rc=0
+wait "$check_pid" || check_rc=$?
+[[ "$check_rc" == 143 ]]
+(( SECONDS - check_term_started < 30 ))
+python3 - "$(ls -d "$TMP_ROOT"/state/deployments/validation/*-check-"${NEW_COMMIT:0:12}".* | tail -1)/status.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    assert json.load(handle)["state"] == "failed"      # told to stop, and it finished
+PY
+[[ -z "$(pgrep -f "fake-validator run --control-dir $TMP_ROOT/" || true)" ]]
+unset SATURN_TEST_VALIDATOR_HANG_COMMITS
+write_config 1
+cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
+
+# The launcher, the memory cap and the sandbox switch reach the validator; the systemd launcher needs systemd-run.
+printf '#!/bin/sh\n' >"$FAKE_BIN/systemd-run"
+chmod 0755 "$FAKE_BIN/systemd-run"
+sed -i 's/^VALIDATION_LAUNCHER=.*/VALIDATION_LAUNCHER="systemd"/' "$CONFIG_FILE"
+printf 'VALIDATION_MEMORY_MAX="123M"\nVALIDATION_NO_SANDBOX="1"\nVALIDATION_VIEWER_ROLE="required"\n' >>"$CONFIG_FILE"
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+"$ACTIVATOR" --check-reception >"$TMP_ROOT/last-run.log"
+python3 - "$SATURN_TEST_VALIDATOR_ARGS_LOG" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    argv = json.loads(handle.readline())
+assert argv[argv.index("--launcher") + 1] == "systemd"
+assert argv[argv.index("--memory-max") + 1] == "123M"
+assert "--no-sandbox" in argv
+assert argv[argv.index("--viewer-role") + 1] == "required"
+PY
+rm "$FAKE_BIN/systemd-run"
+# The systemd launcher cannot be used without systemd-run. (This machine may have a real one, so the PATH is restricted to python3.)
+mkdir -p "$TMP_ROOT/minbin"
+ln -sf "$(command -v python3)" "$TMP_ROOT/minbin/python3"
+if (
+  # shellcheck disable=SC1090
+  source "$ACTIVATOR"
+  VALIDATOR="$FAKE_BIN/fake-validator"
+  VALIDATOR_GUARD="$TMP_ROOT/receive-guard.js"
+  VALIDATION_BROWSER="$FAKE_BIN/fake-browser"
+  VALIDATION_TLS_CERT="$TMP_ROOT/remote.crt"
+  VALIDATION_PERF_JSON="$TMP_ROOT/perf.json"
+  VALIDATION_LAUNCHER=systemd
+  PATH="$TMP_ROOT/minbin"
+  validation_preflight
+) >"$TMP_ROOT/last-run.log" 2>&1; then
+  printf 'the systemd launcher passed preflight without systemd-run\n' >&2
+  exit 1
+fi
+grep -Fq 'required command not found: systemd-run' "$TMP_ROOT/last-run.log"
+write_config 1
+
+# Back to the fixture's earlier conditions for the remaining cases.
+unset SATURN_TEST_VALIDATOR_FAIL_COMMITS SATURN_TEST_REQUIRE_CLIENT
+export SATURN_TEST_VALIDATION_ENABLED=0
+write_config 1
+
 # A rollback verification failure is persisted distinctly and blocks another
 # activation until an operator resolves the transaction.
 export SATURN_TEST_READY_FAIL_COMMITS="$ROLLBACK_FAIL_COMMIT $NEW_COMMIT"
@@ -649,7 +1232,15 @@ PY
 rm -f -- "$TRANSACTION_FILE" "$SYSTEMCTL_STATE/saturn-bridge.service"
 : >"$SYSTEMCTL_STATE/p2app.service"
 export SATURN_TEST_SELECTED_BACKEND=p2
-"$ACTIVATOR" "$P2_COMMIT" >/dev/null
+# Receive validation supports the direct-XDMA owner only. With it enabled, a P2 activation says so and keeps its previous gate.
+export SATURN_TEST_VALIDATION_ENABLED=1
+write_config 1
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+"$ACTIVATOR" "$P2_COMMIT" >"$TMP_ROOT/p2-run.log"
+grep -Fq 'receive validation supports the direct-XDMA owner only' "$TMP_ROOT/p2-run.log"
+[[ ! -s "$SATURN_TEST_VALIDATOR_ARGS_LOG" ]]
+export SATURN_TEST_VALIDATION_ENABLED=0
+write_config 1
 [[ -f "$SYSTEMCTL_STATE/p2app.service" && ! -f "$SYSTEMCTL_STATE/saturn-bridge.service" ]]
 python3 - "$TRANSACTION_FILE" <<'PY'
 import json

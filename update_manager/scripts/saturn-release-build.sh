@@ -334,6 +334,9 @@ run_test_gates(){
   log "Running persistent-state compatibility tests"
   run "$REPO_ROOT/tests/test-saturn-state-compatibility.sh"
 
+  log "Running headless receive-validation tests (fake DevTools browser, fake owner)"
+  run python3 -W ignore "$REPO_ROOT/tests/test-saturn-remote-validate.py" --parallel 6
+
   log "Running release activation and privileged-helper installation tests"
   run bash "$REPO_ROOT/tests/test-saturn-release-activate.sh"
   run bash "$REPO_ROOT/tests/test-saturn-release-install-activator.sh"

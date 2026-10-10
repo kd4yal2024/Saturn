@@ -34,6 +34,8 @@ SATURN_RELEASE_INSTALLER_NAME="saturn-release-install-root.sh"
 SATURN_RELEASE_INSTALL_CONFIG="/etc/default/saturn-release-install"
 SATURN_RELEASE_ACTIVATOR_NAME="saturn-release-activate-root.sh"
 SATURN_RELEASE_ACTIVATE_CONFIG="/etc/default/saturn-release-activate"
+SATURN_REMOTE_VALIDATOR_NAME="saturn-remote-validate.py"
+SATURN_REMOTE_GUARD_NAME="saturn-remote-receive-guard.js"
 SATURN_RADIO_BACKEND_SWITCH_NAME="saturn-radio-backend-switch-root.sh"
 SATURN_APPLIANCE_POWER_NAME="saturn-appliance-power-root.sh"
 SATURN_RADIO_BACKEND_CONFIG="/etc/default/saturn-radio-backend"
@@ -155,6 +157,8 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/$SATURN_GO_DEPLOY_BROKER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RELEASE_INSTALLER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RELEASE_ACTIVATOR_NAME"
+  "$SOURCE_DIR/scripts/$SATURN_REMOTE_VALIDATOR_NAME"
+  "$SOURCE_DIR/scripts/$SATURN_REMOTE_GUARD_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RADIO_BACKEND_SWITCH_NAME"
   "$SOURCE_DIR/scripts/$SATURN_APPLIANCE_POWER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_STATE_COMPATIBILITY_TOOL_NAME"
@@ -779,6 +783,13 @@ BACKEND_STATUS_HELPER="$PRIVILEGED_SCRIPTS_DIR/$SATURN_RADIO_BACKEND_SWITCH_NAME
 READY_TIMEOUT_SECONDS="30"
 P2APP_PANEL_ENABLED="${SATURN_P2APP_PANEL_ENABLED:-0}"
 TRANSACTION_GROUP="$SERVICE_GROUP"
+# Activation proves reception itself with a temporary receive-only headless browser session; no person needs to keep a browser open.
+VALIDATION_ENABLED="${SATURN_RELEASE_VALIDATION_ENABLED:-1}"
+# preferred: also validate a Bridge that predates viewer-role enforcement (its session is held receive-only by the injected guard, the live
+# wire audit and the unchanged-radio check). Use required once every Bridge you may roll back to enforces the viewer role.
+VALIDATION_VIEWER_ROLE="${SATURN_RELEASE_VALIDATION_VIEWER_ROLE:-preferred}"
+VALIDATOR="$PRIVILEGED_SCRIPTS_DIR/$SATURN_REMOTE_VALIDATOR_NAME"
+VALIDATOR_GUARD="$PRIVILEGED_SCRIPTS_DIR/$SATURN_REMOTE_GUARD_NAME"
 EOF
 chown root:root "$SATURN_RELEASE_ACTIVATE_CONFIG"
 chmod 0644 "$SATURN_RELEASE_ACTIVATE_CONFIG"
