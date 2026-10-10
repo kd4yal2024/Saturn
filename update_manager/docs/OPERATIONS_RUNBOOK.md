@@ -130,6 +130,29 @@ opens XDMA. The session is receive-only by construction:
 * the radio's frequency, sample rate, DDC, ADC and TX flags are read from the
   owner before and after and must not differ.
 
+**The viewer role is required.** The Bridge of the release under test must give
+the session the viewer role. The one exception is a named compatibility
+fallback for a release whose Bridge predates viewer-role enforcement (the fix is
+commit `dfb0b19`): releases listed in `VALIDATION_LEGACY_BRIDGE_RELEASES` (by
+default the four installed on the first appliance, `329f3109`, `4247ed95`,
+`91d97663` and `f10a087`) may be given the operator role, which is then
+recorded as `legacy_fallback_used: true` with its own condition
+(`session.role_legacy_fallback`) and a `LEGACY BRIDGE FALLBACK USED` log line,
+never as an ordinary viewer session. The fallback does not relax anything else:
+the guard must be proven active before a session is started, and the wire audit
+and the unchanged-radio check apply as always. A release that is not listed,
+including every new one, must get the viewer role. There is no setting that
+turns the requirement off.
+
+**The browser's containment is verified, not assumed.** While the session runs
+the validator reads from the host that no browser process was started with
+`--no-sandbox` and that every renderer is confined by a seccomp filter
+(`Seccomp: 2` in `/proc/<pid>/status`; a sandbox-less renderer shows 0), and
+that the transient unit carries the configured `MemoryMax` and
+`MemorySwapMax=0`. The peak memory is kept in the evidence. A browser that
+cannot start its sandbox inside the unit fails the validation; the sandbox is
+not configurable away.
+
 Validation passes only when the target release is the one running, the page
 loads without fatal errors, **fresh display data and decoded audio are
 advancing**, the owner's telemetry is fresh and counts the session, the owner's
@@ -159,13 +182,32 @@ A `rollback_failed` record blocks further activations. Clear it only through the
 supported path, which refuses unless the recorded previous release is verifiably
 running (pointer, drop-ins identical to the rollback snapshot, services as they
 were, exact running commit, healthy selected owner) **and** receiving (the same
-validation) and which preserves the original record as
+validation). It does not turn the failed activation into a success: the record's
+`activation_failure`, `rollback` outcome and any `validation` evidence are left
+exactly as they were, `status` becomes `rolled_back` (the previous release is
+running; the target was never committed) and the verified recovery is recorded
+beside them under `reconciliation` (`release_restored`, `receive_verified`, the
+validation evidence, the SHA-256 of the preserved file and a complete copy of the
+original record). The original is also preserved as
 `current.json.rollback-failed.<time>`:
 
 ```bash
 sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
   --reconcile-rollback
 ```
+
+Try the production launcher on the release that is running, changing nothing
+(no pointer, service, drop-in or record), before relying on it:
+
+```bash
+sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
+  --check-reception
+```
+
+It reports the role the session was given (and whether the legacy fallback was
+used), what was verified about the browser's sandbox and memory cap, and the
+evidence directory. The staged sequence used on the first appliance, with the
+report that explains it, is in `update_manager/docs/headless-validation/`.
 
 Install the validator with the activator (each file is pinned by its own hash):
 

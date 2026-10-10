@@ -18,6 +18,19 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   receiving. Saturn Remote gains `?validation=receive` (viewer role, deny-by-default
   command guard, no saved settings or profile). The Bridge now releases the operator
   role of a session that declares itself a viewer.
+- The headless validation verifies its own containment instead of assuming it. The
+  Bridge must give the session the viewer role; the only exception is a release named
+  in `VALIDATION_LEGACY_BRIDGE_RELEASES` as predating viewer-role enforcement, whose
+  operator-role session is accepted as a recorded legacy fallback (`legacy_fallback_used`,
+  a loud log line, its own condition) and stays receive-only through the injected guard
+  (proven active first), the live wire audit and the unchanged-radio check. The browser's
+  sandbox must be doing its job (no `--no-sandbox`, a seccomp filter confining every
+  renderer, read from `/proc`) and its unit must carry the configured memory cap and no
+  swap (read from systemd); the peak memory is kept. `VALIDATION_VIEWER_ROLE` and
+  `VALIDATION_NO_SANDBOX` no longer exist. `--reconcile-rollback` leaves the failed
+  transaction exactly as it was (failure, rollback outcome, validation evidence) and adds
+  a `reconciliation` object with the verified recovery and a complete copy of the original;
+  it does not turn the original activation into a success.
 - App/Firmware Info now omits historical P2 startup banners when P2 is
   inactive, avoiding a misleading stale image ID while Direct XDMA is active.
 - Add negotiated RX Opus audio over the existing WebSocket media lane for

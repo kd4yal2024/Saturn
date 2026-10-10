@@ -785,9 +785,6 @@ P2APP_PANEL_ENABLED="${SATURN_P2APP_PANEL_ENABLED:-0}"
 TRANSACTION_GROUP="$SERVICE_GROUP"
 # Activation proves reception itself with a temporary receive-only headless browser session; no person needs to keep a browser open.
 VALIDATION_ENABLED="${SATURN_RELEASE_VALIDATION_ENABLED:-1}"
-# preferred: also validate a Bridge that predates viewer-role enforcement (its session is held receive-only by the injected guard, the live
-# wire audit and the unchanged-radio check). Use required once every Bridge you may roll back to enforces the viewer role.
-VALIDATION_VIEWER_ROLE="${SATURN_RELEASE_VALIDATION_VIEWER_ROLE:-preferred}"
 VALIDATOR="$PRIVILEGED_SCRIPTS_DIR/$SATURN_REMOTE_VALIDATOR_NAME"
 VALIDATOR_GUARD="$PRIVILEGED_SCRIPTS_DIR/$SATURN_REMOTE_GUARD_NAME"
 EOF

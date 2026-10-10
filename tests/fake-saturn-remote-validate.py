@@ -8,6 +8,12 @@ run   --control-dir DIR --target-commit C ...   attaches a "receive client" (a m
                                                   SATURN_TEST_VALIDATOR_STOP_FAIL_COMMITS  commits whose cleanup fails
                                                   SATURN_TEST_VALIDATOR_STALL_COMMITS  commits whose session attaches (the owner reports a receive
                                                                                        client) but whose audio never progresses
+                                                  SATURN_TEST_BRIDGE_OPERATOR_COMMITS  commits whose Bridge predates viewer-role enforcement: it
+                                                                                       assigns the operator role. Accepted only under
+                                                                                       --viewer-role legacy-fallback, as the real validator does
+                                                  SATURN_TEST_ISOLATION_FAIL_COMMITS   commits for which the browser's sandbox cannot be verified
+
+The contract the helper must keep: --isolation required and a --viewer-role of required or legacy-fallback on every run.
 wait  --control-dir DIR [--timeout S]           exit 0 on ready; 1 on failure; 3 on timeout; prints one JSON line
 stop  --control-dir DIR [--timeout S]           ends the session; exit 0 only if it finished cleanly; prints one JSON line
 """
@@ -64,7 +70,12 @@ def run(argv):
         with open(ARGS_LOG, "a") as handle:
             handle.write(json.dumps(["run"] + argv) + "\n")
     started = time.time()
-    write_status(directory, state="starting", started_at=started, driver=None, failed=None, exit_code=None)
+    if option(argv, "--isolation") != "required" or option(argv, "--viewer-role") not in ("required", "legacy-fallback") or "--no-sandbox" in argv:
+        print("fake validator: the helper broke the command-line contract: " + " ".join(argv), file=sys.stderr)
+        return 2
+    policy = option(argv, "--viewer-role")
+    write_status(directory, state="starting", started_at=started, driver=None, failed=None, exit_code=None, role_policy=policy,
+                 legacy_fallback_used=False, sandbox_requested=True)
     note(f"validator-run {commit}")
     if listed("SATURN_TEST_VALIDATOR_HANG_COMMITS", commit):
         while not os.path.exists(os.path.join(directory, "stop")):
@@ -91,10 +102,32 @@ def run(argv):
                      conditions={"session.connected_as_viewer": {"ok": True}, "data.audio_frames_arriving": {"ok": False}})
         note(f"validator-failed {commit}")
         return 1
+    operator = listed("SATURN_TEST_BRIDGE_OPERATOR_COMMITS", commit)
+    if operator and policy != "legacy-fallback":
+        write_status(directory, state="failed", exit_code=1, finished_at=time.time(), role="operator", role_enforced_by_bridge=False,
+                     failed={"id": "session.connected_as_viewer", "detail": "connected; the Bridge assigned role 'operator' (a validation session must be a viewer)"},
+                     conditions={"session.connected_as_viewer": {"ok": False}})
+        note(f"validator-refused-operator {commit}")
+        return 1
+    if listed("SATURN_TEST_ISOLATION_FAIL_COMMITS", commit):
+        write_status(directory, state="failed", exit_code=1, finished_at=time.time(),
+                     failed={"id": "browser.sandbox_intact", "detail": "renderer(s) not confined by a seccomp filter: pid 7 Seccomp:0"},
+                     conditions={"browser.sandbox_intact": {"ok": False, "detail": "renderer(s) not confined by a seccomp filter: pid 7 Seccomp:0"}})
+        note(f"validator-unsandboxed {commit}")
+        return 1
     if MARKER:
         open(MARKER, "w").close()
-    write_status(directory, state="ready", driver="native", ready_at=time.time(),
-                 conditions={"session.connected_as_viewer": {"ok": True}, "data.audio_frames_arriving": {"ok": True}, "audio.decoded_progress": {"ok": True}})
+    conditions = {"data.audio_frames_arriving": {"ok": True}, "audio.decoded_progress": {"ok": True},
+                  "browser.sandbox_intact": {"ok": True, "detail": "no process runs with --no-sandbox and all 2 renderer process(es) are confined (Seccomp: 2)"},
+                  "browser.memory_limit_applied": {"ok": True, "detail": "MemoryMax 367001600 bytes (350M) and MemorySwapMax 0 are applied"}}
+    if operator:
+        conditions["session.role_legacy_fallback"] = {"ok": True, "detail": "LEGACY BRIDGE FALLBACK USED: the Bridge assigned the role 'operator'"}
+    else:
+        conditions["session.connected_as_viewer"] = {"ok": True}
+    write_status(directory, state="ready", driver="native", ready_at=time.time(), conditions=conditions,
+                 role="operator" if operator else "viewer", role_enforced_by_bridge=not operator, legacy_fallback_used=operator,
+                 isolation={"processes": [{"pid": 7, "type": "renderer", "seccomp": 2, "no_new_privs": "1"}],
+                            "memory": {"configured": "350M", "max_bytes": "367001600", "swap_max": "0", "current_bytes": "1", "peak_bytes": "2"}})
     note(f"validator-ready {commit}")
     while not os.path.exists(os.path.join(directory, "stop")):
         time.sleep(0.05)

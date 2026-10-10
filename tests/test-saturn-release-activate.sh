@@ -716,7 +716,11 @@ assert value["status"] == "committed" and value["phase"] == "commit"
 target = value["validation"]["target"]
 assert target["final_state"] == "done" and target["exit_code"] == 0 and target["failed"] is None
 assert target["driver"] == "native" and target["ready_at"] and target["finished_at"]
-assert "role" in target and "role_enforced_by_bridge" in target
+assert target["role"] == "viewer" and target["role_enforced_by_bridge"] is True
+assert target["viewer_role_policy"] == "required" and target["legacy_fallback_used"] is False
+assert "Seccomp: 2" in target["isolation_detail"]["browser.sandbox_intact"]
+assert "MemoryMax" in target["isolation_detail"]["browser.memory_limit_applied"]
+assert target["isolation"]["memory"]["peak_bytes"] and target["sandbox_requested"] is True
 assert all(target["conditions"].values()) and "data.audio_frames_arriving" in target["conditions"]
 assert "rollback" not in value
 with open(args_log, encoding="utf-8") as handle:
@@ -728,7 +732,8 @@ def option(flag):
 assert argv[0] == "run"
 assert option("--target-commit") == commit and option("--backend") == "xdma"
 assert option("--expect-rxc1") == "unarmed" and option("--launcher") == "direct"
-assert option("--viewer-role") == "preferred"      # the default: a Bridge that predates viewer enforcement must still validate
+assert option("--viewer-role") == "required"       # a release that is not named as predating viewer-role enforcement must give the viewer role
+assert option("--isolation") == "required"          # the browser's sandbox and memory cap are verified, not assumed
 assert option("--guard-script") == guard
 assert option("--ready-url").endswith("/readyz") and "?" not in option("--ready-url")
 assert option("--owner-unit") == "saturn-bridge.service" and option("--auth-unit") == "saturn-go.service"
@@ -750,6 +755,99 @@ PY
 export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
 [[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
 [[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+
+# --- The viewer role is required. A Bridge that predates viewer-role enforcement (it gives the session the operator role) is accepted only for a
+# release NAMED as such, and then it is recorded as a legacy fallback, never as an ordinary viewer session.
+export SATURN_TEST_BRIDGE_OPERATOR_COMMITS="$STARTUP_COMMIT"
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"                 # not named: the operator role is refused
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+assert_dropins_unchanged
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back" and value["activation_failure"]["phase"] == "receive-validation"
+target = value["validation"]["target"]
+assert target["failed"]["id"] == "session.connected_as_viewer" and "operator" in target["failed"]["detail"]
+assert target["viewer_role_policy"] == "required" and target["legacy_fallback_used"] is False
+assert value["rollback"]["receive_verified"] is True and value["validation"]["rollback"]["legacy_fallback_used"] is False
+PY
+printf 'VALIDATION_LEGACY_BRIDGE_RELEASES="%s"\n' "${STARTUP_COMMIT:0:39}5" >>"$CONFIG_FILE"   # a different release that begins the same way
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"                 # naming is exact: still refused
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+write_config 1
+printf 'VALIDATION_LEGACY_BRIDGE_RELEASES="%s"\n' "$STARTUP_COMMIT" >>"$CONFIG_FILE"      # now it is named
+"$ACTIVATOR" "$STARTUP_COMMIT" >"$TMP_ROOT/last-run.log"
+export SATURN_TEST_RUNNING_COMMIT="$STARTUP_COMMIT"
+grep -Fq "release $STARTUP_COMMIT is named as predating viewer-role enforcement" "$TMP_ROOT/last-run.log"
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "committed"
+target = value["validation"]["target"]
+assert target["viewer_role_policy"] == "legacy-fallback" and target["legacy_fallback_used"] is True
+assert target["role"] == "operator" and target["role_enforced_by_bridge"] is False
+assert "LEGACY BRIDGE FALLBACK USED" in target["isolation_detail"]["session.role_legacy_fallback"]
+assert target["conditions"]["browser.sandbox_intact"] is True and "session.connected_as_viewer" not in target["conditions"]
+PY
+write_config 1
+unset SATURN_TEST_BRIDGE_OPERATOR_COMMITS
+"$ACTIVATOR" "$NEW_COMMIT" >"$TMP_ROOT/last-run.log"                  # back again; the viewer role is required of it
+export SATURN_TEST_RUNNING_COMMIT="$NEW_COMMIT"
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+
+# The fallback is a property of the release whose Bridge is being validated, so it also applies to a rollback TO such a release, and only
+# when that release is named.
+export SATURN_TEST_VALIDATOR_FAIL_COMMITS="$STARTUP_COMMIT" SATURN_TEST_BRIDGE_OPERATOR_COMMITS="$NEW_COMMIT"
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+expect_failure 71 "$ACTIVATOR" "$STARTUP_COMMIT"                      # the restored release is not named: reception on it is NOT verified
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["rollback"]["release_restored"] is True and value["rollback"]["receive_verified"] is False
+assert value["validation"]["rollback"]["failed"]["id"] == "session.connected_as_viewer"
+PY
+printf 'VALIDATION_LEGACY_BRIDGE_RELEASES="%s"\n' "$NEW_COMMIT" >>"$CONFIG_FILE"
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"                 # named: verified, with the fallback recorded
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+python3 - "$TRANSACTION_FILE" "$SATURN_TEST_VALIDATOR_ARGS_LOG" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["rollback"]["release_restored"] is True and value["rollback"]["receive_verified"] is True
+assert value["validation"]["rollback"]["legacy_fallback_used"] is True and value["validation"]["rollback"]["viewer_role_policy"] == "legacy-fallback"
+assert value["validation"]["target"]["legacy_fallback_used"] is False and value["validation"]["target"]["viewer_role_policy"] == "required"
+with open(sys.argv[2], encoding="utf-8") as handle:
+    runs = [json.loads(line) for line in handle if line.strip()]
+assert [run[run.index("--viewer-role") + 1] for run in runs] == ["required", "legacy-fallback"], runs
+PY
+write_config 1
+unset SATURN_TEST_VALIDATOR_FAIL_COMMITS SATURN_TEST_BRIDGE_OPERATOR_COMMITS
+
+# A browser whose sandbox cannot be verified fails the validation like any other condition: the failed condition is kept and the previous
+# release is restored.
+export SATURN_TEST_ISOLATION_FAIL_COMMITS="$STARTUP_COMMIT"
+expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+unset SATURN_TEST_ISOLATION_FAIL_COMMITS
+[[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
+[[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
+python3 - "$TRANSACTION_FILE" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    value = json.load(handle)
+assert value["status"] == "rolled_back" and value["validation"]["target"]["failed"]["id"] == "browser.sandbox_intact"
+assert value["rollback"]["receive_verified"] is True
+PY
 
 # --- Failed media delivery: the session attaches (so the owner's own gate would pass) but the target never delivers decoded audio.
 # Only the validator's verdict can stop the commit. The failed condition is kept exactly; the previous release is restored and its
@@ -869,9 +967,15 @@ sed -i 's/^VALIDATION_EXPECT_RXC1=.*/VALIDATION_EXPECT_RXC1="maybe"/' "$CONFIG_F
 expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
 grep -Fq 'VALIDATION_EXPECT_RXC1' "$TMP_ROOT/last-run.log"
 write_config 1
-printf 'VALIDATION_VIEWER_ROLE="whenever"\n' >>"$CONFIG_FILE"
+for removed in VALIDATION_VIEWER_ROLE=required VALIDATION_NO_SANDBOX=1; do        # the browser's sandbox and the viewer role cannot be configured away
+  printf '%s\n' "${removed%%=*}=\"${removed#*=}\"" >>"$CONFIG_FILE"
+  expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
+  grep -Fq "unsupported activation config key: ${removed%%=*}" "$TMP_ROOT/last-run.log"
+  write_config 1
+done
+printf 'VALIDATION_LEGACY_BRIDGE_RELEASES="%s"\n' "329f3109 abc" >>"$CONFIG_FILE"
 expect_failure nonzero "$ACTIVATOR" "$STARTUP_COMMIT"
-grep -Fq 'VALIDATION_VIEWER_ROLE must be required or preferred' "$TMP_ROOT/last-run.log"
+grep -Fq 'VALIDATION_LEGACY_BRIDGE_RELEASES must list full 40-character commits' "$TMP_ROOT/last-run.log"
 write_config 1
 
 # --- An interrupted helper must not leave a validation session attached to the radio.
@@ -1057,6 +1161,8 @@ expect_failure nonzero "$ACTIVATOR" --validate --reconcile-rollback
 
 # the supported path: verified, then the record is cleared, with the original preserved
 "$ACTIVATOR" --reconcile-rollback >"$TMP_ROOT/last-run.log"
+grep -Fq 'browser sandbox: no process runs with --no-sandbox' "$TMP_ROOT/last-run.log"      # what was established about the browser is reported
+grep -Fq 'the failed activation of' "$TMP_ROOT/last-run.log"
 [[ ! -e "$SATURN_TEST_CLIENT_MARKER" ]]
 [[ "$(readlink -f "$CURRENT_LINK")" == "$RELEASES_ROOT/$NEW_COMMIT" ]]
 assert_dropins_unchanged
@@ -1067,19 +1173,32 @@ import sys
 record, snapshot, previous, target = sys.argv[1:]
 with open(record, encoding="utf-8") as handle:
     value = json.load(handle)
+import hashlib
 assert value["status"] == "rolled_back" and value["phase"] == "reconciled"
+assert value["status"] != "committed" and "did not succeed" in value["message"]
 assert value["target_commit"] == target
-assert value["rollback"]["status"] == "succeeded"
-assert value["rollback"]["release_restored"] is True and value["rollback"]["receive_verified"] is True
-assert value["validation"]["reconcile"]["final_state"] == "done"
-assert value["activation_failure"]["phase"] == "readiness"           # what actually failed is not rewritten
-original = value["reconciliation"]["original_record"]
+with open(snapshot, encoding="utf-8") as handle:
+    before = json.load(handle)
+# The failed activation stays a failed activation: neither its failure nor the outcome recorded for its rollback is rewritten, and nothing
+# in the record claims the rollback succeeded or the target was activated.
+assert value["activation_failure"] == before["activation_failure"] and value["activation_failure"]["phase"] == "readiness"
+assert value["rollback"] == before["rollback"] and value["rollback"]["status"] == "failed"
+assert value["rollback"]["release_restored"] is False and value["rollback"]["receive_verified"] == "not_attempted"
+assert value.get("validation") == before.get("validation")           # the activation's own validation evidence is not replaced
+assert value["target_release"] == before["target_release"] and value["transaction_id"] == before["transaction_id"]
+# The verified recovery is a separate fact, recorded beside the original.
+rec = value["reconciliation"]
+assert rec["release_restored"] is True and rec["receive_verified"] is True and rec["verified_release"] == previous
+assert rec["validation"]["reconcile"]["final_state"] == "done" and "did not succeed" in rec["outcome"]
+assert rec["original_status"] == "rollback_failed" and rec["original_phase"] == before["phase"]
+assert rec["original_transaction"] == before                         # the whole original record is inside the new one
+original = rec["original_record"]
 assert os.path.basename(original).startswith("current.json.rollback-failed.")
 with open(original, encoding="utf-8") as handle:
     kept = json.load(handle)
-with open(snapshot, encoding="utf-8") as handle:
-    before = json.load(handle)
 assert kept == before and kept["status"] == "rollback_failed"       # preserved byte for byte
+with open(original, "rb") as handle:
+    assert rec["original_record_sha256"] == hashlib.sha256(handle.read()).hexdigest()
 assert oct(os.stat(record).st_mode & 0o777) == "0o640"
 PY
 cmp "$TRANSACTION_FILE" "$TRANSACTION_FILE.last-good"
@@ -1100,6 +1219,10 @@ txn_snapshot
 : >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
 "$ACTIVATOR" --check-reception >"$TMP_ROOT/last-run.log"
 grep -Fq "reception verified on $NEW_COMMIT" "$TMP_ROOT/last-run.log"
+grep -Fq 'browser sandbox: no process runs with --no-sandbox' "$TMP_ROOT/last-run.log"
+grep -Fq 'browser memory limit: MemoryMax 367001600 bytes (350M)' "$TMP_ROOT/last-run.log"
+grep -Fq 'session role: viewer (viewer-role policy required, enforced by the Bridge: True)' "$TMP_ROOT/last-run.log"
+if grep -Fq 'LEGACY BRIDGE FALLBACK USED' "$TMP_ROOT/last-run.log"; then printf 'a viewer session was reported as a legacy fallback\n' >&2; exit 1; fi
 cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
 if grep -Eq '^(start|stop|daemon-reload)' "$SYSTEMCTL_LOG"; then
   printf 'a reception check changed service state\n' >&2
@@ -1165,9 +1288,13 @@ cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
 printf '#!/bin/sh\n' >"$FAKE_BIN/systemd-run"
 chmod 0755 "$FAKE_BIN/systemd-run"
 sed -i 's/^VALIDATION_LAUNCHER=.*/VALIDATION_LAUNCHER="systemd"/' "$CONFIG_FILE"
-printf 'VALIDATION_MEMORY_MAX="123M"\nVALIDATION_NO_SANDBOX="1"\nVALIDATION_VIEWER_ROLE="required"\n' >>"$CONFIG_FILE"
+printf 'VALIDATION_MEMORY_MAX="123M"\nVALIDATION_LEGACY_BRIDGE_RELEASES="%s"\n' "$NEW_COMMIT" >>"$CONFIG_FILE"
 : >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+export SATURN_TEST_BRIDGE_OPERATOR_COMMITS="$NEW_COMMIT"
 "$ACTIVATOR" --check-reception >"$TMP_ROOT/last-run.log"
+grep -Fq 'LEGACY BRIDGE FALLBACK USED' "$TMP_ROOT/last-run.log"      # a running release named as predating the fix: said so, loudly
+grep -Fq 'session role: operator (viewer-role policy legacy-fallback, enforced by the Bridge: False)' "$TMP_ROOT/last-run.log"
+unset SATURN_TEST_BRIDGE_OPERATOR_COMMITS
 python3 - "$SATURN_TEST_VALIDATOR_ARGS_LOG" <<'PY'
 import json
 import sys
@@ -1175,8 +1302,8 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     argv = json.loads(handle.readline())
 assert argv[argv.index("--launcher") + 1] == "systemd"
 assert argv[argv.index("--memory-max") + 1] == "123M"
-assert "--no-sandbox" in argv
-assert argv[argv.index("--viewer-role") + 1] == "required"
+assert "--no-sandbox" not in argv and argv[argv.index("--isolation") + 1] == "required"
+assert argv[argv.index("--viewer-role") + 1] == "legacy-fallback"      # the running release is the one named
 PY
 rm "$FAKE_BIN/systemd-run"
 # The systemd launcher cannot be used without systemd-run. (This machine may have a real one, so the PATH is restricted to python3.)
@@ -1199,6 +1326,18 @@ if (
 fi
 grep -Fq 'required command not found: systemd-run' "$TMP_ROOT/last-run.log"
 write_config 1
+
+# The releases named, by default, as predating viewer-role enforcement are the ones installed on the appliance that was found without the
+# fix, including the one a rollback returns to; a new release is not among them.
+(
+  # shellcheck disable=SC1090
+  source "$ACTIVATOR"
+  for named in 329f3109b17428ee04e3f14031da6cf25cb04810 4247ed95e1d49f6e5e0250d982a9790716219489 \
+    91d976635ceb3302d97e9fb2ff996b95aec01d57 f10a087fc9f949b5cf8eb31a781ce74d23512581; do
+    [[ " $VALIDATION_LEGACY_BRIDGE_RELEASES " == *" $named "* ]] || { printf 'the default legacy list omits %s\n' "$named" >&2; exit 1; }
+  done
+  [[ "$(wc -w <<<"$VALIDATION_LEGACY_BRIDGE_RELEASES")" == 4 ]] || { printf 'the default legacy list names more than the installed releases\n' >&2; exit 1; }
+)
 
 # Back to the fixture's earlier conditions for the remaining cases.
 unset SATURN_TEST_VALIDATOR_FAIL_COMMITS SATURN_TEST_REQUIRE_CLIENT

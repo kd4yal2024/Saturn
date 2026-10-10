@@ -68,7 +68,12 @@ VALIDATOR="/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py"
 VALIDATOR_GUARD="/usr/local/lib/saturn-go/scripts/saturn-remote-receive-guard.js"
 VALIDATION_TIMEOUT_SECONDS=150
 VALIDATION_EXPECT_RXC1="any"
-VALIDATION_VIEWER_ROLE="preferred"
+# A validation session must be given the viewer role by the Bridge of the release under test. The one exception is a Bridge that predates
+# viewer-role enforcement (the fix is dfb0b19): for a release NAMED HERE the operator role is accepted as a LEGACY FALLBACK, which is
+# recorded as such, and the session stays receive-only through the injected guard (proven active first), the live wire audit and the
+# unchanged-radio check. A release that is not named here, including every new one, must get the viewer role. These are the releases
+# installed on the appliance that was found without the fix.
+VALIDATION_LEGACY_BRIDGE_RELEASES="329f3109b17428ee04e3f14031da6cf25cb04810 4247ed95e1d49f6e5e0250d982a9790716219489 91d976635ceb3302d97e9fb2ff996b95aec01d57 f10a087fc9f949b5cf8eb31a781ce74d23512581"
 VALIDATION_LAUNCHER="systemd"
 VALIDATION_BROWSER="/usr/bin/chromium"
 VALIDATION_URL="https://127.0.0.1:8443/remote-next?validation=receive&transport=split&display_transport=spectrum"
@@ -76,7 +81,6 @@ VALIDATION_TLS_CERT="/var/lib/saturn-state/remote-tls/saturn-remote.crt"
 VALIDATION_PERF_JSON="/run/saturn-bridge/perf.json"
 VALIDATION_LOG_ROOT="/var/lib/saturn-state/deployments/validation"
 VALIDATION_MEMORY_MAX="350M"
-VALIDATION_NO_SANDBOX=0
 VALIDATION_CONTROL_DIR=""
 VALIDATION_LABEL=""
 VALIDATOR_PID=""
@@ -171,7 +175,7 @@ load_config(){
       VALIDATOR_GUARD) VALIDATOR_GUARD="$value" ;;
       VALIDATION_TIMEOUT_SECONDS) VALIDATION_TIMEOUT_SECONDS="$value" ;;
       VALIDATION_EXPECT_RXC1) VALIDATION_EXPECT_RXC1="$value" ;;
-      VALIDATION_VIEWER_ROLE) VALIDATION_VIEWER_ROLE="$value" ;;
+      VALIDATION_LEGACY_BRIDGE_RELEASES) VALIDATION_LEGACY_BRIDGE_RELEASES="$value" ;;
       VALIDATION_LAUNCHER) VALIDATION_LAUNCHER="$value" ;;
       VALIDATION_BROWSER) VALIDATION_BROWSER="$value" ;;
       VALIDATION_URL) VALIDATION_URL="$value" ;;
@@ -179,14 +183,13 @@ load_config(){
       VALIDATION_PERF_JSON) VALIDATION_PERF_JSON="$value" ;;
       VALIDATION_LOG_ROOT) VALIDATION_LOG_ROOT="$value" ;;
       VALIDATION_MEMORY_MAX) VALIDATION_MEMORY_MAX="$value" ;;
-      VALIDATION_NO_SANDBOX) VALIDATION_NO_SANDBOX="$value" ;;
       *) die "unsupported activation config key: $key" ;;
     esac
   done <"$CONFIG_FILE"
 }
 
 validate_configuration(){
-  local path service
+  local path service legacy
   [[ "$ACTIVATION_ENABLED" == "0" || "$ACTIVATION_ENABLED" == "1" ]] \
     || die "ACTIVATION_ENABLED must be 0 or 1"
   [[ "$P2APP_PANEL_ENABLED" == "0" || "$P2APP_PANEL_ENABLED" == "1" ]] \
@@ -196,15 +199,15 @@ validate_configuration(){
   (( READY_TIMEOUT_SECONDS <= 300 )) || die "READY_TIMEOUT_SECONDS must not exceed 300"
   [[ "$VALIDATION_ENABLED" == "0" || "$VALIDATION_ENABLED" == "1" ]] \
     || die "VALIDATION_ENABLED must be 0 or 1"
-  [[ "$VALIDATION_NO_SANDBOX" == "0" || "$VALIDATION_NO_SANDBOX" == "1" ]] \
-    || die "VALIDATION_NO_SANDBOX must be 0 or 1"
   [[ "$VALIDATION_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
     || die "VALIDATION_TIMEOUT_SECONDS must be a positive integer"
   (( VALIDATION_TIMEOUT_SECONDS <= 600 )) || die "VALIDATION_TIMEOUT_SECONDS must not exceed 600"
   [[ "$VALIDATION_EXPECT_RXC1" =~ ^(any|valid|unarmed|disabled|unsupported|unavailable|partial)$ ]] \
     || die "VALIDATION_EXPECT_RXC1 must be any, valid, unarmed, disabled, unsupported, unavailable or partial"
-  [[ "$VALIDATION_VIEWER_ROLE" == "required" || "$VALIDATION_VIEWER_ROLE" == "preferred" ]] \
-    || die "VALIDATION_VIEWER_ROLE must be required or preferred"
+  for legacy in $VALIDATION_LEGACY_BRIDGE_RELEASES; do
+    [[ "$legacy" =~ ^[0-9a-f]{40}$ ]] \
+      || die "VALIDATION_LEGACY_BRIDGE_RELEASES must list full 40-character commits (found '$legacy')"
+  done
   [[ "$VALIDATION_LAUNCHER" == "systemd" || "$VALIDATION_LAUNCHER" == "direct" ]] \
     || die "VALIDATION_LAUNCHER must be systemd or direct"
   if [[ "$VALIDATION_LAUNCHER" == "direct" ]] && (( EUID == 0 )); then
@@ -410,6 +413,8 @@ value = {}
 if mode != "prepare" and path.exists():
     with path.open(encoding="utf-8") as handle:
         value = json.load(handle)
+reconciling = mode == "reconcile"
+original = json.loads(json.dumps(value)) if reconciling else None
 if mode == "prepare":
     value = {
         "format": "saturn-deployment-transaction",
@@ -458,13 +463,13 @@ value.update({
     "message": message,
     "updated_at": now,
 })
-if failure_phase or failure_command:
+if (failure_phase or failure_command) and not reconciling:
     value["activation_failure"] = {
         "phase": failure_phase,
         "command": failure_command,
         "exit_status": int(failure_status),
     }
-if rollback_status:
+if rollback_status and not reconciling:
     value["rollback"] = {
         "status": rollback_status,
         "message": rollback_message,
@@ -478,10 +483,25 @@ if rollback_status:
     elif receive_verified:
         value["rollback"]["receive_verified"] = receive_verified
 validation = json.loads(validation_json or "{}")
-if validation:
+if validation and not reconciling:
     value["validation"] = validation
-if reconciled_from:
-    value["reconciliation"] = {"at": now, "original_record": reconciled_from}
+if reconciling:
+    # The original activation stays what it was: a failure, with the rollback outcome recorded for it. What is added here is a separate fact:
+    # that the previous release was later found running and was verified receiving.
+    import hashlib
+    value["reconciliation"] = {
+        "at": now,
+        "outcome": "the previous release is running, wired as before the activation, and verified receiving; the activation did not succeed",
+        "verified_release": previous_ready_commit,
+        "release_restored": True,
+        "receive_verified": True,
+        "validation": validation,
+        "original_record": reconciled_from,
+        "original_record_sha256": hashlib.sha256(Path(reconciled_from).read_bytes()).hexdigest(),
+        "original_status": original.get("status"),
+        "original_phase": original.get("phase"),
+        "original_transaction": original,
+    }
 state_plan = json.loads(state_plan_json)
 value["state_compatibility"] = {
     "plan": state_plan,
@@ -838,11 +858,15 @@ validation_preflight(){
 
 # Start a receive-only session in the background. $1 labels the evidence, $2 is the commit that must be running.
 validation_start(){
-  local label="$1" commit="$2" stamp dir expect_rxc1="any"
+  local label="$1" commit="$2" stamp dir expect_rxc1="any" role_policy="required" legacy
   local -a args
   # The intended RXC1 state is a property of the release being installed. The release restored by a rollback (or merely checked) may
   # legitimately report another state, and an older one has no RXC1 at all.
   [[ "$label" == "target" ]] && expect_rxc1="$VALIDATION_EXPECT_RXC1"
+  # The viewer role is required unless this exact release is named as one whose Bridge predates viewer-role enforcement.
+  for legacy in $VALIDATION_LEGACY_BRIDGE_RELEASES; do
+    [[ "$legacy" == "$commit" ]] && role_policy="legacy-fallback"
+  done
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   if (( EUID == 0 )); then
     install -d -m 0750 -o root -g "$TRANSACTION_GROUP" "$VALIDATION_LOG_ROOT" || return 1
@@ -859,14 +883,19 @@ validation_start(){
   VALIDATION_LABEL="$label"
   args=(
     run --control-dir "$dir" --target-commit "$commit" --backend "$SELECTED_BACKEND"
-    --expect-rxc1 "$expect_rxc1" --viewer-role "$VALIDATION_VIEWER_ROLE" --url "$VALIDATION_URL"
+    --expect-rxc1 "$expect_rxc1" --viewer-role "$role_policy" --url "$VALIDATION_URL"
     --ready-url "${SATURN_GO_READY_URL%%\?*}" --perf-url "$P23_PERF_URL" --perf-json "$VALIDATION_PERF_JSON"
     --unit "$BRIDGE_SERVICE" --unit "$SATURN_GO_SERVICE" --owner-unit "$BRIDGE_SERVICE" --auth-unit "$SATURN_GO_SERVICE"
     --release-root "$RELEASES_ROOT" --tls-cert "$VALIDATION_TLS_CERT" --browser "$VALIDATION_BROWSER"
     --launcher "$VALIDATION_LAUNCHER" --memory-max "$VALIDATION_MEMORY_MAX" --guard-script "$VALIDATOR_GUARD"
+    --isolation required
   )
-  (( VALIDATION_NO_SANDBOX )) && args+=(--no-sandbox)
   [[ "$label" != "target" && -z "$PREVIOUS_RELEASE" ]] && args+=(--no-exe-check)
+  if [[ "$role_policy" == "legacy-fallback" ]]; then
+    log "release $commit is named as predating viewer-role enforcement: the operator role is accepted for it as a LEGACY FALLBACK and recorded as such"
+  else
+    log "the Bridge of $commit must give the validation session the viewer role"
+  fi
   log "starting receive validation ($label) for $commit; evidence: $dir"
   python3 "$VALIDATOR" "${args[@]}" >"$dir/validator.out" 2>&1 &
   VALIDATOR_PID=$!
@@ -916,6 +945,14 @@ record[label] = {
     "failed": status.get("failed"),
     "role": status.get("role"),
     "role_enforced_by_bridge": status.get("role_enforced_by_bridge"),
+    "viewer_role_policy": status.get("role_policy"),
+    "legacy_fallback_used": status.get("legacy_fallback_used"),
+    "sandbox_requested": status.get("sandbox_requested"),
+    "isolation": status.get("isolation"),
+    "isolation_detail": {
+        key: (status.get("conditions") or {}).get(key, {}).get("detail")
+        for key in ("browser.sandbox_intact", "browser.memory_limit_applied", "session.role_legacy_fallback")
+    },
     "conditions": {key: value.get("ok") for key, value in sorted((status.get("conditions") or {}).items())},
     "started_at": status.get("started_at"),
     "ready_at": status.get("ready_at"),
@@ -1160,9 +1197,26 @@ check_reception(){
   log "checking reception on the running release $running (nothing is changed)"
   if prove_reception check "$running"; then
     log "reception verified on $running; evidence is under $VALIDATION_LOG_ROOT"
+    log_validation_summary check
   else
     die "reception could not be proven on $running; see the evidence under $VALIDATION_LOG_ROOT"
   fi
+}
+
+# What a finished validation established about the browser's isolation and the role it was given, from the record kept for it.
+log_validation_summary(){
+  python3 - "$VALIDATION_RECORD_JSON" "$1" <<'PY' | while IFS= read -r line; do log "$line"; done
+import json
+import sys
+entry = json.loads(sys.argv[1]).get(sys.argv[2]) or {}
+detail = entry.get("isolation_detail") or {}
+memory = (entry.get("isolation") or {}).get("memory") or {}
+print(f"session role: {entry.get('role')} (viewer-role policy {entry.get('viewer_role_policy')}, enforced by the Bridge: {entry.get('role_enforced_by_bridge')})")
+if entry.get("legacy_fallback_used"):
+    print("LEGACY BRIDGE FALLBACK USED: " + str(detail.get("session.role_legacy_fallback")))
+print(f"browser sandbox: {detail.get('browser.sandbox_intact')}")
+print(f"browser memory limit: {detail.get('browser.memory_limit_applied')}; peak {memory.get('peak_bytes')} bytes")
+PY
 }
 
 # Clear a "rollback_failed" record the supported way: only if the recorded previous release is verifiably the one running, wired as it was,
@@ -1244,12 +1298,10 @@ PY
   backup="$TRANSACTION_FILE.rollback-failed.$stamp"
   cp -a -- "$TRANSACTION_FILE" "$backup" || die "cannot preserve the original record"
   RECONCILED_FROM="$backup"
-  ROLLBACK_RELEASE_RESTORED="true"
-  ROLLBACK_RECEIVE_VERIFIED="true"
-  ROLLBACK_STATUS="succeeded"
-  ROLLBACK_MESSAGE="Reconciled: the previous release is running, wired as before the activation, and verified receiving"
-  write_transaction "rolled_back" "reconciled" "$ROLLBACK_MESSAGE" || die "cannot write the reconciled record"
-  log "reconciled: the record is now rolled_back; the original is preserved at $backup"
+  ROLLBACK_MESSAGE="Recovery verified: the previous release is running, wired as before the activation, and receiving. The activation of $TARGET_COMMIT did not succeed; its failure and the incomplete rollback recorded for it are preserved unchanged"
+  write_transaction "rolled_back" "reconciled" "$ROLLBACK_MESSAGE" reconcile || die "cannot write the reconciled record"
+  log "reconciled: the previous release is verified; the failed activation of $TARGET_COMMIT stays a failed activation; the original record is preserved at $backup and inside the new record"
+  log_validation_summary reconcile
 }
 
 mark_failed(){
