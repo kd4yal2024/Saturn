@@ -11,6 +11,8 @@ build of the proxy and a headless Chrome, all on loopback.
 | `test_check_order.py` | 182 tests: a complete valid ten-window set (the real rehearsal in `fixtures/`) with one alteration at a time, plus collected sets and synthetic live windows. |
 | `owner_reader.py`, `test_owner_reader.py` | The read-only reader of the acquisition owner's cached telemetry, meant to run **on the Pi** (22 tests). |
 | `collector.mjs`, `test_collector.mjs` | The bounded client of that reader: timeouts, respawn, a sidecar that keeps every raw answer (28 tests). |
+| `await_instance.mjs`, `test_await_instance.mjs` | Waits until the owner's own telemetry shows the wanted Bridge instance (a different process, the asked-for TCP_NODELAY and RXC1 status, the planned build and FPGA image, fresh and unchanged for a settle period). 13 tests. |
+| `order_live.sh`, `rehearse_live.sh`, `rehearsal_operator.sh` | The planned order against a live Bridge (the operator restarts; the evidence, not their word, releases each window), and its loopback rehearsal with a stand-in operator. |
 | `window.mjs`, `cdp.mjs` | One window in a real Chrome over the DevTools protocol. Writes its record on success **and on failure**. |
 | `order_lib.sh` | Status bookkeeping: a failed window never stops the run but always fails it. |
 | `order.sh` | The planned order on the local stack, then the checker. Needs the environment listed in its header. |
@@ -28,7 +30,8 @@ the thing measured went badly. A window is INVALID if any of these fails, and is
 - the Bridge's telemetry is fresh at every sample (see "Freshness" below);
 - the browser stayed connected; the wire codec (`opus`), rate, channels and worklet mode did not change; the display
   override matches the arm; the decoded-frame counters agree with the codec (frames of the other codec must not advance);
-- no cumulative counter ever went backwards: the browser's counters and the Bridge's `rows_written` and `outbound_drops`
+- no cumulative counter ever went backwards: the browser's counters and the Bridge's `rows_written` (not `outbound_drops`: the Bridge clears it each time it
+  reports `rx_drops` to its client, so it is a per-report count that goes 1, 1, 0 and is reported as performance, never judged)
   (the Bridge's `*_s` fields are rates and are not monotonic);
 - the **transport is the arm's**: the right render source and Bridge subscriptions at every sample and nothing of the wrong
   kind (rows in a raw IQ window, raw IQ in a rows window, IQ or rows in an audio-only window); arm C has one `iq_stop`, a
@@ -105,8 +108,12 @@ report `NOT COLLECTED`):
 | `collector.pi_clock_tracks_window` | over the window the Pi's clock advanced as far as the page's (within 3 s). Durations only: the two clocks are never compared |
 | `bridge.pi_age_arithmetic`, `bridge.pi_updated_matches_document` | the age is the Pi's read time minus the document's own update time, and that update time is the sample's `updatedAtMs` |
 | `rxc1.pid_matches_owner` | (live) the RXC1 state in `meta.rxc1` was recorded for this owner process (`meta.rxc1.pid` is defined as the owner's pid) |
+| `owner.fpga_image_constant_in_window`, `owner.fpga_image_is_the_planned_one` | the FPGA image the owner reports (`date_code_hex`, firmware major/minor) does not change inside a window, and with `--expect-fpga-build ID` it is that image |
+| `rxc1.telemetry_all_or_none`, `rxc1.status_every_sample_matches_state` | with RXC1 required, every sample carries the owner's own `rx_counter_v31.status`, and it equals the state recorded for the window; a Bridge that does not publish it cannot back a recorded state |
+| `rxc1.state_is_the_planned_one` | with `--expect-rxc1 STATE` (implies `--require-rxc1`), every window records exactly that state (for the comparison with polling on: `valid`) |
 | `collector.sidecar_retained`, `collector.sidecar_seq_unique`, `collector.sidecar_complete` | the sidecar exists, is strict JSON with exactly one start entry, repeats no sequence number, and agrees with the record's own read and failure counts |
 | `collector.sidecar_entry_for_every_sample`, `collector.samples_match_raw_documents` | every sample is backed by a successful raw answer, and every field of the sample equals what that raw answer says |
+| `set.fpga_image_same_in_every_window` | one FPGA image across the set |
 | `set.owner_identity_every_window`, `set.owner_identity_per_bridge_instance`, `set.owner_new_process_per_restart`, `set.owner_same_boot` | all windows are collected or none; one process serves one Bridge instance; each restart is a different process; no reboot during the comparison |
 
 A record the checker cannot interpret (wrong types in `meta`, a URL that is not a string, frames that are not objects, ...) is an INVALID
@@ -114,6 +121,17 @@ window with the reason (`record.meta_types`, `record.interpretable`) and the rep
 
 A failed read inside the window is an error record and makes the window INVALID (`telemetry.every_sample_complete`); a failed
 warm-up read, a respawn or a stray reader event is kept and reported as an `OUTCOME` without invalidating the window.
+
+## The live order, with the operator restarting the Bridge
+
+`order_live.sh` runs the planned order against a live origin. It starts nothing on the host. Where the order needs a different Bridge
+instance it prints the instruction for the operator and **waits** (`await_instance.mjs`) until the owner's own telemetry, read through the bounded
+collector, shows: a different process than the previous instance, alive, with fresh cached telemetry, the requested `tci_nodelay_enabled`,
+`rx_counter_v31.status` equal to the planned RXC1 state, the planned build and FPGA image, the same executable as instance 1, all unchanged
+for a settle period. Only then does a window start, and the window's identity and its `meta.rxc1` record are built from that observation, never typed.
+If an instance never reaches the wanted state the remaining windows are not run and the run fails. The checker then runs with
+`--require-owner --expect-rxc1 STATE --expect-fpga-build ID`. `rehearse_live.sh` runs the whole flow on loopback with a stand-in operator
+that restarts the replay Bridge; the instruction text, the waiting and the checks are the same code.
 
 ## TCP_NODELAY: Bridge-reported evidence first, retained logs second, else UNVERIFIED
 
@@ -172,6 +190,7 @@ environment flag), and `state` must be identical in every window.
 ```sh
 python3 tools/browser-comparison/test_check_order.py
 bash tools/browser-comparison/test_order_status.sh
+node --test tools/browser-comparison/test_await_instance.mjs
 ```
 
 Re-check the preserved rehearsal:

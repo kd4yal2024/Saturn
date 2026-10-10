@@ -119,5 +119,17 @@ else
   echo "node not found: skipping the window.mjs failure test"
 fi
 
+# order_live.sh refuses to start (before it touches Chrome, the host or anything else) without its configuration, with a malformed commit, or into a used directory.
+LIVE_ENV=(SATURN_CMP_LIVE_ORIGIN=https://example.invalid:8443 SATURN_CMP_LOGIN_FILE="$tmp/login" SATURN_CMP_COLLECTOR=local SATURN_CMP_EXPECT_FPGA=53460004)
+echo "user:pw" > "$tmp/login"
+env -i PATH="$PATH" bash "$HERE/order_live.sh" > /dev/null 2>&1
+[ $? -ne 0 ] && ok || fail "order_live.sh must refuse to start with no configuration"
+env -i PATH="$PATH" SATURN_CMP_OUT="$tmp/live_a" "${LIVE_ENV[@]}" SATURN_CMP_EXPECT_BUILD=abc123 bash "$HERE/order_live.sh" > "$tmp/live_a.out" 2>&1
+expect "order_live.sh refuses a commit that is not 40 hex" 2 "$?"
+mkdir -p "$tmp/live_used" && echo x > "$tmp/live_used/file"
+env -i PATH="$PATH" SATURN_CMP_OUT="$tmp/live_used" "${LIVE_ENV[@]}" SATURN_CMP_EXPECT_BUILD=$(printf 'a%.0s' $(seq 1 40)) bash "$HERE/order_live.sh" > "$tmp/live_b.out" 2>&1
+expect "order_live.sh refuses a used output directory" 2 "$?"
+[ ! -e "$tmp/live_a/windows" ] && ok || fail "a refused order_live.sh must leave nothing behind"
+
 echo "$checks checks, $failures failed"
 [ "$failures" -eq 0 ]
