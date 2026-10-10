@@ -1001,7 +1001,8 @@ class UnitTests(unittest.TestCase):
         command = V.build_launch_command("systemd", "/usr/bin/chromium", ["--headless=new"], "saturn-remote-validator-1", 300, "350M")
         text = " ".join(command)
         for needed in ("DynamicUser=yes", "IPAddressDeny=any", "IPAddressAllow=localhost", "MemoryMax=350M", "NoNewPrivileges=yes", "PrivateDevices=yes",
-                       "ProtectHome=yes", "ProtectSystem=strict", "RuntimeMaxSec=330", "--pipe", "--unit=saturn-remote-validator-1", "TasksMax="):
+                       "ProtectHome=yes", "ProtectSystem=strict", "RuntimeMaxSec=330", "--pipe", "--unit=saturn-remote-validator-1", "TasksMax=",
+                       "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK"):
             self.assertIn(needed, text)
         self.assertEqual(command[0], "systemd-run")
         self.assertNotIn("User=root", text)

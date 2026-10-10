@@ -266,7 +266,7 @@ def build_launch_command(mode: str, browser: str, flags: list[str], unit: str, m
     properties = [
         "DynamicUser=yes", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectSystem=strict", "ProtectHome=yes", "NoNewPrivileges=yes",
         "ProtectKernelTunables=yes", "ProtectControlGroups=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes",
-        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6", "IPAddressDeny=any", "IPAddressAllow=localhost",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "IPAddressDeny=any", "IPAddressAllow=localhost",
         f"MemoryMax={memory_max}", "MemorySwapMax=0", "TasksMax=300", "CPUWeight=20", "Nice=10", "IOSchedulingClass=idle",
         f"RuntimeMaxSec={int(max_seconds) + 30}", "Environment=HOME=/tmp", "Environment=PULSE_SERVER=none", "WorkingDirectory=/tmp",
     ]
