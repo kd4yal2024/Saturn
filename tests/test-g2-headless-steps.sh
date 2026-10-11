@@ -39,6 +39,7 @@ printf '%s\n' "$A" >"$HOME/.g2_headless_pin"
 out="$(PIN=$B run check)"; [[ "$out" == *"PIN=$B but the build stage pinned $A"* ]] || fail "a different PIN was accepted: $out"
 out="$(PIN=$B run build)"; [[ "$out" == *"says $A"* ]] || fail "build re-pinned silently: $out"
 [[ "$(cat "$HOME/.g2_headless_pin")" == "$A" ]] || fail "the pin changed"
+out="$(run check bogus)"; [[ "$out" == *"must look like 500M"* ]] || fail "the real entry point did not hand the size to the check stage: $out"
 
 # --- the release manifest must name the pinned commit, as a clean tree, for the release and every component
 python3 - "$TMP" "$A" "$B" <<'PY'
@@ -189,10 +190,10 @@ import sys
 REQUIRED = ["release.running", "owner.fresh_telemetry", "page.loaded", "guard.active", "session.started", "data.display_fresh",
             "data.audio_frames_arriving", "audio.decoded_progress", "audio.context_running", "audio.no_decode_errors",
             "owner.fresh_telemetry_with_session", "owner.session_registered", "owner.gate_equivalent", "radio.unchanged",
-            "wire.only_allowed_commands", "page.no_fatal_errors", "browser.sandbox_intact", "browser.memory_limit_applied",
+            "wire.only_allowed_commands", "page.no_fatal_errors", "host.memory_headroom", "browser.sandbox_intact", "browser.memory_limit_applied",
             "cleanup.browser_gone", "cleanup.client_released"]
 good = {
-    "state": "done", "driver": "native", "role": "viewer", "role_policy": "required", "legacy_fallback_used": False,
+    "state": "done", "driver": "native", "role": "viewer", "role_policy": "required", "legacy_fallback_used": False, "memory_enforcement": "cgroup",
     "conditions": {k: {"ok": True, "detail": k} for k in REQUIRED + ["session.connected_as_viewer"]},
     "isolation": {"memory": {"max_bytes": "367001600", "peak_bytes": "150000000"}},
 }
@@ -222,6 +223,32 @@ cases["fallback-unproven"] = fallback_unproven
 fallback_missing = copy.deepcopy(fallback)
 del fallback_missing["conditions"]["session.role_legacy_fallback"]
 cases["fallback-missing"] = fallback_missing
+# the Raspberry Pi image has no memory controller: the validator's watchdog is the cap, and must say so and show the browser stayed within it
+watchdog = copy.deepcopy(good)
+watchdog["memory_enforcement"] = "watchdog"
+watchdog["conditions"]["browser.memory_within_cap"] = {"ok": True, "detail": "the browser's peak was 160 MiB"}
+watchdog["isolation"] = {"memory": {"max_bytes": "infinity", "cap_bytes": 367001600, "peak_bytes": "167772160", "peak_source": "validator sampling (proportional set size)",
+                                    "enforcement": "watchdog"}}
+cases["watchdog"] = watchdog
+watchdog_exceeded = copy.deepcopy(watchdog)
+watchdog_exceeded["conditions"]["browser.memory_within_cap"]["ok"] = False
+cases["watchdog-exceeded"] = watchdog_exceeded
+watchdog_unproven = copy.deepcopy(watchdog)
+del watchdog_unproven["conditions"]["browser.memory_within_cap"]
+cases["watchdog-within-cap-missing"] = watchdog_unproven
+unstated = copy.deepcopy(good)
+del unstated["memory_enforcement"]
+cases["enforcement-unstated"] = unstated
+odd = copy.deepcopy(good)
+odd["memory_enforcement"] = "off"
+cases["enforcement-off"] = odd
+diagnosed = copy.deepcopy(good)
+diagnosed["diagnostics"] = {"summary": {"samples": 40, "browser_pss_mb": {"max": 210.5, "mean": 180.0}, "browser_cpu_pct": {"max": 310.0, "mean": 250.0},
+                                        "host_iowait_pct": {"max": 40.0, "mean": 27.0}, "swap_in_pages_total": 1200, "swap_out_pages_total": 90,
+                                        "page_main_thread_busy": 0.93, "pss_by_process_type_mb_max": {"renderer": {"processes": 3, "pss_mb": 140.5}, "gpu-process": {"processes": 1, "pss_mb": 60.0}},
+                                        "owner_counters": {"iq_tci_drop_queue_overflow_total": {"first": 1266, "last": 2900, "delta": 1634}}}}
+diagnosed["last_snapshot"] = {"opusFrames": 457, "decodedFrames": 12, "audioFramesPlayed": 1, "lateDrops": 160, "audioSeqGaps": 19}
+cases["diagnosed"] = diagnosed
 no_peak = copy.deepcopy(good)
 no_peak["isolation"] = {}
 cases["no-peak-reported"] = no_peak          # informational: still proven
@@ -236,12 +263,24 @@ verdict() { bash -c 'f="$1"; shift; source "$SCRIPT"; check_evidence "$f"' _ "$T
 export SCRIPT
 while IFS= read -r name; do
   case "$name" in
-    good|fallback|no-peak-reported) verdict "$name" || fail "the evidence '$name' was refused: $(cat "$TMP/verdict.out")" ;;
+    good|fallback|no-peak-reported|watchdog|diagnosed) verdict "$name" || fail "the evidence '$name' was refused: $(cat "$TMP/verdict.out")" ;;
     *) if verdict "$name"; then fail "the evidence '$name' was accepted as proof"; fi ;;
   esac
 done <"$TMP/cases.txt"
 verdict fallback
 grep -Fq 'LEGACY BRIDGE FALLBACK USED' "$TMP/verdict.out" || fail "a fallback session was not announced"
+verdict watchdog
+grep -Fq "MEMORY CAP ENFORCED BY THE VALIDATOR'S WATCHDOG" "$TMP/verdict.out" || fail "a watchdog-enforced cap was not announced as such: $(cat "$TMP/verdict.out")"
+grep -Fq 'memory: peak 160 MiB of a 350 MiB cap' "$TMP/verdict.out" || fail "the watchdog's measured peak was not reported: $(cat "$TMP/verdict.out")"
+grep -Fq 'peak from validator sampling' "$TMP/verdict.out" || fail "the source of the peak was not named: $(cat "$TMP/verdict.out")"
+verdict good
+if grep -Fq 'WATCHDOG' "$TMP/verdict.out"; then fail "a kernel-enforced cap was announced as a watchdog"; fi
+grep -Fq 'memory cap enforced by the kernel' "$TMP/verdict.out" || fail "a kernel-enforced cap was not announced as such"
+verdict diagnosed
+for want in 'browser memory (Pss) MiB max 210.5 mean 180.0' 'host I/O wait % max 40.0 mean 27.0' 'swap pages in/out 1200/90' 'page main thread busy 0.93' \
+            'owner iq_tci_drop_queue_overflow_total: 1266 -> 2900 (+1634)' 'renderer x3 140.5, gpu-process x1 60.0' 'decodedFrames 12' 'lateDrops 160' 'audioSeqGaps 19'; do
+  grep -Fq "$want" "$TMP/verdict.out" || fail "the diagnostics did not show '$want': $(cat "$TMP/verdict.out")"
+done
 verdict good
 grep -Fq 'memory: peak 143 MiB of a 350 MiB cap' "$TMP/verdict.out" || fail "the memory peak was not reported: $(cat "$TMP/verdict.out")"
 if grep -Fq 'LEGACY' "$TMP/verdict.out"; then fail "an ordinary viewer session was announced as a fallback"; fi
@@ -255,10 +294,11 @@ check_stage() {
     H="$TMP/helpers"; mkdir -p "$H"; : >"$H/saturn-remote-validate.py"; chmod +x "$H/saturn-remote-validate.py"
     PERF="$TMP/perf.json"; EVIDENCE_ROOT="$TMP/evidence"; LEFTOVER_DIRS=("$TMP/leftover"); SETTLE_SECONDS=0
     ss() { echo "State Recv-Q Send-Q Local Peer"; }
-    confirm() { :; }
+    confirm() { echo "$1"; }
     systemctl() { printf "%s" "${UNITS_LEFT:-}"; }
     pgrep() { printf "%s" "${PROCS_LEFT:-}"; return 0; }
     sudo() {
+      printf "%s\n" "$*" >"$TMP/check-sudo.args"
       if [ "$STATUS_FILE" != none ]; then
         mkdir -p "$EVIDENCE_ROOT/20261010T000000Z-check-xxxxxx"
         cp "$STATUS_FILE" "$EVIDENCE_ROOT/20261010T000000Z-check-xxxxxx/status.json"
@@ -267,7 +307,7 @@ check_stage() {
       [ -z "${LEFTOVER:-}" ] || mkdir -p "$TMP/leftover/$LEFTOVER"
       return "${HELPER_RC:-0}"
     }
-    stage_check
+    stage_check ${CHECK_ARG:-}
   ' _ >"$TMP/stage.out" 2>&1
 }
 export TMP SCRIPT STATUS_FILE="$TMP/status-for-check.json"
@@ -279,7 +319,15 @@ fresh_host() {
 }
 fresh_host
 check_stage || fail "a complete check was refused: $(cat "$TMP/stage.out")"
-grep -Fq 'OK: reception, sandbox, memory cap and cleanup are all verified' "$TMP/stage.out" || fail "no verdict printed"
+grep -Fq "OK: reception, sandbox, memory cap and cleanup are all verified" "$TMP/stage.out" || fail "no verdict printed: $(tail -12 "$TMP/stage.out")"
+[[ "$(cat "$TMP/check-sudo.args")" == *"saturn-release-activate-root.sh --check-reception" && "$(cat "$TMP/check-sudo.args")" != *"--memory-max"* ]] || fail "a plain check passed a memory cap: $(cat "$TMP/check-sudo.args")"
+CHECK_ARG=500M check_stage || fail "a measuring check was refused: $(cat "$TMP/stage.out")"
+[[ "$(cat "$TMP/check-sudo.args")" == *"saturn-release-activate-root.sh --check-reception --memory-max 500M" ]] || fail "the measuring cap was not passed to the helper: $(cat "$TMP/check-sudo.args")"
+grep -Fq 'browser memory cap 500M for this check' "$TMP/stage.out" || fail "the confirmation did not say which cap was in force"
+for bad in bogus 500 0M -1M 500MB; do
+  if CHECK_ARG=$bad check_stage; then fail "a measuring cap of '$bad' was accepted"; fi
+  grep -Fq 'must look like 500M' "$TMP/stage.out" || fail "'$bad' was refused without saying why: $(cat "$TMP/stage.out")"
+done
 refused() {  # $1 = what was wrong
   if check_stage; then fail "$1 was accepted as a complete check"; fi
   grep -Fq 'NOT PROVEN' "$TMP/stage.out" || fail "$1: no NOT PROVEN verdict: $(tail -5 "$TMP/stage.out")"

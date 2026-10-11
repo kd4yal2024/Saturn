@@ -31,6 +31,18 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   transaction exactly as it was (failure, rollback outcome, validation evidence) and adds
   a `reconciliation` object with the verified recovery and a complete copy of the original;
   it does not turn the original activation into a success.
+- The headless validation is sized for a small appliance. The page runs in a background
+  tab and the audio goes to Chrome's own fake output (measured on real Chrome: about 350%
+  of a core down to about 18%, with the same frames received and played); the browser
+  starts only if the host has `MemAvailable` for the memory cap plus a margin
+  (`host.memory_headroom`). Where the kernel has no memory controller (the Raspberry Pi
+  image boots with `cgroup_disable=memory`) the validator itself is the cap: it reads the
+  browser's proportional memory four times a second and stops the unit above the cap,
+  recorded as `memory_enforcement: watchdog` and never silent; the unit is also the OOM
+  killer's first choice (`OOMScoreAdjust=1000`). Every independent condition is read even
+  after one fails, and the evidence keeps where the resources went (memory by process type,
+  CPU, I/O wait, swap, the page's main-thread load, the Bridge's drop counters).
+  `--check-reception --memory-max SIZE` measures with another cap for one diagnostic check.
 - App/Firmware Info now omits historical P2 startup banners when P2 is
   inactive, avoiding a misleading stale image ID while Direct XDMA is active.
 - Add negotiated RX Opus audio over the existing WebSocket media lane for

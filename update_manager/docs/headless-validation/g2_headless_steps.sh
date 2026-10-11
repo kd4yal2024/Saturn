@@ -9,8 +9,9 @@
 #     bash ~/g2_headless_steps.sh validate    the finished bundle: manifest check (no sudo) and the installer's --validate (sudo)
 #     bash ~/g2_headless_steps.sh install     installs the release INACTIVE and validates the installed copy. Changes /opt/saturn/releases only
 #     bash ~/g2_headless_steps.sh helper      installs the NEW activation helper + receive validator + guard script, each pinned by SHA-256
-#     bash ~/g2_headless_steps.sh check       proves reception on the release that is RUNNING NOW with the production launcher, verifies the
-#                                             browser's sandbox and memory cap, and verifies the cleanup from the host. Changes nothing
+#     bash ~/g2_headless_steps.sh check [SIZE] proves reception on the release that is RUNNING NOW with the production launcher, verifies the
+#                                             browser's sandbox and memory cap, and verifies the cleanup from the host. Changes nothing.
+#                                             SIZE (for example 500M) measures with another browser memory cap for this one check only
 #     bash ~/g2_headless_steps.sh reconcile   records the verified recovery on the stuck 'rollback_failed' record, only if the previous
 #                                             release is verifiably running AND receiving. The failed activation stays a failed activation
 #     bash ~/g2_headless_steps.sh failure     OPTIONAL exercise of failure + rollback: an activation that is meant to fail validation, then roll back
@@ -26,8 +27,8 @@ set -u
 # A non-interactive shell (ssh pi@g2 'command') has no Rust toolchain on its PATH; the builder needs cargo.
 case ":$PATH:" in *":$HOME/.cargo/bin:"*) ;; *) PATH="$HOME/.cargo/bin:$PATH" ;; esac
 BRANCH=goldmarsh/headless-validation
-ACT_SHA=2e3b8a98733eb82cc1ce4190a9550feb6cdc09be9e5419980da71341150bea9b
-VAL_SHA=03c7228a2c4ce4f9561dad092261a65337309504d8065861ad9b552580a6c21f
+ACT_SHA=70d01fd3d36ab2dfbe3e2dba34d4ffbad054f52bceaab21e41fe9302d897bc2c
+VAL_SHA=1eb4307b8a8316a7a77fd0bc5ae830d45fed53658e7c8e3246ba849436142b50
 GUARD_SHA=ff9200109db6dc01c524719fde03aa637eb536114322beea91475e6eedd1f2b7
 INSTALLER_SHA=6a094523d810f2058bcc22fa7c5d80a401d78e5760b145bef98451a7459f2b67
 PREV=329f3109b17428ee04e3f14031da6cf25cb04810
@@ -201,23 +202,49 @@ check_evidence() {  # $1 = status.json
 import json, sys
 d = json.load(open(sys.argv[1]))
 c = d.get("conditions") or {}
+mem = (d.get("isolation") or {}).get("memory") or {}
+enforcement = d.get("memory_enforcement")
 required = ["release.running", "owner.fresh_telemetry", "page.loaded", "guard.active", "session.started", "data.display_fresh", "data.audio_frames_arriving",
             "audio.decoded_progress", "audio.context_running", "audio.no_decode_errors", "owner.fresh_telemetry_with_session", "owner.session_registered",
-            "owner.gate_equivalent", "radio.unchanged", "wire.only_allowed_commands", "page.no_fatal_errors", "browser.sandbox_intact",
-            "browser.memory_limit_applied", "cleanup.browser_gone", "cleanup.client_released"]
+            "owner.gate_equivalent", "radio.unchanged", "wire.only_allowed_commands", "page.no_fatal_errors", "host.memory_headroom",
+            "browser.sandbox_intact", "browser.memory_limit_applied", "cleanup.browser_gone", "cleanup.client_released"]
+if enforcement == "watchdog":
+    required.append("browser.memory_within_cap")      # the validator is the cap here, so that the browser stayed within it is a condition of its own
 role = d.get("role"); policy = d.get("role_policy"); fallback = d.get("legacy_fallback_used")
 role_condition = "session.role_legacy_fallback" if fallback else "session.connected_as_viewer"
 bad = [k for k in required + [role_condition] if not (c.get(k) or {}).get("ok")]
+if enforcement not in ("cgroup", "watchdog"):
+    bad.append("memory_enforcement is not stated (cgroup or watchdog)")
 print(f"  state {d.get('state')}  driver {d.get('driver')}  role {role}  policy {policy}")
-for k in ("data.display_fresh", "data.audio_frames_arriving", "audio.decoded_progress", "audio.context_running", "owner.gate_equivalent", "radio.unchanged",
-          "browser.sandbox_intact", "browser.memory_limit_applied", "cleanup.browser_gone", "cleanup.client_released"):
-    print("  " + ("ok  " if (c.get(k) or {}).get("ok") else "FAIL") + " " + k + ": " + str((c.get(k) or {}).get("detail"))[:170])
-mem = (d.get("isolation") or {}).get("memory") or {}
+for k in ("host.memory_headroom", "data.display_fresh", "data.audio_frames_arriving", "audio.decoded_progress", "audio.context_running", "owner.gate_equivalent",
+          "radio.unchanged", "browser.sandbox_intact", "browser.memory_limit_applied", "browser.memory_within_cap", "cleanup.browser_gone", "cleanup.client_released"):
+    if k in c or k in required:
+        print("  " + ("ok  " if (c.get(k) or {}).get("ok") else "FAIL") + " " + k + ": " + str((c.get(k) or {}).get("detail"))[:170])
 try:
-    peak, cap = int(mem.get("peak_bytes")), int(mem.get("max_bytes"))
-    print(f"  memory: peak {peak/1048576:.0f} MiB of a {cap/1048576:.0f} MiB cap ({100*peak/cap:.0f}%)")
+    peak, cap = int(mem.get("peak_bytes")), int(mem.get("cap_bytes") or mem.get("max_bytes"))
+    print(f"  memory: peak {peak/1048576:.0f} MiB of a {cap/1048576:.0f} MiB cap ({100*peak/cap:.0f}%), peak from {mem.get('peak_source', 'the kernel')}")
 except (TypeError, ValueError):
     print(f"  memory: peak not reported ({mem})")
+if enforcement == "watchdog":
+    print("  MEMORY CAP ENFORCED BY THE VALIDATOR'S WATCHDOG, not the kernel (no memory cgroup controller on this host): the unit is stopped above the cap")
+elif enforcement == "cgroup":
+    print("  memory cap enforced by the kernel (cgroup MemoryMax, no swap)")
+s = (d.get("diagnostics") or {}).get("summary") or {}
+if s:
+    def rng(k): return f"max {s[k]['max']} mean {s[k]['mean']}" if isinstance(s.get(k), dict) else "n/a"
+    print(f"  resources over {s.get('samples')} one-second samples: browser memory (Pss) MiB {rng('browser_pss_mb')}; browser CPU % of one core {rng('browser_cpu_pct')};")
+    print(f"    host busy % {rng('host_busy_pct')}; host I/O wait % {rng('host_iowait_pct')}; load {rng('load1')}; available memory min {s.get('mem_available_mb_min', 'n/a')} MiB;")
+    print(f"    swap pages in/out {s.get('swap_in_pages_total', 'n/a')}/{s.get('swap_out_pages_total', 'n/a')}; browser major faults {s.get('browser_major_faults_total', 'n/a')};"
+          f" page main thread busy {s.get('page_main_thread_busy', 'n/a')}, script {s.get('page_script_busy', 'n/a')}")
+    kinds = s.get("pss_by_process_type_mb_max") or {}
+    if kinds:
+        print("    memory by process type (most each reached, MiB Pss): " + ", ".join(f"{k} x{v['processes']} {v['pss_mb']}" for k, v in kinds.items()))
+    for key, counter in sorted((s.get("owner_counters") or {}).items()):
+        print(f"    owner {key}: {counter['first']} -> {counter['last']} (+{counter['delta']})")
+last = d.get("last_snapshot") or {}
+if last:
+    print("  page counters: " + ", ".join(f"{k} {last[k]}" for k in ("opusFrames", "decodedFrames", "decoderFramesOutput", "audioFramesPlayed", "lateDrops", "audioSeqGaps",
+                                                                   "underruns", "queuedMs", "decodeErrors") if k in last))
 if fallback:
     print("  LEGACY BRIDGE FALLBACK USED (expected only for a release that predates the viewer-role fix): " + str((c.get(role_condition) or {}).get("detail"))[:200])
 elif role != "viewer":
@@ -228,12 +255,15 @@ PYEOF
 }
 
 stage_check() {
+  local cap="${1:-}" helper_args=(--check-reception)
+  [[ -z "$cap" || "$cap" =~ ^[1-9][0-9]*[MG]$ ]] || die "the browser memory cap for a measuring check must look like 500M"
+  [ -z "$cap" ] || helper_args+=(--memory-max "$cap")
   [ -x "$H/saturn-remote-validate.py" ] || die "run the helper stage first"
   [ "$(perf_field "d.get('backend')")" = xdma ] || die "the Bridge must be on the xdma backend (it reports '$(perf_field "d.get('backend')")')"
   need_no_browsers
-  confirm "About to attach a temporary RECEIVE-ONLY headless browser session to the running release for about 15 seconds. It changes nothing: no tuning, no setting, no service restart, no record."
+  confirm "About to attach a temporary RECEIVE-ONLY headless browser session to the running release for about 15 seconds${cap:+ (browser memory cap $cap for this check)}. It changes nothing: no tuning, no setting, no service restart, no record."
   before_conn=$(perf_field "m.get('connections')"); say "before: connections $before_conn, validator units: $(systemctl list-units --all --plain --no-legend 'saturn-remote-validator-*' | wc -l)"
-  sudo "$H/saturn-release-activate-root.sh" --check-reception; rc=$?
+  sudo "$H/saturn-release-activate-root.sh" "${helper_args[@]}"; rc=$?
   say "result of the helper (exit $rc)"; ev=$(latest_evidence); echo "evidence: $ev"
   proven=1
   if [ -n "$ev" ] && [ -r "$ev/status.json" ]; then check_evidence "$ev/status.json" || proven=0; else echo "  cannot read status.json"; proven=0; fi
@@ -336,7 +366,7 @@ case "${1:-}" in
   validate) stage_validate ;;
   install) stage_install ;;
   helper) stage_helper ;;
-  check) stage_check ;;
+  check) stage_check "${2:-}" ;;
   reconcile) stage_reconcile ;;
   failure) stage_failure ;;
   activate) stage_activate ;;

@@ -1,8 +1,9 @@
 # Automatic headless Saturn Remote validation in the supported update process
 
-GoldMarsh, 2026-10-10. Branch `goldmarsh/headless-validation`, built on `f10a087` (Stage A) and the live-driver tools.
-FPGA 1.31.002 / build ID `0x53460004` and the XDMA kernel driver are untouched. **Nothing on the G2 has been changed by this work**: it is still on release
-`329f3109`, with the `rollback_failed` record exactly as the first activation left it.
+GoldMarsh, 2026-10-10 and 11. Branch `goldmarsh/headless-validation`, built on `f10a087` (Stage A) and the live-driver tools.
+FPGA 1.31.002 / build ID `0x53460004` and the XDMA kernel driver are untouched. **The G2 is still on release `329f3109`** with the `rollback_failed` record exactly as the first
+activation left it; an earlier build of this branch is installed *inactive* beside it and the new activation helper, validator and guard are installed with activation still
+disabled. The first hardware `check` has been run (read-only) and failed, for reasons described next; this report describes the source that answers it.
 
 This file and `g2_headless_steps.sh` live in the source tree (`update_manager/docs/headless-validation/`) so that nothing depends on a scratch directory. The commit
 under test is the branch head; the hand-off message gives its full SHA, and the procedure refuses to build or run anything else (`PIN=<that SHA>`).
@@ -12,6 +13,54 @@ under test is the branch head; the hand-off message gives its full SHA, and the 
 The activation gate needs an active receive client at the owner (`state.sdr_active`), which exists only while something is receiving. With every browser closed nothing
 attached one, so the readiness check failed, and so did the rollback's identical check. The previous release was in fact restored (proved from the helper's own nine
 conditions); the helper recorded `rollback_failed` and exit 70 because "restored" and "receiving" were one check.
+
+## What the first hardware check found (G2, release `329f3109`, all browsers closed)
+
+The check ran the real validator in its locked-down transient unit on the Pi. It did **not** pass, and the evidence (kept under `/var/lib/saturn-state/deployments/validation/`) says why:
+
+* **The kernel cannot apply the memory cap.** `/proc/cmdline` has `cgroup_disable=memory`, `cgroup.controllers` lists only `cpuset cpu io pids`, so systemd accepts `MemoryMax=350M` and
+  `MemorySwapMax=0` and enforces neither (`MemoryCurrent` reads `[not set]`). The cap "as designed" does not exist on this host; the validator would have reported exactly that once it
+  got as far as reading it.
+* **The audio did not play.** Display data and 457 Opus frames arrived, no decode error, the AudioContext ran, but the old page played 1 decoded frame in 45 s (30 needed), dropped
+  160 as late (its decoder output is discarded if it arrives more than 250 ms after the packet) and counted 19 sequence gaps (each of which tears down and rebuilds its decoder).
+  The Bridge's raw-IQ delivery queue (capacity 4 per client) overflowed during the session. A browser that cannot keep up looks exactly like this.
+* **Nothing after the first failed condition had been read** (sandbox, memory, owner, wire, radio all showed "none"): the run stopped at the first failure.
+
+What I did about each, measured on real Chrome with the real page, Bridge and proxy (the x86 numbers are not the Pi's, but the relative effects are what decided it):
+
+| | processes' memory (Pss) | browser CPU (cores x 100%) |
+|---|---|---|
+| as run on the G2 (page in front, `--alsa-output-device=null`) | about 625 MiB | about 350% |
+| page in a background tab | 576 MiB | 153% |
+| Chrome's own fake audio output (`--disable-audio-output`) | 607 MiB | 220% |
+| **both** (what the validator now does) | 577 MiB | **17.5%** |
+| both, plus `--enable-low-end-device-mode --disable-software-rasterizer --num-raster-threads=1` | **509 MiB** | 18.6% |
+
+The CPU was the audio: Chrome's WebAudio render thread and its output thread (about 50% and 30% of a core each) rendering against an ALSA "null" device that is not paced by a timer,
+plus painting a page nobody can see. Nothing the validation proves is lost: in every variant the same Opus frames arrive and the same number are played, on the new page and on the old
+one. The viewport size, the old page's WAN transport, one renderer process, and site isolation settings did not matter, and `--no-zygote` breaks the sandbox (rejected; a test now forbids
+any switch that weakens it for the sake of memory). **Memory does not go below about 500 MiB on this Chrome under any switch**: the page's own JavaScript heap is 7 MiB; the rest is
+Chrome's per-process baseline (five renderer processes about 215 MiB, the browser process about 120 MiB, utilities about 95 MiB, the GPU process about 67 MiB, zygotes about 27 MiB).
+
+So, in the source:
+
+1. The validator runs the page in a **background tab** and uses Chrome's **fake audio output**, with the three lean-rendering switches; the evidence records `page_visibility`.
+2. Where the kernel has no memory controller the **validator is the cap**: a thread reads the browser's proportional memory four times a second and stops its unit above the cap, writing the
+   failed condition `browser.memory_within_cap` *before* it acts so nothing the dying browser causes is reported first. This is named in the evidence (`memory_enforcement: watchdog`, and
+   `MEMORY CAP ENFORCED BY THE VALIDATOR'S WATCHDOG, not by the kernel`), never silent. With a memory controller the kernel's `MemoryMax` is used and checked as before. The unit also gets
+   `OOMScoreAdjust=1000`, so if the host does run out of memory the browser is the OOM killer's first choice, not the radio.
+3. **No browser is started unless the host has the memory free**: `MemAvailable` must cover the cap plus 32 MiB (`host.memory_headroom`), so a validation can never push the radio's
+   processes into swap. On the Pi (about 580 MiB available) that bounds a measuring cap to roughly 540 MiB.
+4. **Every independent condition is read even after one fails**, so one run reports the sandbox, the memory cap, the owner's view, the wire audit and the radio whatever the audio did. The first
+   failure is still the one reported as the failed condition.
+5. **The evidence says where the resources went**: once a second, the browser's memory by process type, CPU, major faults, the host's CPU and I/O wait, swap traffic and available memory, the
+   page's own main-thread load, the legacy page's decoder counters, and the Bridge's drop counters. `check` prints a summary of it, pass or fail.
+6. `check [SIZE]` (for example `check 500M`) measures with another browser memory cap for that one check (`--check-reception --memory-max`, refused with anything else, never stored).
+
+**What this does not settle, and I have not hidden:** whether this Chromium fits the Pi. Its memory could not be driven below about 500 MiB on x86 and the Pi has about 580 MiB available
+beside the running radio. The next `check` measures it. If it does not fit, the options are a larger cap with the headroom check (the radio's processes are never the ones that pay), enabling
+the memory cgroup controller in the Pi's kernel command line (`cgroup_enable=memory cgroup_memory=1`, which needs a reboot and is the owner's call), or a validation client that is not a full
+browser (a design change, also the owner's call).
 
 ## What the updater does now
 
@@ -26,7 +75,7 @@ passes only if all of this holds (a connected socket or an HTTP 200 proves nothi
 * the RXC1 status is the intended one (target only); frequency, rate, DDC, ADC and TX flags are unchanged;
 * every frame that left the browser is on the allowlist, judged live from outside the page;
 * **the viewer role was given by the Bridge, or the release is one of the named legacy releases below;**
-* **the browser's sandbox is in force and its unit carries the memory cap, read from the host (below);**
+* **the host has the memory free for the browser before it starts, and the browser's sandbox is in force and its memory cap is enforced (by the kernel, or by the named watchdog), read from the host (below);**
 * afterwards the browser, its profile and the owner connection are gone.
 
 The same validation runs after a rollback, and the transaction record reports `release_restored` separately from `receive_verified`. Exit 70 = the previous release
@@ -72,11 +121,11 @@ the pinned commit as a clean tree, with every component built from it, and `stat
 
 | what | result |
 |---|---|
-| validator tests (fake DevTools browser + fake owner + fake unit/cgroup/proc) | 110 pass; 27 mutations of the new rules (sandbox, memory, role policy, cmdline reading, peak, defaults): all killed after closing two gaps (an unreachable guard re-check was deleted; the fake systemctl now records which unit was queried) |
-| activation helper tests (incident control; success with nobody connected; stalled audio; rollback with and without verified reception; policy by release; isolation failure; interrupted helper; reconcile) | pass; 28 mutations of the new logic: all killed after adding a near-miss-commit case and a reconcile-summary assertion |
+| validator tests (fake DevTools browser + fake owner + fake unit/cgroup/proc/meminfo, a fake `systemctl kill` that really kills) | **146 pass.** 30 mutations of the rules (sandbox, role, memory by cgroup and by watchdog, headroom, evaluate-all, background tab, audio sink, lean switches, process accounting, evidence): all killed, after closing six gaps they exposed (a tripped watchdog could still be reported "ok" at the end; a browser stopped on purpose left unrelated failures; the cgroup mode and the watchdog mode were not distinguishable; a DevTools failure caused by the memory stop was reported first; and two assertions) |
+| activation helper tests (incident control; success with nobody connected; stalled audio; rollback with and without verified reception; policy by release; isolation failure; interrupted helper; reconcile; `--check-reception --memory-max`) | pass; 28 mutations earlier and 6 for the measuring cap and the record: all killed |
 | installer for the helper/validator/guard | pass |
-| staged procedure (`tests/test-g2-headless-steps.sh`): pins, commit lock, manifest-names-the-pin on 10 manifests through the `validate` and `install` stages, verdict on about 50 variants of evidence, the whole `check` stage with stubbed host commands | pass; 24 + 9 mutations: all killed |
-| real components on loopback: replay Bridge + saturn-go proxy (TLS, basic auth, pinned certificate) + the real page + **real Chrome 153 with its sandbox ON** | **59/59 checks.** New page + fixed Bridge; old page + fixed Bridge; display data stopped mid-measurement (the exact failed condition is kept, the browser and connection are gone); a real Chrome started with `--no-sandbox` is refused; old page + **old Bridge** (the rollback target's situation): the operator role was seen once and refused under `required`, and seen once and accepted as a recorded fallback with the guard proven active, 107 frames all on the allowlist and the radio unchanged. In every sandboxed run the real Chrome showed 5 renderers, all `Seccomp: 2`. |
+| staged procedure (`tests/test-g2-headless-steps.sh`): pins, commit lock, manifest-names-the-pin, the build, helper and check stages with the host's commands stubbed (including `check 500M` and bad sizes), verdict on about 70 variants of evidence | pass; every mutation tried over the rounds (24, then 9 for the manifest check, 8 for the build stage, 8 for the helper stage, 6 for the check size and the verdict rules) killed |
+| real components on loopback: replay Bridge + saturn-go proxy (TLS, basic auth, pinned certificate) + the real page + **real Chrome 153 with its sandbox ON** | **101/101 checks** at the head before the last two edits (a rerun at the final head is in the hand-off): new page and old page, each with the page hidden and the browser averaging 12-15% of a core (350% before); display data stopped mid-measurement; Chrome started with `--no-sandbox` refused; a real Chrome stopped by the memory watchdog at a 60M cap (the cause is the first failure, Chrome and connection gone) and left alone under a 4G cap; old page + **old Bridge** (operator role refused under `required`, accepted as a recorded fallback). In every sandboxed run the real Chrome showed its renderers all `Seccomp: 2`. |
 | shellcheck on every shell file CI checks | clean (see "Found in my own earlier push") |
 | Bridge (unchanged since `dfb0b19`): 462 tests; web: 761 tests, typecheck, seam check | pass at the earlier head; no Bridge or web file changed since |
 
@@ -106,16 +155,18 @@ the pinned commit as a clean tree, with every component built from it, and `stat
 0. Get the procedure: `curl -fsSL https://raw.githubusercontent.com/kd4yal2024/Saturn/<SHA>/update_manager/docs/headless-validation/g2_headless_steps.sh -o ~/g2_headless_steps.sh`
    (or I copy it from the pushed source), then `PIN=<SHA> bash ~/g2_headless_steps.sh build`.
 1. `validate`, `install` (inactive), `helper` (activator + validator + guard, each pinned by SHA-256; activation stays disabled).
-2. **`check`**, all browser tabs closed: the production launcher on the running `329f3109`; changes nothing. Success prints `OK: reception, sandbox, memory cap and cleanup are all verified`.
+2. **`check [SIZE]`**, all browser tabs closed: the production launcher on the running `329f3109`; changes nothing. `check 500M` measures with that browser memory cap for that one check. Success prints `OK: reception, sandbox, memory cap and cleanup are all verified`.
    Because `329f3109` is a legacy release it is expected to print `LEGACY BRIDGE FALLBACK USED` or a plain viewer session (the old Bridge's race); either is acceptable, and it says which.
 3. `reconcile`, then optionally `failure` (a real activation meant to fail validation, rolling back to `329f3109`), then `activate` (the normal update, RXC1 arm written last, all browsers closed).
    Per the instruction, 3 happens only after the source review and a successful `check`.
 
 ## Not verified / residual risk
 
-* **Nothing has run on the G2.** Chromium's sandbox inside the locked-down transient unit (dynamic user, `NoNewPrivileges`, no `/home`) and the 350 MB cap on a 905 MB Pi are exactly what
-  `check` settles. If the sandbox cannot start there, the check fails and I will change the unit's properties, not switch the sandbox off.
-* The memory peak will be known only from the G2. `MemoryPeak` needs systemd ≥ 255; if absent the peak is reported as unavailable and nothing else is affected.
+* **Whether this Chromium fits the Pi is not known.** On x86 it needs about 500 MiB (see above); the Pi has about 580 MiB available next to the running radio. The next `check`, with the
+  per-process-type memory and the swap/I-O figures it prints, decides it; nothing is guessed. The sandbox inside the locked-down unit did start on the Pi (the browser attached and loaded the
+  page); whether every renderer reports `Seccomp: 2` there was not reached by the first check, because the run stopped at its first failure, and is read by the next.
+* The kernel offers no pressure-stall information on this Pi (`/proc/pressure` is absent), so the diagnostics use CPU, I/O wait, swap and fault counters instead.
+* `MemoryPeak` needs systemd >= 255 and a memory controller; the peak is otherwise the validator's own measurement (proportional set size), and the evidence names which.
 * On the old Bridge the operator slot may be held by the media connection of a validation session for ~15 s; a person connecting in that window would be a viewer until it ends.
   Nothing in the new release has this: its viewer-declaring session releases the slot (`dfb0b19`).
 * `valid` RXC1 has never been observed against a real owner, only the replay's `disabled`; the `failure` stage deliberately uses an RXC1 expectation the target cannot meet.

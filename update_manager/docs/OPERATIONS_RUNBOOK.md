@@ -204,9 +204,15 @@ sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
   --check-reception
 ```
 
+`--check-reception --memory-max 500M` measures with that browser memory cap for this
+one check (it is never stored), to learn what the host's browser really needs.
+
 It reports the role the session was given (and whether the legacy fallback was
-used), what was verified about the browser's sandbox and memory cap, and the
-evidence directory. The staged sequence used on the first appliance, with the
+used), what was verified about the browser's sandbox and memory cap (enforced by
+the kernel's cgroup, or, where the kernel has no memory controller as on the
+Raspberry Pi image, by the validator's own watchdog, which it says), where the
+browser's memory and CPU went, and the evidence directory. A browser is not started
+unless the host has `MemAvailable` for the cap plus 32 MiB. The staged sequence used on the first appliance, with the
 report that explains it, is in `update_manager/docs/headless-validation/`.
 
 Install the validator with the activator (each file is pinned by its own hash). The installer is not one of the installed helpers: run it from the validated,
