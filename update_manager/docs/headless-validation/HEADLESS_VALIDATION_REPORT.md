@@ -1,16 +1,16 @@
 # Automatic headless Saturn Remote validation in the supported update process
 
 GoldMarsh, 2026-10-10 and 11. Branch `goldmarsh/headless-validation`, built on `f10a087` (Stage A) and the live-driver tools.
-FPGA 1.31.002 / build ID `0x53460004` and the XDMA kernel driver are untouched. **The G2 is still on release `329f3109`** with the `rollback_failed` record exactly as the first
-activation left it; an earlier build of this branch is installed *inactive* beside it and the new activation helper, validator and guard are installed with activation still
-disabled (the state when this was written). The first hardware `check` failed, for reasons described next, and the source answers it; the checks with the answering source passed
-(see "Hardware results with release `50898660`"). The first `activate` then rolled back, for two timing assumptions of the validator, which the commit after the `50898660` release corrects
-(see "First activation attempt").
+FPGA 1.31.002 / build ID `0x53460004` and the XDMA kernel driver are untouched. **The G2 now runs release `cc09c61f91030d4c5a38d6c570a20c28b5d97e03`**, activated on 2026-10-11 at 16:25 EDT
+by the staged procedure: the receive validation ran as the viewer, the record is `committed`, RXC1 reads `valid` (see "Activation of `cc09c61` on the G2"). The route here: the first hardware `check` failed, for reasons
+described next, and the source answered it (see "Hardware results with release `50898660`"); the first `activate`, of release `50898660`, then rolled back with exit 71 for two timing assumptions of the validator
+(see "First activation attempt"), which `cc09c61` corrects. **This is the bootstrap through the staged shell procedure. It is not yet the normal user-facing update**: the ordinary updater still deploys through the
+older helper into `/opt/saturn-go`, and the installer rewrites the activation configuration without keeping `VALIDATION_MEMORY_MAX`; both are the next work (see "What is still open").
 
 This file and `g2_headless_steps.sh` live in the source tree (`update_manager/docs/headless-validation/`) so that nothing depends on a scratch directory. The commit
-under test is the **release** `50898660388fba554e0cbfc63844cbac7c87326b`: it is what was built, is installed (inactive) on the G2, and is what the procedure pins
-(`PIN=`; it refuses to build or run anything else). The branch head is a separate identity, reported in the hand-off message: commits after the release that change only this report,
-the procedure and its test are not release components and need no rebuild, and `git diff 50898660388fba554e0cbfc63844cbac7c87326b <head> --stat` shows exactly what differs.
+under test is the **release** `cc09c61f91030d4c5a38d6c570a20c28b5d97e03` (the earlier `50898660388fba554e0cbfc63844cbac7c87326b` was installed and rolled back, and stays installed inactive): it is what was built, is
+installed and running on the G2, and is what the procedure pins (`PIN=`; it refuses to build or run anything else). The branch head is a separate identity, reported in the hand-off message: commits after the release that
+change only this report, the procedure and its test are not release components and need no rebuild, and `git diff cc09c61f91030d4c5a38d6c570a20c28b5d97e03 <head> --stat` shows exactly what differs.
 
 ## What was wrong
 
@@ -156,6 +156,37 @@ the pinned commit as a clean tree, with every component built from it, and `stat
   owner's first telemetry (present, fresh, the running service's own) and for MemAvailable to reach what the browser needs; it says how long it waited and what it saw first and at best, stops waiting when told to
   stop, and still fails, with the reason, when the bound passes. A correction to the validator is a release component change, so it needs a new build; the installed `50898660` was not retried: another
   attempt with the same validator would have gambled on the same restart timing.
+
+## Activation of `cc09c61` on the G2 (2026-10-11 16:25 EDT)
+
+`validate`, `install` and `helper` ran as designed; `activate` was run next (no separate `check` with the new validator was run first; the activation's own validation was its first use on hardware).
+The helper exited 0. Read independently over ssh afterwards, not from the helper's output:
+
+* **Running identity.** `/opt/saturn/current` is `/opt/saturn/releases/cc09c61f91030d4c5a38d6c570a20c28b5d97e03`; `saturn-bridge` (since 16:25:46) and `saturn-go` (since 16:25:47) run from that release's `bin/`, and their
+  SHA-256 equal the manifest's (`saturn-bridge` `21bed70518acdf80...`, `saturn-go` `baa1b154a51b4718...`). `/readyz` reports `cc09c61...` as both `build_commit` and `expected_commit`; the Bridge's telemetry is fresh,
+  `dirty False`, `rf_safe True`, FPGA `0x53460004`, backend `xdma`, no client. The configuration is untouched (`ACTIVATION_ENABLED="0"`, the single `VALIDATION_MEMORY_MAX="500M"` line).
+* **The record** is `committed` / `commit` (`target cc09c61...`, previous `329f3109...`), with no `activation_failure` or `rollback`; `validation.target` is `done`, driver `native`, role `viewer` (enforced by the Bridge,
+  policy `required`), `legacy_fallback_used` false.
+* **All 25 conditions of the validation passed**: display data (36 rows), Opus frames (144), decoded audio (77 played in 3.5 s), AudioContext running, no decode errors, the owner's readiness gate with the session
+  attached, the receive-only guard before any page script, 63 frames left the browser all inside the allowlist, the radio unchanged, `Seccomp: 2` on all four renderers with no `--no-sandbox`, the memory cap enforced by the
+  validator's watchdog (peak **437 MiB** of 500M), and a complete cleanup (no unit, process, connection or leftover directory; the owner counts 0 connections).
+* **The new page behaves very differently from the old one.** 297 Opus frames, 230 played, 1 late drop, 2 underruns (the old release's page: about 320 frames, 100 to 220 played, 74 to 115 late drops, 20 to 28 underruns),
+  the browser averaged 96% of a core (the old page's 140 to 165%), and none of the Bridge's drop counters moved (the old page raised the IQ-queue overflow counters by 6 to 22 per session).
+* **RXC1 reads `valid`** at the validator's baseline and in the Bridge's telemetry afterwards; the one-use arm was spent as designed.
+* **The headroom passed by 1 MiB**: 533 MiB available against 532 needed, on the first reading (no wait was needed). One reading that low earlier (529 MiB) refused the first attempt. The bounded wait is what keeps the next
+  restart from failing on a dip, but the margin on this 905 MB host is real and small: it is the first thing to revisit if validation is refused again (a leaner browser, or a smaller reserve).
+* **Radio settings.** The Bridge restarted at its default tuning of 14.2 MHz, as the previous restarts did. Settings do not survive an update yet.
+
+The evidence (the `committed` record, the target validation directory, the journal and the state) is kept off the G2 in the review folder `activation_cc09c61_20261011/`, hashes verified. The earlier exit-71 attempt is kept
+in `exit71_attempt_20261011/`.
+
+## What is still open
+
+* **The normal updater does not use this flow.** `update-saturn-go.sh` (Saturn Go self-update, `/saturngo`) builds on the device and ends in the detached `saturn-go-deploy-root.sh`, which installs into `/opt/saturn-go`; no
+  ordinary update path calls `saturn-release-build`, `saturn-release-install-root` or `saturn-release-activate-root`. A user who selects an update therefore still gets the old deployment and the old readiness gate.
+* **The installer rewrites the activation configuration** (`cat >` in `install_saturn_go_nginx.sh`) and so drops `VALIDATION_MEMORY_MAX` and resets `ACTIVATION_ENABLED`; this host's checks and activation depend on the 500M.
+* **Radio settings are not preserved across an update** (tuning returns to the Bridge's default).
+* A controlled rollback has not yet been exercised on the appliance (the `failure` stage exists for it); the unplanned one, on 14:17, ended in exit 71 and is the reason for the restart-timing waits.
 
 ## Evidence (all run on this machine, except where the hardware results above say otherwise)
 
