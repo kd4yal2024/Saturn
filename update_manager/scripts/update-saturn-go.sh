@@ -210,6 +210,22 @@ resolve_cargo_bin(){
   die "Required command not found: cargo (checked PATH and $build_home/.cargo/bin)"
 }
 
+# The page starts every script with a fixed system-only PATH (rust-server apply_build_subprocess_env), so cargo and rustup, which live in the build
+# user's ~/.cargo/bin, are not found unless the script finds them itself. Both the legacy deployment and the managed release flow build with them.
+prepare_build_toolchain_env(){
+  BUILD_USER="${SATURN_SATURNGO_BUILD_USER:-$(id -un)}"
+  # (die inside a command substitution would lose its message from the status file, so each lookup reports its own failure here)
+  BUILD_HOME="$(resolve_user_home "$BUILD_USER")" || die "Could not resolve the home directory of the build user '$BUILD_USER'"
+  if [[ -z "${HOME:-}" || "${HOME}" == "/" ]]; then
+    export HOME="$BUILD_HOME"
+  fi
+  export CARGO_HOME="${CARGO_HOME:-$BUILD_HOME/.cargo}"
+  export RUSTUP_HOME="${RUSTUP_HOME:-$BUILD_HOME/.rustup}"
+  CARGO_BIN="$(resolve_cargo_bin)" || die "Required command not found: cargo (not on PATH and not in $BUILD_HOME/.cargo/bin); the build user '$BUILD_USER' needs a Rust toolchain"
+  CARGO_BIN_DIR="$(dirname "$CARGO_BIN")"
+  export PATH="$CARGO_BIN_DIR:$PATH"
+}
+
 active_swap_bytes(){
   local path="$1"
   swapon --show=NAME,SIZE --bytes --noheadings 2>/dev/null \
@@ -332,14 +348,15 @@ if managed_updates_enabled || [[ -n "$ACTIVE_RELEASE_AT_START" ]]; then
   SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
   STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-/var/lib/saturn-state/saturngo_deploy_status.json}"
   trap 'rc=$?; if (( rc != 0 && ! BROKER_OWNS_STATUS )); then write_status "error" "$STATUS_PHASE" "${LAST_ERROR:-Saturn Go self-update failed}" 1 "$rc"; fi' EXIT
+  UPDATE_MODE="release"      # from here every status this run writes, including a failure to find the toolchain, says it was a release update
   if ! managed_updates_enabled; then
-    UPDATE_MODE="release"
     STATUS_PHASE="managed_updates_disabled"
     die "This installation runs managed releases (active release ${ACTIVE_RELEASE_AT_START:0:12}) but managed updates are disabled, so there is nothing this update could safely do: the legacy deployment into /opt/saturn-go would not change what runs. Enable managed updates by running the installer with SATURN_MANAGED_UPDATES=enable."
   fi
   [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
   git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Repo root is not a git checkout: $REPO_ROOT"
   write_status "running" "init" "Starting a managed release update"
+  prepare_build_toolchain_env
   run_release_flow
   exit 0
 fi
@@ -348,16 +365,7 @@ fi
 need_cmd git
 need_cmd systemd-run
 
-BUILD_USER="${SATURN_SATURNGO_BUILD_USER:-$(id -un)}"
-BUILD_HOME="$(resolve_user_home "$BUILD_USER")"
-if [[ -z "${HOME:-}" || "${HOME}" == "/" ]]; then
-  export HOME="$BUILD_HOME"
-fi
-export CARGO_HOME="${CARGO_HOME:-$BUILD_HOME/.cargo}"
-export RUSTUP_HOME="${RUSTUP_HOME:-$BUILD_HOME/.rustup}"
-CARGO_BIN="$(resolve_cargo_bin)"
-CARGO_BIN_DIR="$(dirname "$CARGO_BIN")"
-export PATH="$CARGO_BIN_DIR:$PATH"
+prepare_build_toolchain_env
 
 RUN_STARTED_AT="$(date -Is)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"

@@ -21,6 +21,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   nginx), builds no server or Bridge, copies no web assets, restarts no radio service, refreshes the Bridge unit without touching the running Bridge
   (`SATURN_BRIDGE_UNIT_ONLY`), and checks readiness against the release that is running instead of its own checkout's commit (which could only fail there).
   `SATURN_INSTALL_PLAN=1` prints what a run would do without root and without changing anything; `SATURN_INSTALL_APPLICATION=auto|force|skip` overrides the rule.
+- The managed release flow finds the Rust toolchain the way the legacy deployment does. The page starts every script with a fixed system-only `PATH`, so `cargo` (in the build user's
+  `~/.cargo/bin`) was not found and the first page-driven attempt on the G2 stopped at resolving the ref, before anything was built or changed. `prepare_build_toolchain_env` (shared by both deployments)
+  sets `HOME`, `CARGO_HOME`, `RUSTUP_HOME` and `PATH`, and a missing toolchain or home is reported in the status file, not only in the output. The release branch declares its mode (`release`) on entry.
 - The whole-appliance installer (`sudo ./install.sh`) refuses on an appliance that runs releases, before packages, drivers, builds or services are touched, and names the Saturn Go installer;
   `SATURN_INSTALL_APPLICATION=force` overrides, and it fails closed if the layout cannot be determined.
 - The Update action runs the installer-managed release builder that sits beside `update-saturn-go.sh`, not the copy in the working checkout (which can be many commits old and

@@ -274,7 +274,7 @@ in `exit71_attempt_20261011/`.
 ## Completion test of the managed updates on the G2 (not yet run; you run the sudo steps)
 
 State read from the G2 when this was written: it runs `cc09c61` (committed); `ACTIVATION_ENABLED="0"`, `VALIDATION_MEMORY_MAX="500M"`; the working checkout `/home/pi/github/Saturn` is at `d29c5d88` (old, with modified tracked build
-outputs; it is only a place the builder fetches into, and is not touched); the Update page's policy resolves `stable` to `main` of `kd4yal2024/Saturn`, and **`main` must not move**, so the test selects a custom ref; the Bridge
+outputs; it is only a place the builder fetches into, and is not touched); the Update page's policy resolves `stable` to `main` of `kd4yal2024/Saturn`, and **`main` must not move**, so the test types the review branch into the page's Branch / Ref field (the page saves that field as both `stable_ref` and `custom_ref` and switches the channel to `custom`; afterwards type `main` back and save); the Bridge
 unit names only `saturn-rxc1-bridge` as a state directory; RXC1 reads `valid` (left from the bootstrap activation's arm); `saturn-go` runs with `~/.cargo/bin` on its `PATH`.
 
 1. **Refresh what the installer owns** (application and radio untouched; no radio service restarts). From a clean worktree of the commit under test, created beside the checkout, never inside it:
@@ -285,7 +285,8 @@ unit names only `saturn-rxc1-bridge` as a state directory; RXC1 reads `valid` (l
    (Those variables are what the whole-appliance provisioner gives this installer: no apt, no legacy XDMA hook. `SATURN_P2APP_PANEL_ENABLED` defaults to 0, which is this G2's value.) I then check, read-only: the same PIDs for
    `saturn-go` and `saturn-bridge`, the configuration (`ACTIVATION_ENABLED="1"`, `500M`), the broker's sudoers rule, `/opt/saturn-go/scripts/update-saturn-go.sh` and the builder beside it, and the Bridge unit's state directory.
    Also, as you or I without root: from the same worktree `bash ./install.sh --dry-run` must refuse with "this appliance runs managed releases (active release `cc09c61f…`)" and name the Saturn-Go installer, having changed nothing.
-2. **Update 1, through the page.** Close every Saturn Remote tab. In the Saturn Go page choose the custom ref `goldmarsh/headless-validation`, press Update. The build runs on the G2 (about 1.5 hours; the radio keeps running). Expected:
+2. **Update 1, through the page.** Close every Saturn Remote tab. On the Saturn Go page (`/saturngo`) type `goldmarsh/headless-validation` into **Branch / Ref** in the Saturn Go policy panel (the page has no channel or custom-ref selector; it saves that field as the policy's ref), tick **Dry run (no changes)** and press **Run Saturn Go Update** first: it
+   prints the preflight and the one commit the ref resolves to, and changes nothing. Then untick it and press **Run Saturn Go Update**. The build runs on the G2 (about 1.5 hours; the radio keeps running). Expected:
    the ref resolved once to the branch tip, that commit built, the broker's unit installs, switches and restarts, the headless check runs as the viewer, the browser and profile are gone, the record is `committed` for that commit,
    and the page shows success. RXC1 is recorded, and not required (`VALIDATION_EXPECT_RXC1` is `any`); it is not expected to read `valid` again without an arm. **The tuning resets once here**: the running `cc09c61` Bridge has no
    persistence, so it saved nothing to restore.
@@ -299,6 +300,15 @@ unit names only `saturn-rxc1-bridge` as a state directory; RXC1 reads `valid` (l
    and the Update action refuses at once (phase `managed_updates_disabled`, nothing built or changed); `enable` restores it.
 
 Only after this, and a review of the evidence, is the branch merged to `main`. The matched audio comparison is separate and still to come.
+
+### What the first page-driven attempt found (2026-10-11 19:20 EDT)
+
+The first press of **Run Saturn Go Update** stopped at the very first step, resolving the ref: `required command not found: cargo`. Nothing was built, installed or changed (the record, the configuration, the services and the
+release pointer were as before, and the status panel said so: phase `resolve`, mode `release`). The cause: the page starts every script with a fixed system-only `PATH` (`apply_build_subprocess_env` in the server), and
+`cargo` lives in the build user's `~/.cargo/bin`; the legacy deployment finds it itself, and the release branch left before that code. I had checked the `saturn-go` service's own `PATH` (which includes `~/.cargo/bin`) and not the
+environment the page gives its children. Fixed by `prepare_build_toolchain_env`, shared by both deployments, and by running the flow's tests under the page's exact `PATH`. Also read on the G2 under that `PATH` plus `~/.cargo/bin`:
+every command the builder needs is present (`cmake` is not, and is not needed), the installed builder resolves the branch to the right commit and honours `--expect-commit`, the service has no write restrictions on the paths the build uses, and the
+sudo-to-broker boundary refuses a non-existent bundle cleanly (`--dispatch` of a bundle without a manifest: exit 2, recorded).
 
 ## Not verified / residual risk
 

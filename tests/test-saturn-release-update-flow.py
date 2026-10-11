@@ -24,6 +24,7 @@ spec.loader.exec_module(B)
 
 FAKE_BUILDER = r'''#!/usr/bin/env bash
 echo "builder $*" >>"$FAKE_CALLS"
+echo "builder-env cargo=$(command -v cargo || echo MISSING) cargo_home=${CARGO_HOME:-} rustup_home=${RUSTUP_HOME:-}" >>"$FAKE_CALLS"
 remote="" ref="" resolve=0 expect=""
 while [ $# -gt 0 ]; do case "$1" in --source-remote) remote=$2; shift 2;; --source-ref) ref=$2; shift 2;; --resolve-only) resolve=1; shift;; --expect-commit) expect=$2; shift 2;; --output-root) shift 2;; *) shift;; esac; done
 if [ -n "$remote" ]; then
@@ -96,7 +97,66 @@ class Flow(B.Rig):
         return subprocess.run(["bash", str(at), *flags], capture_output=True, text=True, env=environment, timeout=180)
 
     def builds(self):
-        return [line for line in self.calls_text().splitlines() if line.startswith("builder") and "--resolve-only" not in line]
+        return [line for line in self.calls_text().splitlines() if line.startswith("builder ") and "--resolve-only" not in line]
+
+
+PAGE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"     # what the page gives every script it runs (rust-server apply_build_subprocess_env)
+
+
+class UnderThePagesEnvironment(Flow):
+    """The page starts scripts with a fixed system-only PATH: cargo and rustup, in the build user's ~/.cargo/bin, are not on it."""
+
+    def home(self, with_cargo=True):
+        home = self.root / "home"
+        (home / ".cargo/bin").mkdir(parents=True, exist_ok=True)
+        if with_cargo:
+            cargo = home / ".cargo/bin/cargo"
+            cargo.write_text("#!/bin/sh\necho cargo\n")
+            cargo.chmod(0o755)
+        return home
+
+    def run_as_the_page(self, home, *flags, **env):
+        # the page's variables only (nothing of a developer's PATH), HOME of the build user
+        # (PYTHONHOME/PYTHONPATH emptied: the page has none, and a developer's Python distribution would leak one into the system python3)
+        return self.script(*flags, PATH=PAGE_PATH, HOME=str(home), CARGO_HOME="", RUSTUP_HOME="", PYTHONHOME="", PYTHONPATH="", **env)
+
+    def test_the_toolchain_is_found_and_handed_to_the_builder(self):
+        home = self.home()
+        result = self.run_as_the_page(home)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        envs = [line for line in self.calls_text().splitlines() if line.startswith("builder-env")]
+        self.assertTrue(envs, "the builder was never run")
+        for line in envs:
+            self.assertIn(f"cargo={home}/.cargo/bin/cargo", line)
+            self.assertIn(f"cargo_home={home}/.cargo", line)
+            self.assertIn(f"rustup_home={home}/.rustup", line)
+        self.assertEqual(self.active(), self.head)
+
+    def test_without_a_toolchain_the_update_stops_first_and_says_so(self):
+        # a build user whose home has no ~/.cargo (the resolver also tries /home/<build user>/.cargo, which a developer's machine may have)
+        result = self.run_as_the_page(self.home(with_cargo=False), SATURN_SATURNGO_BUILD_USER="daemon")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cargo", result.stdout + result.stderr)
+        self.assertEqual(self.builds(), [])
+        self.assertNotIn("builder", self.calls_text(), "nothing may be resolved or built without a toolchain")
+        self.assertEqual(self.active(), B.OLD)
+        status = self.status()
+        self.assertEqual((status["status"], status["mode"]), ("error", "release"))
+        self.assertIn("cargo", status["message"])
+
+    def test_a_build_user_without_a_home_is_reported_in_the_status_not_only_in_the_output(self):
+        result = self.run_as_the_page(self.home(), SATURN_SATURNGO_BUILD_USER="no-such-saturn-user")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.builds(), [])
+        self.assertIn("home directory of the build user 'no-such-saturn-user'", self.status()["message"])
+
+    def test_a_refusal_does_not_depend_on_the_toolchain(self):
+        self.set_config(enabled="0")
+        result = self.run_as_the_page(self.home(with_cargo=False), SATURN_SATURNGO_BUILD_USER="daemon")
+        self.assertNotEqual(result.returncode, 0)
+        status = self.status()
+        self.assertEqual(status["phase"], "managed_updates_disabled")
+        self.assertIn("managed updates are disabled", status["message"])
 
 
 class HappyPath(Flow):
@@ -127,7 +187,7 @@ class HappyPath(Flow):
             builder.chmod(0o755)
         result = self.script(at=scripts / "update-saturn-go.sh", SATURN_RELEASE_BUILDER="")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        used = [line.split()[0] for line in self.calls_text().splitlines() if line.startswith("builder")]
+        used = [line.split()[0] for line in self.calls_text().splitlines() if line.startswith("builder[")]
         self.assertTrue(used and set(used) == {"builder[installed]"}, used)
         self.assertEqual(self.active(), self.head)
 
@@ -363,6 +423,16 @@ class SourceChecks(unittest.TestCase):
     def test_the_flow_runs_before_the_legacy_build_and_the_legacy_path_is_untouched(self):
         self.assertLess(self.text.index("run_release_flow"), self.text.index("ensure_build_swap\n  info"))
         self.assertIn("dispatch detached root deploy helper", self.text.replace("Dispatching", "dispatch"))
+
+    def test_both_deployments_prepare_the_toolchain_the_same_way_before_they_build(self):
+        self.assertEqual(self.text.count("prepare_build_toolchain_env\n"), 2, "the release branch and the legacy deployment both call it (the definition is the third mention)")
+        self.assertLess(self.text.index("prepare_build_toolchain_env\n  run_release_flow"), self.text.index("exit 0\nfi\n(( ! MIGRATE_TO_RELEASES ))"))
+        legacy = self.text[self.text.index("(( ! MIGRATE_TO_RELEASES )) || die"):]
+        self.assertLess(legacy.index("prepare_build_toolchain_env"), legacy.index('"$CARGO_BIN"'), "the legacy deployment builds with CARGO_BIN, so it must be prepared first")
+        definition = self.text[self.text.index("prepare_build_toolchain_env(){"):]
+        definition = definition[:definition.index("\n}\n")]
+        for needed in ('export CARGO_HOME=', 'export RUSTUP_HOME=', 'export PATH="$CARGO_BIN_DIR:$PATH"'):
+            self.assertIn(needed, definition)
 
     def test_the_flow_installs_and_restarts_nothing_itself(self):
         for forbidden in ("systemctl", "systemd-run", "ln -s", "cp -", "install -m"):
