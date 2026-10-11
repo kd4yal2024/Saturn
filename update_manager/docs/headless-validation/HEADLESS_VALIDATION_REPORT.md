@@ -148,8 +148,9 @@ the pinned commit as a clean tree, with every component built from it, and `stat
 * **The rollback's validation raced the restarted Bridge.** The helper stopped the target, restored `329f3109` and restarted its services at 14:17:43; the validator began one second later, before that Bridge had
   written `/run/saturn-bridge/perf.json` (`owner.fresh_telemetry`: no such file). The helper therefore ended with exit 71: the previous release restored, reception on it not verified.
 * **What was fine.** The radio ended receiving on `329f3109` (pointer, `/readyz`, fresh telemetry, `rf_safe`, no client, nothing left behind), and `check` runs before and after prove reception there. The validator's
-  baseline of the new Bridge read RXC1 `valid`, the first time `valid` has been observed on a real owner (the one-use arm was spent as designed). The policy was switched on for the run and restored byte-identical,
-  even on exit 71. The restarts reset the tuning to the Bridge's default of 14.2 MHz, as any restart does. The new activation record replaced the reconciled one; the original failed transaction stays at
+  baseline of the new Bridge read RXC1 `valid` (the one-use arm was spent as designed): a confirmation for this candidate release; the October 9 trial had already seen `valid` on a live owner. The policy was switched on for the run and restored byte-identical,
+  even on exit 71. The restarts reset the tuning to the Bridge's default of 14.2 MHz (it had been 3.902 MHz). The validator's "radio unchanged" condition compares the radio before and
+  after its own browser session; it does not show, and cannot show, that settings survive the service restart before it. Keeping tuning across updates belongs to the normal-updater work that follows. The new activation record replaced the reconciled one; the original failed transaction stays at
   `current.json.rollback-failed.<time>` and the reconciliation's evidence in the validation directory.
 * **Both are assumptions of the validator about a host that has just been restarted, not defects of the release.** The validator now waits, within a bound (`owner_wait_s` and `headroom_wait_s`, 30 s each), for the
   owner's first telemetry (present, fresh, the running service's own) and for MemAvailable to reach what the browser needs; it says how long it waited and what it saw first and at best, stops waiting when told to
@@ -220,5 +221,6 @@ the pinned commit as a clean tree, with every component built from it, and `stat
 * `MemoryPeak` needs systemd >= 255 and a memory controller; the peak is otherwise the validator's own measurement (proportional set size), and the evidence names which.
 * On the old Bridge the operator slot may be held by the media connection of a validation session for ~15 s; a person connecting in that window would be a viewer until it ends.
   Nothing in the new release has this: its viewer-declaring session releases the slot (`dfb0b19`).
-* `valid` RXC1 has never been observed against a real owner, only the replay's `disabled`; the `failure` stage deliberately uses an RXC1 expectation the target cannot meet.
+* The validator's own rehearsal sees only the replay's `disabled` RXC1. `valid` was observed on a live owner in the October 9 trial and again, at the validator's baseline, in the first activation attempt
+  of the candidate release; the `failure` stage deliberately uses an RXC1 expectation the target cannot meet.
 * ARM binaries come only from the G2's own native build of the pushed commit; none were built here.
