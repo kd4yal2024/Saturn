@@ -196,6 +196,9 @@ sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
   --reconcile-rollback
 ```
 
+The helper refuses to reconcile, as it refuses to activate, while the root-owned `ACTIVATION_ENABLED` is `"0"`. The staged procedure (`g2_headless_steps.sh`) switches it on for that one
+helper run, checks that the configuration is byte-identical afterwards and says so; by hand, put it back yourself.
+
 Try the production launcher on the release that is running, changing nothing
 (no pointer, service, drop-in or record), before relying on it:
 
@@ -206,6 +209,10 @@ sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
 
 `--check-reception --memory-max 500M` measures with that browser memory cap for this
 one check (it is never stored), to learn what the host's browser really needs.
+
+Where the 350M default is too small for the host's browser (the first appliance needs 500M, with 551 to 586 MiB available), set `VALIDATION_MEMORY_MAX="500M"` once in
+`/etc/default/saturn-release-activate`: the plain check, the activation, the rollback validation and the reconciliation then all use it. Root-owned, not group or world
+writable, one line. Keep a backup of the file first. The host must have `MemAvailable` for the cap plus 32 MiB at launch, or no browser starts and reception is unproven.
 
 It reports the role the session was given (and whether the legacy fallback was
 used), what was verified about the browser's sandbox and memory cap (enforced by

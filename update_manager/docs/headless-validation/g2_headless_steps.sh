@@ -17,6 +17,9 @@
 #     bash ~/g2_headless_steps.sh failure     OPTIONAL exercise of failure + rollback: an activation that is meant to fail validation, then roll back
 #     bash ~/g2_headless_steps.sh activate    the normal update with every browser closed: RXC1 arm, then the helper (restarts the Bridge and Go)
 #
+# reconcile, failure and activate need the root-owned ACTIVATION_ENABLED="1" for the helper to act. Each sets it for that one helper run and puts the
+# configuration back byte-identical, or says loudly that it could not. A stage exits 0 only when the outcome is the expected one; activate exits 3
+# when the release is active and receiving but the RXC1 status never read 'valid'.
 # Order: build, validate, install, helper, check, reconcile, [failure], activate.
 # CLOSE EVERY BROWSER TAB OF THE G2 (remote page, telemetry, anything) before check, reconcile, failure and activate: that is the condition under test.
 #
@@ -36,6 +39,7 @@ REPO_URL=https://github.com/kd4yal2024/Saturn.git
 PIN_FILE=$HOME/.g2_headless_pin
 H=/usr/local/lib/saturn-go/scripts
 RELEASES=/opt/saturn/releases
+CURRENT_LINK=/opt/saturn/current
 BROWSER=/usr/bin/chromium
 SYSTEMD_RUN=systemd-run
 ARM_DIR=/var/lib/saturn-rxc1-bridge
@@ -140,7 +144,7 @@ PYEOF
 stage_status() {
   say "commit under test: ${C:-<none pinned yet>}"
   say "release and binaries"
-  echo "current -> $(readlink -f /opt/saturn/current)"; ls -1 /opt/saturn/releases
+  echo "current -> $(readlink -f "$CURRENT_LINK")"; ls -1 /opt/saturn/releases
   for n in saturn-bridge saturn-go p2app; do for p in $(pgrep -x "$n"); do echo "$n pid $p  $(readlink "/proc/$p/exe" 2>/dev/null)  $(sha256sum "/proc/$p/exe" 2>/dev/null | cut -c1-16)"; done; done
   say "services (active / enabled)"
   for u in p2app saturn-bridge saturn-go; do echo "$u: $(systemctl is-active $u) / $(systemctl is-enabled $u)"; done
@@ -178,7 +182,7 @@ stage_install() {
   manifest_names_pin "$RELEASES/$C" || die "the installed release's manifest is not the pinned commit's"
   say "validating the installed release (sudo; read-only)"; sudo "$H/saturn-release-activate-root.sh" --validate "$C" || die "installed-release validation failed"
   bad=$(find "$RELEASES/$C/webroot" -type f ! -perm -o=r | wc -l); echo "unreadable web files: $bad"; [ "$bad" = 0 ] || die "web assets are not world-readable"
-  echo "OK: installed inactive; /opt/saturn/current still -> $(readlink -f /opt/saturn/current). Next:  bash ~/g2_headless_steps.sh helper"
+  echo "OK: installed inactive; /opt/saturn/current still -> $(readlink -f "$CURRENT_LINK"). Next:  bash ~/g2_headless_steps.sh helper"
 }
 
 stage_helper() {
@@ -281,11 +285,14 @@ stage_check() {
 
 stage_reconcile() {
   [ "$(txn_status)" = rollback_failed ] || die "the record says '$(txn_status)'; there is nothing to reconcile"
-  [ "$(readlink -f /opt/saturn/current)" = "/opt/saturn/releases/$PREV" ] || die "the previous release ($PREV) is not the active one"
+  [ "$(readlink -f "$CURRENT_LINK")" = "$RELEASES/$PREV" ] || die "the previous release ($PREV) is not the active one"
   need_no_browsers
   sudo cp -a "$TXN" "$TXN.before-reconcile.$(date +%Y%m%dT%H%M%S)" || die "could not keep a copy of the record"
   confirm "Record the verified recovery on the 'rollback_failed' record? The helper verifies that $PREV is running (pointer, drop-ins, services, commit, owner) and receiving; if anything differs it changes nothing. The failed activation stays a failed activation and the original record is preserved."
+  # the helper refuses to reconcile while the root-owned policy says ACTIVATION_ENABLED="0"; it is set for this one run and restored on exit
+  with_activation_enabled
   sudo "$H/saturn-release-activate-root.sh" --reconcile-rollback; rc=$?
+  restored=1; restore_policy || restored=0
   say "result (exit $rc)"; record_summary
   if [ "$rc" = 0 ]; then
     python3 - "$TXN" <<'PYEOF' || return 1
@@ -299,43 +306,133 @@ ok = (d.get("status") == "rolled_back" and d.get("status") != "committed"
 print("  the original failure and rollback outcome are unchanged, and the recovery is recorded beside them:", "yes" if ok else "NO")
 sys.exit(0 if ok else 1)
 PYEOF
+    [ "$restored" = 1 ] || { echo "STOP: the recovery was recorded, but the activation policy is not confirmed restored (see above)"; return 1; }
     echo "OK. Next: bash ~/g2_headless_steps.sh activate   (or 'failure' first, if you want the rollback exercised on the real appliance)"
   fi
   return "$rc"
 }
 
-# Sets the activation policy for the duration of one helper run, then restores it.
-with_activation_enabled() {
-  OLD=$(grep -E '^ACTIVATION_ENABLED=' "$ACT_CFG" | head -1); echo "activation policy now: $OLD"
-  restore_policy() { if [ "$OLD" != 'ACTIVATION_ENABLED="1"' ]; then sudo sed -i "s/^ACTIVATION_ENABLED=.*/$OLD/" "$ACT_CFG" && echo "activation policy restored to: $OLD"; fi; }
-  if [ "$OLD" != 'ACTIVATION_ENABLED="1"' ]; then sudo sed -i 's/^ACTIVATION_ENABLED=.*/ACTIVATION_ENABLED="1"/' "$ACT_CFG" || die "could not enable activation"; fi
-  trap restore_policy EXIT
+# The root-owned policy that lets the helper activate or reconcile (ACTIVATION_ENABLED) is switched on for ONE helper run and put back exactly as
+# it was. The configuration is hashed first and compared afterwards, so a line this procedure added and did not remove, or any other change, is
+# reported. The restoration also runs when the stage dies or is interrupted (INT, TERM, HUP), and a restoration that cannot be confirmed makes
+# the stage fail loudly instead of being passed over.
+POLICY_ACTIVE=0 POLICY_OLD="" POLICY_EXTRA="" POLICY_HASH=""
+with_activation_enabled() {  # $1 (optional) = one extra setting line for this run, for example VALIDATION_EXPECT_RXC1="unsupported"
+  local extra_re='^[A-Z][A-Z0-9_]*="[a-z0-9]+"$'
+  POLICY_EXTRA="${1:-}"
+  [ -z "$POLICY_EXTRA" ] || [[ "$POLICY_EXTRA" =~ $extra_re ]] || die "unsafe extra policy line: $POLICY_EXTRA"
+  [ "$(grep -cE '^ACTIVATION_ENABLED=' "$ACT_CFG")" = 1 ] || die "$ACT_CFG must have exactly one ACTIVATION_ENABLED line"
+  POLICY_OLD=$(grep -E '^ACTIVATION_ENABLED=' "$ACT_CFG")
+  case "$POLICY_OLD" in 'ACTIVATION_ENABLED="0"'|'ACTIVATION_ENABLED="1"') ;; *) die "unexpected policy line '$POLICY_OLD'" ;; esac
+  POLICY_HASH=$(sha256sum "$ACT_CFG" | cut -d' ' -f1)
+  echo "activation policy now: $POLICY_OLD"
+  trap policy_on_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  POLICY_ACTIVE=1    # from here on a restoration is owed
+  if [ "$POLICY_OLD" != 'ACTIVATION_ENABLED="1"' ]; then
+    sudo sed -i 's/^ACTIVATION_ENABLED=.*/ACTIVATION_ENABLED="1"/' "$ACT_CFG" || die "could not enable activation"
+    grep -Fxq 'ACTIVATION_ENABLED="1"' "$ACT_CFG" || die "activation did not read back as enabled"
+  fi
+  if [ -n "$POLICY_EXTRA" ]; then printf '%s\n' "$POLICY_EXTRA" | sudo tee -a "$ACT_CFG" > /dev/null || die "could not set $POLICY_EXTRA"; fi
 }
 
+# Puts the configuration back. Returns non-zero unless it is byte-identical to what it was before with_activation_enabled.
+restore_policy() {
+  [ "$POLICY_ACTIVE" = 1 ] || return 0
+  POLICY_ACTIVE=0
+  local bad=0 now
+  if [ -n "$POLICY_EXTRA" ]; then sudo sed -i "/^${POLICY_EXTRA}\$/d" "$ACT_CFG" || bad=1; fi
+  if [ "$POLICY_OLD" != 'ACTIVATION_ENABLED="1"' ]; then sudo sed -i "s/^ACTIVATION_ENABLED=.*/${POLICY_OLD}/" "$ACT_CFG" || bad=1; fi
+  now=$(sha256sum "$ACT_CFG" 2>/dev/null | cut -d' ' -f1)
+  if [ "$bad" = 0 ] && [ "$now" = "$POLICY_HASH" ]; then
+    echo "activation policy restored to: $POLICY_OLD (the configuration is byte-identical to before)"; return 0
+  fi
+  {
+    echo "!!! THE ACTIVATION POLICY IS NOT CONFIRMED RESTORED: $ACT_CFG hashes to ${now:-unreadable}; before this stage it hashed to $POLICY_HASH."
+    echo "!!! It must say  $POLICY_OLD  exactly once, and nothing may have been added. Look:  grep -nE '^(ACTIVATION_ENABLED|VALIDATION_EXPECT_RXC1)=' $ACT_CFG"
+    echo "!!! Put it right with:  sudo sed -i 's/^ACTIVATION_ENABLED=.*/${POLICY_OLD}/' $ACT_CFG"
+  } >&2
+  return 1
+}
+
+policy_on_exit() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  if ! restore_policy; then [ "$rc" != 0 ] || rc=1; fi
+  exit "$rc"
+}
+
+record_field() { python3 -c "import json,sys; d=json.load(open('$TXN')); print(eval(sys.argv[1]))" "$1" 2>/dev/null; }
+ready_commit() { curl -fsS -m 5 http://127.0.0.1:8080/readyz 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('build_commit') if d.get('status') == 'ready' else '')" 2>/dev/null; }
+
 common_activation_preconditions() {
-  [ -d "/opt/saturn/releases/$C" ] || die "install the release first"
+  [ -d "$RELEASES/$C" ] || die "install the release first"
   [ "$(perf_field "d.get('backend')")" = xdma ] || die "the Bridge must be on the xdma backend"
   [ "$(perf_field "m.get('date_code_hex')")" = 53460004 ] || die "the FPGA is not 0x53460004"
-  [ "$(readlink -f /opt/saturn/current)" != "/opt/saturn/releases/$C" ] || die "the release is already active"
+  [ "$(readlink -f "$CURRENT_LINK")" != "$RELEASES/$C" ] || die "the release is already active"
   case "$(txn_status)" in ""|committed|rolled_back) ;; *) die "the transaction record says '$(txn_status)'; run the reconcile stage first" ;; esac
   grep -Fq "$VAL_SHA" <(sha256sum "$H/saturn-remote-validate.py") || die "the pinned validator is not the installed one; run the helper stage"
   grep -Fq "$ACT_SHA" <(sha256sum "$H/saturn-release-activate-root.sh") || die "the pinned activation helper is not the installed one; run the helper stage"
   need_no_browsers
 }
 
+# What the exercise has to have produced, read from the host's own records and not from the helper's exit status alone.
+failure_verdict() {  # $1 = the helper's exit status, $2 = 1 if the configuration was confirmed restored
+  local rc=$1 restored=$2 problems=() cur
+  case "$rc" in
+    0) problems+=("the activation SUCCEEDED, so $C may now be the active release; it was meant to fail the receive validation") ;;
+    70) problems+=("exit 70: the previous release was NOT restored") ;;
+    71) problems+=("exit 71: the previous release was restored but reception on it is not proven") ;;
+  esac
+  cur=$(readlink -f "$CURRENT_LINK")
+  [ "$cur" = "$RELEASES/$PREV" ] || problems+=("the active release is ${cur:-unknown}, not $PREV")
+  [ "$(record_field "d.get('target_commit')")" = "$C" ] || problems+=("the record is not about $C (its target is '$(record_field "d.get('target_commit')")'): this run left no record of its own")
+  [ "$(record_field "d.get('status')")" = rolled_back ] || problems+=("the record says '$(record_field "d.get('status')")', not rolled_back")
+  [ "$(record_field "(d.get('activation_failure') or {}).get('phase')")" = receive-validation ] \
+    || problems+=("the activation did not fail in the receive validation (its phase is '$(record_field "(d.get('activation_failure') or {}).get('phase')")'), so the exercise did not test what it is for")
+  { [ "$(record_field "(d.get('rollback') or {}).get('release_restored')")" = True ] && [ "$(record_field "(d.get('rollback') or {}).get('receive_verified')")" = True ]; } \
+    || problems+=("the rollback record does not say that the previous release was restored and is receiving")
+  [ "$restored" = 1 ] || problems+=("the activation policy was not confirmed restored")
+  if [ "${#problems[@]}" = 0 ]; then
+    echo "OK: the activation failed its receive validation as intended, rolled back to $PREV, proved reception there, and the policy is restored."; return 0
+  fi
+  echo "NOT AS EXPECTED:"; printf '  - %s\n' "${problems[@]}"; return 1
+}
+
+# After a helper run that reported success: is $C really the active, ready, committed release, validated as a viewer, with nothing left behind?
+# Exit status 0 only if RXC1 also reads 'valid'; 1 if the release state is not as it should be; 3 if the release is fine and only RXC1 is unconfirmed.
+activation_verdict() {  # $1 = 1 if the configuration was confirmed restored, $2 = the RXC1 status read after the wait
+  local restored=$1 rxc1=$2 problems=() cur ready
+  cur=$(readlink -f "$CURRENT_LINK"); ready=$(ready_commit)
+  [ "$cur" = "$RELEASES/$C" ] || problems+=("the active release is ${cur:-unknown}, not $C")
+  [ "$ready" = "$C" ] || problems+=("the running service reports build '${ready:-none}', not $C")
+  { [ "$(record_field "d.get('target_commit')")" = "$C" ] && [ "$(record_field "d.get('status')")" = committed ]; } \
+    || problems+=("the record is not 'committed' for $C (it says '$(record_field "d.get('status')")' for '$(record_field "d.get('target_commit')")')")
+  [ "$(record_field "((d.get('validation') or {}).get('target') or {}).get('final_state')")" = "done" ] || problems+=("the receive validation of the new release did not finish in the state 'done'")
+  [ "$(record_field "((d.get('validation') or {}).get('target') or {}).get('role')")" = viewer ] || problems+=("the validation session of the new release did not get the viewer role")
+  [ "$(record_field "((d.get('validation') or {}).get('target') or {}).get('legacy_fallback_used')")" = False ] || problems+=("the legacy fallback was used, or not reported, for the new release")
+  [ "$(clients)" = 0 ] || problems+=("$(clients) connection(s) are open on the Bridge / TLS / P2 ports")
+  [ "$(pgrep -f -- '--remote-debugging-pipe' | wc -l)" = 0 ] || problems+=("a validation browser is still running")
+  [ "$restored" = 1 ] || problems+=("the activation policy was not confirmed restored")
+  if [ "${#problems[@]}" != 0 ]; then echo "NOT AS EXPECTED:"; printf '  - %s\n' "${problems[@]}"; return 1; fi
+  echo "RELEASE ACTIVE AND RECEPTION VERIFIED: $C is the active, ready, committed release; its receive validation ran as the viewer; no browser is left; the policy is restored."
+  if [ "$rxc1" = valid ]; then echo "OK: the fresh RXC1 status is 'valid'. The rest is verified from the evidence."; return 0; fi
+  echo "RXC1 NOT CONFIRMED: the status is '${rxc1:-unreadable}', not 'valid', after waiting 180 s. The release is active and receiving; whether the RXC1 trial result appears is the open question. Send me this output."
+  return 3
+}
+
 stage_failure() {
   common_activation_preconditions
   [ ! -e "$ARM_DIR/armed" ] || die "an 'armed' file exists; tell me before doing anything"
   confirm "OPTIONAL EXERCISE. About to run an activation that is MEANT TO FAIL: the new release is started, the receive validation runs against an RXC1 state it cannot meet ('unsupported'), the helper rolls back to $PREV and proves reception there. The Bridge and Go restart TWICE (about a minute of no radio). No arm is written. Nothing stays changed."
-  with_activation_enabled
-  printf 'VALIDATION_EXPECT_RXC1="unsupported"\n' | sudo tee -a "$ACT_CFG" > /dev/null || die "could not set the exercise policy"
-  restore_expect() { sudo sed -i '/^VALIDATION_EXPECT_RXC1="unsupported"$/d' "$ACT_CFG"; restore_policy; }
-  trap restore_expect EXIT
+  with_activation_enabled 'VALIDATION_EXPECT_RXC1="unsupported"'
   sudo "$H/saturn-release-activate-root.sh" "$C"; rc=$?
+  restored=1; restore_policy || restored=0
   echo "activation helper exit status: $rc   (expected: non-zero, but NOT 70 and NOT 71)"
   say "result"; record_summary; stage_status | sed -n '/release and binaries/,/telemetry/p'
-  [ "$(readlink -f /opt/saturn/current)" = "/opt/saturn/releases/$PREV" ] && echo "the previous release is active again, as intended" || echo "UNEXPECTED: current is $(readlink -f /opt/saturn/current)"
-  return 0
+  failure_verdict "$rc" "$restored"
 }
 
 stage_activate() {
@@ -348,13 +445,15 @@ stage_activate() {
   if ! { printf 'RXC1-TRIAL-0x53460004\n' > "$ARM_DIR/armed.tmp" && sync "$ARM_DIR/armed.tmp" && mv "$ARM_DIR/armed.tmp" "$ARM_DIR/armed" && sync "$ARM_DIR/armed" "$ARM_DIR"; }; then die "could not write the arm"; fi
   echo "arm written: $(ls -l "$ARM_DIR/armed")"
   sudo "$H/saturn-release-activate-root.sh" "$C"; rc=$?
+  restored=1; restore_policy || restored=0
   echo "activation helper exit status: $rc"
   say "result"; record_summary
   if [ "$rc" != 0 ]; then echo "The helper rolls back by itself. Do NOT create another arm. Send me this output."; exit "$rc"; fi
   say "waiting for fresh RXC1 snapshots (up to 180 s)"
-  for _ in $(seq 1 90); do [ "$(perf_field "(m.get('rx_counter_v31') or {}).get('status')")" = valid ] && break; sleep 2; done
+  rxc1=""
+  for _ in $(seq 1 90); do rxc1=$(perf_field "(m.get('rx_counter_v31') or {}).get('status')"); [ "$rxc1" = valid ] && break; sleep 2; done
   perf_summary; stage_status | sed -n '/release and binaries/,/telemetry/p;/RXC1 state/,/connected/p'
-  echo "Done. The rest is verified from the evidence."
+  activation_verdict "$restored" "$rxc1"
 }
 
 # sourced by tests/test-g2-headless-steps.sh, which exercises the checks without touching a host
@@ -370,5 +469,5 @@ case "${1:-}" in
   reconcile) stage_reconcile ;;
   failure) stage_failure ;;
   activate) stage_activate ;;
-  *) sed -n 2,23p "$0"; exit 2 ;;
+  *) sed -n 2,26p "$0"; exit 2 ;;
 esac

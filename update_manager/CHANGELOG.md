@@ -4,6 +4,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- The staged appliance procedure for the headless-validation update (`g2_headless_steps.sh`) now
+  switches the root-owned `ACTIVATION_ENABLED` policy on for the single helper run of `reconcile`,
+  `failure` and `activate`, requires the configuration to be byte-identical afterwards (also on
+  failure, `die`, INT, TERM and HUP) and reports a restoration it cannot confirm. `failure` and
+  `activate` report what the host's own records show instead of the helper's exit status alone: an
+  exercise that succeeded or failed in the wrong phase, or an activation whose RXC1 never reads
+  `valid`, is no longer reported as success. No release component changed.
 - Release activation now proves reception itself. After the target services start,
   the root activation helper runs a temporary receive-only headless browser session
   (`saturn-remote-validate.py`) against the existing Bridge, so keeping a person's

@@ -3,10 +3,13 @@
 GoldMarsh, 2026-10-10 and 11. Branch `goldmarsh/headless-validation`, built on `f10a087` (Stage A) and the live-driver tools.
 FPGA 1.31.002 / build ID `0x53460004` and the XDMA kernel driver are untouched. **The G2 is still on release `329f3109`** with the `rollback_failed` record exactly as the first
 activation left it; an earlier build of this branch is installed *inactive* beside it and the new activation helper, validator and guard are installed with activation still
-disabled. The first hardware `check` has been run (read-only) and failed, for reasons described next; this report describes the source that answers it.
+disabled (the state when this was written). The first hardware `check` failed, for reasons described next, and the source answers it; the checks with the answering source passed
+(see "Hardware results with release `50898660`").
 
 This file and `g2_headless_steps.sh` live in the source tree (`update_manager/docs/headless-validation/`) so that nothing depends on a scratch directory. The commit
-under test is the branch head; the hand-off message gives its full SHA, and the procedure refuses to build or run anything else (`PIN=<that SHA>`).
+under test is the **release** `50898660388fba554e0cbfc63844cbac7c87326b`: it is what was built, is installed (inactive) on the G2, and is what the procedure pins
+(`PIN=`; it refuses to build or run anything else). The branch head is a separate identity, reported in the hand-off message: commits after the release that change only this report,
+the procedure and its test are not release components and need no rebuild, and `git diff 50898660388fba554e0cbfc63844cbac7c87326b <head> --stat` shows exactly what differs.
 
 ## What was wrong
 
@@ -117,7 +120,25 @@ stage refuses a different one. The four hashes it pins (the helper's installer, 
 The release manifest is held to the same commit: the `validate` stage (staged bundle) and the `install` stage (installed copy) both require `release-manifest.json` to name exactly
 the pinned commit as a clean tree, with every component built from it, and `status` prints the same finding. So the script, the build and the release manifest are demonstrably one commit.
 
-## Evidence (all run on this machine; the G2 has run none of it)
+## Hardware results with release `50898660` (G2, 2026-10-11; the running release is still `329f3109`)
+
+* `validate`, `install` and `helper` ran as designed: the manifest names the pinned commit, the four pinned files match, the release is installed inactive, activation stays disabled.
+* **`check` at the default 350M cap stopped at 8.6 s**, before the page had loaded: the watchdog read 366 MiB (proportional set size) and stopped the browser. Every later condition is
+  reported NOT PROVEN, not failed; cleanup was complete and no listed Bridge drop counter rose. It shows the browser had reached 366 MiB by then. It is not a general figure for
+  "startup": the per-process-type numbers are each type's own maximum, reached at different moments, and do not add up to one instant.
+* **`check 500M` passed** (peak 448 MiB, 52 MiB under the cap) and a **plain `check` with `VALIDATION_MEMORY_MAX="500M"` set in the activation configuration passed** (peak 413 MiB): display
+  data, Opus frames, decoded audio, AudioContext, the owner's readiness gate, an unchanged radio, `Seccomp: 2` on all four renderers and no `--no-sandbox`, the validator's watchdog
+  as the memory enforcement (this kernel has no memory controller), and complete cleanup checked from the host. The running release is a legacy one, so the operator-role fallback
+  was used and recorded as such.
+* **What it cost, and what it does not prove.** The browser averaged about 1.6 cores and the host about 72% busy for roughly 13 s; swap rose by about 70 MiB and fell back; the Bridge's
+  IQ delivery-queue overflow counters rose by 13 and by 20 (the only listed counters that moved; they rose after the browser, the only client, attached); the page counted 20 underruns and
+  74 to 115 late drops among about 320 Opus frames. This proves functional reception, not smooth playback or zero impact. The longer matched audio comparison is still to come.
+* **500M is this host's setting, not a new default.** The repository default stays 350M. A browser is not started unless `MemAvailable` is at least the cap plus 32 MiB (532 MiB for
+  500M); this G2 showed 551 to 586 MiB. The cap is persisted for this G2 in `/etc/default/saturn-release-activate`, so `check`, `reconcile`, activation and the rollback validation use it.
+* **`reconcile` was refused** by the helper: it will not reconcile while the root-owned `ACTIVATION_ENABLED` policy is `"0"`. My procedure's `reconcile` stage did not switch the policy
+  on for its run the way `failure` and `activate` do, and no test had ever run those three stages. Nothing was changed. See "Found in my own earlier push".
+
+## Evidence (all run on this machine, except where the hardware results above say otherwise)
 
 | what | result |
 |---|---|
@@ -125,6 +146,7 @@ the pinned commit as a clean tree, with every component built from it, and `stat
 | activation helper tests (incident control; success with nobody connected; stalled audio; rollback with and without verified reception; policy by release; isolation failure; interrupted helper; reconcile; `--check-reception --memory-max`) | pass; 28 mutations earlier and 6 for the measuring cap and the record: all killed |
 | installer for the helper/validator/guard | pass |
 | staged procedure (`tests/test-g2-headless-steps.sh`): pins, commit lock, manifest-names-the-pin, the build, helper and check stages with the host's commands stubbed (including `check 500M` and bad sizes), verdict on about 70 variants of evidence | pass; every mutation tried over the rounds (24, then 9 for the manifest check, 8 for the build stage, 8 for the helper stage, 6 for the check size and the verdict rules) killed |
+| the same test, `reconcile`, `failure` and `activate` against a stand-in for the root helper that applies the real policy gates (the REAL helper's reconcile gate is run too, in its own non-root test mode on temporary paths: policy off refuses, policy on gets past): policy off / already on, restored byte-identical after success, failure, a stage killed by TERM, INT or HUP, and a restoration that fails; every condition of the `failure` and `activate` verdicts; refusals leave no arm and no change | pass; 45 mutations of the policy handling, the restoration and every verdict condition (policy not switched on in each stage, not restored, hash ignored, a failed or half-done command ignored, a signal trap or the exit trap removed, each `failure` and `activation` condition dropped, `Done` printed anyway, RXC1 wait skipped, arm not published or with the wrong text): 43 killed. The 2 survivors (dropping the explicit TERM or HUP trap) are equivalent on bash 5.1, which runs the EXIT trap on those signals anyway; the explicit traps stay so the behaviour does not depend on the bash version. The no-op control survives. Two earlier passes were discarded because their control failed (a runner started with `nohup` makes SIGHUP ignored, which no stage can trap; a race on a shared lint shim); the test now resets the signal dispositions it needs |
 | real components on loopback: replay Bridge + saturn-go proxy (TLS, basic auth, pinned certificate) + the real page + **real Chrome 153 with its sandbox ON** | **101/101 checks** at the head before the last two edits (a rerun at the final head is in the hand-off): new page and old page, each with the page hidden and the browser averaging 12-15% of a core (350% before); display data stopped mid-measurement; Chrome started with `--no-sandbox` refused; a real Chrome stopped by the memory watchdog at a 60M cap (the cause is the first failure, Chrome and connection gone) and left alone under a 4G cap; old page + **old Bridge** (operator role refused under `required`, accepted as a recorded fallback). In every sandboxed run the real Chrome showed its renderers all `Seccomp: 2`. |
 | shellcheck on every shell file CI checks | clean (see "Found in my own earlier push") |
 | Bridge (unchanged since `dfb0b19`): 462 tests; web: 761 tests, typecheck, seam check | pass at the earlier head; no Bridge or web file changed since |
@@ -144,6 +166,14 @@ the pinned commit as a clean tree, with every component built from it, and `stat
   it now requires the exact line `resolved_commit=<pinned commit>` and shows the builder's own message when it cannot run. The test drives the stage with a builder that reports each case
   (the pinned commit, another commit, a longer string, a look-alike line, a builder that fails) and checks the real builder's source still prints that line. Nothing was built and nothing
   on the G2 changed in the failed run beyond `~/g2_headless_steps.sh` and `~/.g2_headless_pin`.
+* **The `reconcile` stage did not switch the root-owned policy on; `failure` and `activate` had never been run even against a stand-in; the reviewer found two more reporting defects.**
+  The first hardware `reconcile` was refused (`reconciliation is disabled by root-owned policy (ACTIVATION_ENABLED)`). Corrected and tested (evidence table): all three stages switch the
+  policy on for their one helper run only, hash the configuration first and require it byte-identical afterwards, restore it on success, failure, `die`, INT, TERM and HUP, and report a
+  restoration they cannot confirm loudly, with the repair command, and fail. `failure` no longer returns success whatever happened: it requires an exit status that is neither 0 nor 70/71, the
+  previous release active, a record of its own (`rolled_back`, failed in the receive validation, the rollback restored and receiving) and the policy restored. `activate` no longer prints
+  "Done" when the RXC1 wait expires: after the helper succeeds it requires the new release active, `/readyz` reporting it, a `committed` record whose validation finished `done` as the viewer without
+  the legacy fallback, no browser and no connection left, and the policy restored; if all that holds but RXC1 never reads `valid` it says so and exits 3. The new test caught one regression of mine
+  on the way: an over-strict pattern for the exercise's extra setting line (no digits allowed, and the name contains `RXC1`) would have stopped `failure` before it started.
 * **The `helper` stage ran the installer from a path where it does not exist.** The first run on the G2 stopped at `sudo: /usr/local/lib/saturn-go/scripts/saturn-release-install-activator-root.sh:
   command not found` before changing anything: only the *helper* is installed under `/usr/local/lib/saturn-go/scripts`; its installer is run from the validated, immutable release
   (`/opt/saturn/releases/<commit>/scripts/`, as `update_manager/release/rxc1/README.md` already says). My runbook had the same wrong path. Both now use the release's copy, the
@@ -158,13 +188,14 @@ the pinned commit as a clean tree, with every component built from it, and `stat
 2. **`check [SIZE]`**, all browser tabs closed: the production launcher on the running `329f3109`; changes nothing. `check 500M` measures with that browser memory cap for that one check. Success prints `OK: reception, sandbox, memory cap and cleanup are all verified`.
    Because `329f3109` is a legacy release it is expected to print `LEGACY BRIDGE FALLBACK USED` or a plain viewer session (the old Bridge's race); either is acceptable, and it says which.
 3. `reconcile`, then optionally `failure` (a real activation meant to fail validation, rolling back to `329f3109`), then `activate` (the normal update, RXC1 arm written last, all browsers closed).
-   Per the instruction, 3 happens only after the source review and a successful `check`.
+   Per the instruction, 3 happens only after the source review and a successful `check`. Each of the three switches the root-owned `ACTIVATION_ENABLED` policy on for its one helper run only,
+   says so, and restores the configuration byte-identical (or says loudly that it could not). A stage exits 0 only when the outcome is the expected one.
 
 ## Not verified / residual risk
 
-* **Whether this Chromium fits the Pi is not known.** On x86 it needs about 500 MiB (see above); the Pi has about 580 MiB available next to the running radio. The next `check`, with the
-  per-process-type memory and the swap/I-O figures it prints, decides it; nothing is guessed. The sandbox inside the locked-down unit did start on the Pi (the browser attached and loaded the
-  page); whether every renderer reports `Seccomp: 2` there was not reached by the first check, because the run stopped at its first failure, and is read by the next.
+* **The Pi's Chromium fits, with little room.** It fits under a 500M cap (peaks 413 and 448 MiB) with 551 to 586 MiB available, and does not under 350M. The peak varies from run to run (the
+  aborted 350M run read 366 MiB at 8.6 s, still starting), the margin is about 50 MiB, and a launch needs the cap plus 32 MiB free, so an activation at a busier moment can be refused
+  at launch; that counts as unproven and rolls back. The sandbox does hold inside the locked-down unit (`Seccomp: 2` on every renderer).
 * The kernel offers no pressure-stall information on this Pi (`/proc/pressure` is absent), so the diagnostics use CPU, I/O wait, swap and fault counters instead.
 * `MemoryPeak` needs systemd >= 255 and a memory controller; the peak is otherwise the validator's own measurement (proportional set size), and the evidence names which.
 * On the old Bridge the operator slot may be held by the media connection of a validation session for ~15 s; a person connecting in that window would be a viewer until it ends.

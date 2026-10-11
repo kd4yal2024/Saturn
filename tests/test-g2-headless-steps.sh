@@ -350,4 +350,344 @@ STATUS_FILE="$TMP/status-fallback.json"
 check_stage || fail "a named legacy fallback was refused: $(cat "$TMP/stage.out")"
 grep -Fq 'LEGACY BRIDGE FALLBACK USED' "$TMP/stage.out" || fail "the fallback was not announced by the check stage"
 
+# --- the stages that change the host (reconcile, failure, activate), run against a stand-in for the root helper.
+# The stand-in applies the same root-owned policy gates as the real helper and writes the same record fields; the first part of this section
+# runs the REAL helper (in its own non-root test mode, on temporary paths) to show that the gate is where the stand-in says it is.
+PREV_COMMIT="$(sed -n 's/^PREV=\([0-9a-f]\{40\}\)$/\1/p' "$SCRIPT")"
+[[ "$PREV_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail "cannot read PREV from the procedure"
+REAL_HELPER="$ROOT/update_manager/scripts/saturn-release-activate-root.sh"
+grep -Fq 'activation is disabled by root-owned policy' "$REAL_HELPER" || fail "the real helper no longer has the activation policy gate the stand-in copies"
+real_gate() {  # $1 = 0 or 1: what the real helper says to --reconcile-rollback with that policy
+  local d="$TMP/real-gate-$1"
+  rm -rf "$d"; mkdir -p "$d/deployments" "$d/saturn/releases" "$d/systemd"
+  printf 'ACTIVATION_ENABLED="%s"\nTRANSACTION_GROUP="%s"\nSATURN_ROOT="%s/saturn"\nRELEASES_ROOT="%s/saturn/releases"\nCURRENT_LINK="%s/saturn/current"\nSYSTEMD_ROOT="%s/systemd"\nLOCK_FILE="%s/lock"\nMANIFEST_TOOL="%s/update_manager/scripts/saturn-release-manifest.py"\nSTATE_TOOL="%s/update_manager/scripts/saturn-state-compatibility.py"\nCOMPONENTS_FILE="%s/update_manager/release/components-v1.json"\nTRANSACTION_FILE="%s/deployments/current.json"\nSTATE_BACKUP_ROOT="%s/deployments/state-backups"\nSTATE_ROOT="%s/state"\nBACKEND_STATUS_HELPER="/bin/true"\nVALIDATION_ENABLED="0"\n' \
+    "$1" "$(id -gn)" "$d" "$d" "$d" "$d" "$d" "$ROOT" "$ROOT" "$ROOT" "$d" "$d" "$d" >"$d/config"
+  SATURN_RELEASE_ACTIVATE_TEST_MODE=1 SATURN_RELEASE_ACTIVATE_CONFIG="$d/config" bash "$REAL_HELPER" --reconcile-rollback 2>&1 || true
+}
+[[ "$(real_gate 0)" == *"reconciliation is disabled by root-owned policy (ACTIVATION_ENABLED)"* ]] || fail "the real helper did not refuse to reconcile with the policy off: $(real_gate 0)"
+[[ "$(real_gate 1)" != *"disabled by root-owned policy"* && "$(real_gate 1)" == *"nothing to reconcile"* ]] || fail "the real helper did not get past its policy gate with the policy on: $(real_gate 1)"
+
+mkdir -p "$TMP/standin"
+cat >"$TMP/standin/saturn-release-activate-root.sh" <<'STANDIN'
+#!/usr/bin/env bash
+# Stands in for the root helper: the same policy gates (with the real messages), the same exit statuses (70 = previous release not restored,
+# 71 = restored but reception unproven) and the same record fields. FAKE_OUTCOME says what the "activation" or "reconcile" turns out to be.
+printf '%s\n' "$*" >>"$FAKE_LOG"
+{ grep -E '^(ACTIVATION_ENABLED|VALIDATION_EXPECT_RXC1)=' "$FAKE_CFG" || true; } | tr '\n' ' ' >"$FAKE_SEEN"
+if [ -e "$FAKE_ARM" ]; then { printf 'present:'; cat "$FAKE_ARM"; } >"$FAKE_SEEN_ARM"; else echo absent >"$FAKE_SEEN_ARM"; fi
+[ -z "${FAKE_HANG:-}" ] || sleep "$FAKE_HANG"
+[ -z "${FAKE_TAMPER:-}" ] || echo 'STRAY="x"' >>"$FAKE_CFG"     # something else changes the configuration while the helper runs
+enabled() { grep -Fxq 'ACTIVATION_ENABLED="1"' "$FAKE_CFG"; }
+write_record() {  # $1 status, $2 phase, $3 failure phase or -, $4 restored, $5 verified, $6 role, $7 legacy fallback used
+  python3 - "$FAKE_TXN" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$FAKE_TARGET" <<'PY'
+import json
+import os
+import sys
+path, status, phase, fphase, restored, verified, role, legacy, target = sys.argv[1:10]
+d = json.load(open(path))
+d.update(status=status, phase=phase, target_commit=target)
+if fphase != "-":
+    d["activation_failure"] = {"phase": fphase, "command": "x", "exit_status": 1}
+    d["rollback"] = {"status": "complete", "release_restored": restored == "true", "receive_verified": verified == "true"}
+d["validation"] = {"target": {"final_state": os.environ.get("FAKE_FINAL_STATE", "done"), "role": role, "legacy_fallback_used": legacy == "true", "failed": None}}
+json.dump(d, open(path, "w"))
+PY
+}
+case "$1" in
+  --reconcile-rollback)
+    enabled || { echo "[saturn-release-activate] ERROR: reconciliation is disabled by root-owned policy (ACTIVATION_ENABLED)" >&2; exit 1; }
+    case "$FAKE_OUTCOME" in
+      reconcile-fail) exit 1 ;;
+      reconcile-ok|reconcile-altered)
+        python3 - "$FAKE_TXN" "$FAKE_OUTCOME" <<'PY'
+import json
+import sys
+path, outcome = sys.argv[1:3]
+d = json.load(open(path))
+original = {"status": d["status"], "activation_failure": d["activation_failure"], "rollback": d["rollback"]}
+d["status"] = "rolled_back"
+d["phase"] = "reconciled"
+if outcome == "reconcile-altered":
+    d["rollback"] = dict(d["rollback"], status="complete")     # the original outcome rewritten: not allowed
+d["reconciliation"] = {"original_transaction": original, "release_restored": True, "receive_verified": True}
+json.dump(d, open(path, "w"))
+PY
+        exit 0 ;;
+    esac
+    exit 99 ;;
+  *)
+    enabled || { echo "[saturn-release-activate] ERROR: activation is disabled by root-owned policy; enable only for an approved appliance rollback test" >&2; exit 1; }
+    case "$FAKE_OUTCOME" in
+      success)
+        write_record committed commit - - - "${FAKE_ROLE:-viewer}" "${FAKE_LEGACY:-false}"
+        [ -n "${FAKE_NO_REPOINT:-}" ] || ln -sfn "$FAKE_RELEASES/$FAKE_TARGET" "$FAKE_CURRENT"
+        [ -z "${FAKE_CLIENTS_AFTER:-}" ] || echo "$FAKE_CLIENTS_AFTER" >"$FAKE_CLIENTS_FILE"
+        python3 - "$FAKE_PERF" "${FAKE_RXC1:-valid}" <<'PY'
+import json
+import sys
+d = json.load(open(sys.argv[1]))
+d["metrics"]["rx_counter_v31"] = {"status": sys.argv[2]}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+        exit 0 ;;
+      success-uncommitted) write_record rolled_back rollback-complete receive-validation true true viewer false; ln -sfn "$FAKE_RELEASES/$FAKE_TARGET" "$FAKE_CURRENT"; exit 0 ;;
+      rolled-back) write_record "${FAKE_RECORD_STATUS:-rolled_back}" rollback-complete "${FAKE_FAIL_PHASE:-receive-validation}" true "${FAKE_RB_VERIFIED:-true}" viewer false; exit 1 ;;
+      rolled-back-wrong-current) write_record rolled_back rollback-complete receive-validation true true viewer false; ln -sfn "$FAKE_RELEASES/$FAKE_TARGET" "$FAKE_CURRENT"; exit 1 ;;
+      rollback-failed) write_record rollback_failed rollback-failed receive-validation false false viewer false; exit 70 ;;
+      unproven) write_record rollback_failed rollback-failed receive-validation true false viewer false; exit 71 ;;
+      early-fail) exit 1 ;;
+    esac
+    exit 99 ;;
+esac
+STANDIN
+chmod +x "$TMP/standin/saturn-release-activate-root.sh"
+
+hs_setup() {  # the host as the G2 is now: policy off, the record rollback_failed, the previous release active
+  local hs="$TMP/hs"
+  rm -rf "$hs" "$TMP/hs.out" "$TMP/hs.stage"; mkdir -p "$hs/releases/$PREV_COMMIT" "$hs/releases/$A" "$hs/arm" "$hs/H"
+  ln -s "$hs/releases/$PREV_COMMIT" "$hs/current"
+  cp "$TMP/standin/saturn-release-activate-root.sh" "$hs/H/"; printf '# validator\n' >"$hs/H/saturn-remote-validate.py"
+  printf '# Managed by install_saturn_go_nginx.sh.\nACTIVATION_ENABLED="0"\nSATURN_ROOT="/opt/saturn"\nVALIDATION_MEMORY_MAX="500M"\nTRANSACTION_GROUP="pi"\n' >"$hs/activate.conf"
+  cp "$hs/activate.conf" "$hs/activate.conf.orig"
+  printf '{"backend":"xdma","status":"ready","updated_at_ms":0,"metrics":{"date_code_hex":"53460004","connections":0,"client":0,"rx_counter_v31":{"status":"unarmed"}}}' >"$hs/perf.json"
+  printf '{"status":"rollback_failed","phase":"rollback-failed","target_commit":"%s","activation_failure":{"phase":"readiness","command":"w","exit_status":1},"rollback":{"status":"failed","release_restored":false}}' "$B" >"$hs/current.json"
+}
+hs_reconciled() { printf '{"status":"rolled_back","phase":"reconciled","target_commit":"%s","activation_failure":{"phase":"readiness","command":"w","exit_status":1},"rollback":{"status":"failed"}}' "$B" >"$TMP/hs/current.json"; }
+hs_env() {  # the environment the stand-in helper and the stage see
+  export FAKE_CFG="$TMP/hs/activate.conf" FAKE_TXN="$TMP/hs/current.json" FAKE_PERF="$TMP/hs/perf.json" FAKE_ARM="$TMP/hs/arm/armed" FAKE_LOG="$TMP/hs.helper.log"
+  export FAKE_CLIENTS_FILE="$TMP/hs/clients" FAKE_SEEN="$TMP/hs.seen" FAKE_SEEN_ARM="$TMP/hs.seen.arm" FAKE_TARGET="$A" FAKE_RELEASES="$TMP/hs/releases" FAKE_CURRENT="$TMP/hs/current"
+  rm -f "$FAKE_LOG" "$FAKE_SEEN" "$FAKE_SEEN_ARM"
+}
+cat >"$TMP/stage-run.sh" <<'STAGERUN'
+  source "$SCRIPT"
+  HS="$TMP/hs"; C="$A"; ACT_CFG="$HS/activate.conf"; TXN="$HS/current.json"; PERF="$HS/perf.json"; ARM_DIR="$HS/arm"; H="$HS/H"
+  RELEASES="$HS/releases"; CURRENT_LINK="$HS/current"
+  ACT_SHA=$(sha256sum "$H/saturn-release-activate-root.sh" | cut -d" " -f1); VAL_SHA=$(sha256sum "$H/saturn-remote-validate.py" | cut -d" " -f1)
+  confirm() { :; }; sleep() { :; }
+  clients() { if [ -e "$HS/clients" ]; then cat "$HS/clients"; else echo "${CLIENTS:-0}"; fi; }
+  pgrep() { [ -z "${PROCS_LEFT:-}" ] || printf "%s\n" "$PROCS_LEFT"; return 0; }
+  curl() { printf "{\"status\":\"ready\",\"build_commit\":\"%s\"}" "${READY_COMMIT:-$C}"; }
+  stage_status() { echo "--- release and binaries"; echo "(stubbed)"; echo "--- telemetry"; }
+  # like sudo, but the Nth call to sed -i can be made to fail, to see what a restoration that does not happen looks like
+  SEDS=0
+  sudo() {
+    if [ "$1" = sed ] && [ "${2:-}" = -i ]; then
+      SEDS=$((SEDS + 1))
+      if [ "${FAIL_SED:-0}" = "$SEDS" ]; then return 1; fi
+      if [ "${FAIL_SED_AFTER:-0}" = "$SEDS" ]; then "$@"; return 1; fi      # does the work, then reports failure
+    fi
+    "$@"
+  }
+  # a stage that only switches the policy on and ends, to see what the exit does about a restoration it still owes
+  stage_policy_only() { with_activation_enabled; return 0; }
+stage_"$STAGE"
+STAGERUN
+export SCRIPT TMP A B PREV_COMMIT
+run_stage() {  # $1 = reconcile | failure | activate; the rest are VAR=value settings for the stand-in and the stage. Output: $TMP/hs.out, status: $TMP/hs.stage
+  local stage=$1; shift
+  hs_env
+  set +e
+  env STAGE="$stage" "$@" bash "$TMP/stage-run.sh" >"$TMP/hs.out" 2>&1 </dev/null
+  echo $? >"$TMP/hs.stage"
+  set -e
+}
+stage_rc() { cat "$TMP/hs.stage"; }
+out_has() { grep -Fq -- "$1" "$TMP/hs.out"; }
+cfg_unchanged() { cmp -s "$TMP/hs/activate.conf" "$TMP/hs/activate.conf.orig"; }
+helper_was_run() { [ -s "$TMP/hs.helper.log" ]; }
+expect() {  # $1 = description; the remaining arguments are a command that must succeed
+  local what=$1; shift
+  "$@" || fail "$what
+$(sed 's/^/    | /' "$TMP/hs.out" 2>/dev/null | tail -25)"
+}
+
+# reconcile --------------------------------------------------------------------------------------------------------------------------
+hs_setup; run_stage reconcile FAKE_OUTCOME=reconcile-ok
+expect "reconcile with the policy off did not succeed" test "$(stage_rc)" = 0
+expect "the helper did not see the policy on" test "$(cat "$TMP/hs.seen")" = 'ACTIVATION_ENABLED="1" '
+expect "the configuration is not byte-identical after reconcile" cfg_unchanged
+expect "reconcile did not say the policy was restored" out_has 'activation policy restored to: ACTIVATION_ENABLED="0" (the configuration is byte-identical to before)'
+expect "reconcile did not confirm the original outcome is kept" out_has 'recorded beside them: yes'
+expect "reconcile did not say what comes next" out_has 'OK. Next: bash ~/g2_headless_steps.sh activate'
+expect "reconcile did not run the helper in reconcile mode" grep -Fxq -- '--reconcile-rollback' "$TMP/hs.helper.log"
+record_copy_kept() { compgen -G "$TMP/hs/current.json.before-reconcile.*" >/dev/null; }
+expect "reconcile left no copy of the record it was about to change" record_copy_kept
+
+hs_setup; run_stage reconcile FAKE_OUTCOME=reconcile-fail
+expect "a failed reconcile reported success" test "$(stage_rc)" != 0
+expect "the configuration is not restored after a failed reconcile" cfg_unchanged
+if out_has 'OK. Next'; then fail "a failed reconcile was followed by the success message"; fi
+
+hs_setup; run_stage reconcile FAKE_OUTCOME=reconcile-altered
+expect "a reconcile that rewrote the original outcome reported success" test "$(stage_rc)" != 0
+expect "the altered original was not called out" out_has 'recorded beside them: NO'
+expect "the configuration is not restored after an altered record" cfg_unchanged
+
+hs_setup; sed -i 's/^ACTIVATION_ENABLED=.*/ACTIVATION_ENABLED="1"/' "$TMP/hs/activate.conf"; cp "$TMP/hs/activate.conf" "$TMP/hs/activate.conf.orig"
+run_stage reconcile FAKE_OUTCOME=reconcile-ok
+expect "reconcile with the policy already on failed" test "$(stage_rc)" = 0
+expect "a policy that was already on was changed" cfg_unchanged
+expect "the policy was not left on" grep -Fxq 'ACTIVATION_ENABLED="1"' "$TMP/hs/activate.conf"
+
+hs_setup; printf '{"status":"rolled_back","target_commit":"x"}' >"$TMP/hs/current.json"; run_stage reconcile FAKE_OUTCOME=reconcile-ok
+expect "reconcile ran on a record that is not rollback_failed" test "$(stage_rc)" != 0
+expect "reconcile did not say there is nothing to reconcile" out_has 'there is nothing to reconcile'
+if helper_was_run; then fail "the helper was run although there is nothing to reconcile"; fi
+expect "the configuration changed although reconcile refused" cfg_unchanged
+
+hs_setup; ln -sfn "$TMP/hs/releases/$A" "$TMP/hs/current"; run_stage reconcile FAKE_OUTCOME=reconcile-ok
+expect "reconcile ran although the previous release is not the active one" test "$(stage_rc)" != 0
+if helper_was_run; then fail "the helper was run although the previous release is not active"; fi
+expect "the configuration changed although reconcile refused" cfg_unchanged
+
+hs_setup; run_stage reconcile FAKE_OUTCOME=reconcile-ok CLIENTS=2
+expect "reconcile ran with a browser connected" test "$(stage_rc)" != 0
+if helper_was_run; then fail "the helper was run with a browser connected"; fi
+
+# a restoration that does not happen is reported, and fails the stage even though the helper succeeded
+hs_setup; run_stage reconcile FAKE_OUTCOME=reconcile-ok FAIL_SED=2
+expect "a failed restoration did not fail reconcile" test "$(stage_rc)" != 0
+expect "a failed restoration was not reported loudly" out_has 'THE ACTIVATION POLICY IS NOT CONFIRMED RESTORED'
+expect "the report did not say how to put it right" out_has "sudo sed -i 's/^ACTIVATION_ENABLED=.*/ACTIVATION_ENABLED=\"0\"/'"
+if out_has 'OK. Next'; then fail "reconcile said OK although the policy was not restored"; fi
+
+# something else changed the configuration while the helper ran: the stage cannot claim it is as it was
+hs_setup; run_stage reconcile FAKE_OUTCOME=reconcile-ok FAKE_TAMPER=1
+expect "a configuration changed under the stage was reported as restored" test "$(stage_rc)" != 0
+expect "the changed configuration was not reported" out_has 'THE ACTIVATION POLICY IS NOT CONFIRMED RESTORED'
+# a command that reports failure after doing its work is still reported
+hs_setup; run_stage reconcile FAKE_OUTCOME=reconcile-ok FAIL_SED_AFTER=2
+expect "a restoration command that failed was not reported" test "$(stage_rc)" != 0
+expect "the failed restoration command was not reported loudly" out_has 'THE ACTIVATION POLICY IS NOT CONFIRMED RESTORED'
+# an exit that still owes the restoration makes the stage fail when it cannot do it, and restores when it can
+hs_setup; run_stage policy_only
+expect "a stage that owed only the restoration did not succeed" test "$(stage_rc)" = 0
+expect "the exit did not restore the configuration" cfg_unchanged
+hs_setup; run_stage policy_only FAIL_SED=2
+expect "an exit that could not restore reported success" test "$(stage_rc)" != 0
+expect "the exit did not report the failed restoration" out_has 'THE ACTIVATION POLICY IS NOT CONFIRMED RESTORED'
+# a policy that is already on is neither written nor restored (so a failing sed is never reached)
+hs_setup; sed -i 's/^ACTIVATION_ENABLED=.*/ACTIVATION_ENABLED="1"/' "$TMP/hs/activate.conf"; cp "$TMP/hs/activate.conf" "$TMP/hs/activate.conf.orig"
+run_stage reconcile FAKE_OUTCOME=reconcile-ok FAIL_SED=1
+expect "a policy that was already on was rewritten" test "$(stage_rc)" = 0
+
+# the restoration also happens when the stage is killed while the helper runs
+for sig in TERM INT HUP; do
+  hs_setup; hs_env
+  # (a background job of a script starts with SIGINT ignored, and a script run under nohup with SIGHUP ignored; no trap can undo that, so the signal dispositions are reset before the stage starts)
+  python3 -c 'import os, signal, sys; [signal.signal(s, signal.SIG_DFL) for s in (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP, signal.SIGTERM)]; os.execvp(sys.argv[1], sys.argv[1:])' \
+    env STAGE=reconcile FAKE_OUTCOME=reconcile-ok FAKE_HANG=2 bash "$TMP/stage-run.sh" >"$TMP/hs.out" 2>&1 </dev/null &
+  stage_pid=$!
+  for _ in $(seq 1 50); do [ -e "$TMP/hs.seen" ] && break; sleep 0.1; done
+  [ -e "$TMP/hs.seen" ] || { kill -KILL "$stage_pid" 2>/dev/null || true; fail "the stage did not reach the helper (signal test $sig)"; }
+  kill "-$sig" "$stage_pid"
+  wait "$stage_pid" && status=0 || status=$?
+  [[ "$status" != 0 ]] || fail "a stage killed with $sig reported success"
+  cmp -s "$TMP/hs/activate.conf" "$TMP/hs/activate.conf.orig" || fail "the configuration was not restored after $sig: $(cat "$TMP/hs/activate.conf")"
+done
+
+# failure -----------------------------------------------------------------------------------------------------------------------------
+hs_setup; hs_reconciled; run_stage failure FAKE_OUTCOME=rolled-back
+expect "an exercise that failed validation and rolled back as intended was not accepted" test "$(stage_rc)" = 0
+expect "the helper did not see the exercise settings" test "$(cat "$TMP/hs.seen")" = 'ACTIVATION_ENABLED="1" VALIDATION_EXPECT_RXC1="unsupported" '
+expect "the exercise left the configuration changed" cfg_unchanged
+expect "the exercise did not say it was as intended" out_has 'OK: the activation failed its receive validation as intended'
+expect "the exercise wrote an arm" test ! -e "$TMP/hs/arm/armed"
+
+expected_failure() {  # $1 = what the stand-in's activation turns out to be, $2 = text the report must contain, $3 = optional VAR=value for the stand-in
+  hs_setup; hs_reconciled
+  run_stage failure FAKE_OUTCOME="$1" ${3:+"$3"}
+  expect "the exercise ($1 ${3:-}) was reported as a success" test "$(stage_rc)" != 0
+  expect "the exercise ($1 ${3:-}) was not explained: wanted '$2'" out_has "$2"
+  if out_has 'OK: the activation failed'; then fail "the exercise ($1 ${3:-}) printed the success line"; fi
+  expect "the configuration was left changed after the exercise ($1 ${3:-})" cfg_unchanged
+}
+expected_failure success "the activation SUCCEEDED"
+expected_failure success-uncommitted "the activation SUCCEEDED"
+expected_failure rollback-failed "exit 70: the previous release was NOT restored"
+expected_failure unproven "exit 71: the previous release was restored but reception on it is not proven"
+expected_failure rolled-back "the activation did not fail in the receive validation" FAKE_FAIL_PHASE=readiness
+expected_failure rolled-back "the rollback record does not say that the previous release was restored and is receiving" FAKE_RB_VERIFIED=false
+expected_failure rolled-back-wrong-current "the active release is"
+expected_failure rolled-back "the record says 'rollback_failed', not rolled_back" FAKE_RECORD_STATUS=rollback_failed
+expected_failure early-fail "this run left no record of its own"
+
+hs_setup; hs_reconciled; run_stage failure FAKE_OUTCOME=rolled-back FAIL_SED=3
+expect "an exercise whose restoration failed was reported as a success" test "$(stage_rc)" != 0
+expect "an unrestored exercise was not reported" out_has 'THE ACTIVATION POLICY IS NOT CONFIRMED RESTORED'
+expect "an unrestored exercise was not listed among the problems" out_has 'the activation policy was not confirmed restored'
+
+hs_setup; hs_reconciled; touch "$TMP/hs/arm/armed"; run_stage failure FAKE_OUTCOME=rolled-back
+expect "the exercise ran with an arm present" test "$(stage_rc)" != 0
+if helper_was_run; then fail "the helper was run although an arm exists"; fi
+hs_setup; hs_reconciled; run_stage failure FAKE_OUTCOME=rolled-back CLIENTS=2
+expect "the exercise ran with a browser connected" test "$(stage_rc)" != 0
+if helper_was_run; then fail "the helper was run with a browser connected"; fi
+hs_setup; run_stage failure FAKE_OUTCOME=rolled-back
+expect "the exercise ran on an unreconciled record" test "$(stage_rc)" != 0
+expect "the exercise did not say to reconcile first" out_has 'run the reconcile stage first'
+if helper_was_run; then fail "the helper was run on an unreconciled record"; fi
+
+# activate ----------------------------------------------------------------------------------------------------------------------------
+hs_setup; hs_reconciled; run_stage activate FAKE_OUTCOME=success
+expect "a complete activation was not accepted" test "$(stage_rc)" = 0
+expect "the helper did not see the policy on" test "$(cat "$TMP/hs.seen")" = 'ACTIVATION_ENABLED="1" '
+expect "the arm was not there, with exactly the trial text, when the helper started" test "$(cat "$TMP/hs.seen.arm")" = 'present:RXC1-TRIAL-0x53460004'
+expect "the configuration is not byte-identical after activation" cfg_unchanged
+expect "the activation did not report the release as active and verified" out_has 'RELEASE ACTIVE AND RECEPTION VERIFIED'
+expect "the activation did not report RXC1" out_has "OK: the fresh RXC1 status is 'valid'"
+
+hs_setup; hs_reconciled; run_stage activate FAKE_OUTCOME=success FAKE_RXC1=unarmed
+expect "an activation whose RXC1 never read valid exited with 0" test "$(stage_rc)" = 3
+expect "the unconfirmed RXC1 was not reported" out_has "RXC1 NOT CONFIRMED: the status is 'unarmed', not 'valid'"
+expect "an active and receiving release was not reported as such" out_has 'RELEASE ACTIVE AND RECEPTION VERIFIED'
+if out_has 'Done'; then fail "an unconfirmed RXC1 was reported as Done"; fi
+if out_has "OK: the fresh RXC1 status"; then fail "an unconfirmed RXC1 was reported as OK"; fi
+expect "the configuration is not byte-identical after activation" cfg_unchanged
+
+for case_ in "rolled-back:1" "rollback-failed:70" "unproven:71"; do
+  hs_setup; hs_reconciled; run_stage activate FAKE_OUTCOME=${case_%%:*}
+  expect "a helper that exited ${case_##*:} did not make the stage exit with it" test "$(stage_rc)" = "${case_##*:}"
+  expect "a failed activation did not warn against a second arm" out_has 'Do NOT create another arm'
+  expect "the configuration was left changed after a failed activation" cfg_unchanged
+  if out_has 'RELEASE ACTIVE'; then fail "a failed activation was reported as active"; fi
+done
+
+wrong_release() {  # $1 = description, $2 = text the report must contain; the rest are assignments
+  local what=$1 text=$2; shift 2
+  hs_setup; hs_reconciled
+  run_stage activate FAKE_OUTCOME=success "$@"
+  expect "$what exited with 0" test "$(stage_rc)" = 1
+  expect "$what was not explained: wanted '$text'" out_has "$text"
+  if out_has 'RELEASE ACTIVE AND RECEPTION VERIFIED'; then fail "$what was reported as verified"; fi
+}
+wrong_release "a service that runs another build" "the running service reports build" READY_COMMIT=3333333333333333333333333333333333333333
+wrong_release "a session that did not get the viewer role" "did not get the viewer role" FAKE_ROLE=operator
+wrong_release "a session that used the legacy fallback" "legacy fallback was used" FAKE_LEGACY=true
+wrong_release "a validation browser left behind" "a validation browser is still running" PROCS_LEFT=4242
+wrong_release "a pointer that did not move" "the active release is" FAKE_NO_REPOINT=1
+wrong_release "a validation that did not finish" "did not finish in the state 'done'" FAKE_FINAL_STATE=failed
+wrong_release "a connection left at the Bridge" "connection(s) are open" FAKE_CLIENTS_AFTER=1
+hs_setup; hs_reconciled; run_stage activate FAKE_OUTCOME=success-uncommitted
+expect "a record that is not committed was accepted" test "$(stage_rc)" = 1
+expect "the uncommitted record was not explained" out_has "the record is not 'committed'"
+
+hs_setup; hs_reconciled; run_stage activate FAKE_OUTCOME=success FAIL_SED=2
+expect "an activation whose restoration failed was reported as a success" test "$(stage_rc)" != 0
+expect "an unrestored activation was not reported" out_has 'THE ACTIVATION POLICY IS NOT CONFIRMED RESTORED'
+if out_has 'OK: the fresh RXC1'; then fail "an activation with an unrestored policy printed OK"; fi
+
+hs_setup; run_stage activate FAKE_OUTCOME=success
+expect "activate ran on an unreconciled record" test "$(stage_rc)" != 0
+expect "activate did not say to reconcile first" out_has 'run the reconcile stage first'
+if helper_was_run; then fail "the helper was run on an unreconciled record"; fi
+test ! -e "$TMP/hs/arm/armed" || fail "an arm was written although the record is unreconciled"
+hs_setup; hs_reconciled; run_stage activate FAKE_OUTCOME=success CLIENTS=2
+expect "activate ran with a browser connected" test "$(stage_rc)" != 0
+test ! -e "$TMP/hs/arm/armed" || fail "an arm was written although a browser is connected"
+hs_setup; hs_reconciled; touch "$TMP/hs/arm/armed"; run_stage activate FAKE_OUTCOME=success
+expect "activate ran with an arm already present" test "$(stage_rc)" != 0
+if helper_was_run; then fail "the helper was run although an arm exists"; fi
+
+
 printf 'ok: the staged procedure pins this tree, refuses another commit and accepts only complete evidence\n'
