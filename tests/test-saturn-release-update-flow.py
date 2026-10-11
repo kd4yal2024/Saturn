@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -84,7 +85,7 @@ class Flow(B.Rig):
         self.builder.chmod(0o755)
         self.fake_systemd_run.write_text(RUN_THROUGH)
 
-    def script(self, *flags, ref="main", **env):
+    def script(self, *flags, ref="main", at=SCRIPT, **env):
         environment = self.env(
             SATURN_RELEASE_ACTIVATE_CONFIG=str(self.root / "activate.conf"), SATURN_RELEASE_UPDATE_BROKER=str(B.BROKER), SATURN_RELEASE_SUDO="env",
             SATURN_RELEASE_STAGING_DIR=str(self.staging), SATURN_RELEASE_BUILDER=str(self.builder), SATURN_RELEASE_MANIFEST_TOOL=str(self.root / "no-such-tool"),
@@ -92,7 +93,7 @@ class Flow(B.Rig):
             SATURN_SATURNGO_POLICY_REF=ref, SATURN_SATURNGO_POLICY_REMOTE="origin", SATURN_RELEASE_REPO_ROOT=str(self.checkout),
             FAKE_WORK=str(self.work), GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
         environment.update(env)
-        return subprocess.run(["bash", str(SCRIPT), *flags], capture_output=True, text=True, env=environment, timeout=180)
+        return subprocess.run(["bash", str(at), *flags], capture_output=True, text=True, env=environment, timeout=180)
 
     def builds(self):
         return [line for line in self.calls_text().splitlines() if line.startswith("builder") and "--resolve-only" not in line]
@@ -114,6 +115,32 @@ class HappyPath(Flow):
         self.assertEqual(status["release"]["commit"], self.head)
         self.assertEqual(status["release"]["previous_commit"], B.OLD)
         self.assertEqual(self.active(), self.head)
+
+    def test_the_builder_is_the_installer_managed_one_beside_the_updater_not_the_checkouts(self):
+        """On the appliance the updater runs from the installer-managed scripts directory while the working checkout can be many commits old."""
+        scripts = self.root / "installed-scripts"
+        shutil.copytree(SCRIPT.parent, scripts)
+        for directory, tag in ((scripts, "installed"), (self.checkout / "update_manager/scripts", "checkout")):
+            directory.mkdir(parents=True, exist_ok=True)
+            builder = directory / "saturn-release-build.sh"
+            builder.write_text(FAKE_BUILDER.replace('echo "builder $*"', f'echo "builder[{tag}] $*"'))
+            builder.chmod(0o755)
+        result = self.script(at=scripts / "update-saturn-go.sh", SATURN_RELEASE_BUILDER="")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        used = [line.split()[0] for line in self.calls_text().splitlines() if line.startswith("builder")]
+        self.assertTrue(used and set(used) == {"builder[installed]"}, used)
+        self.assertEqual(self.active(), self.head)
+
+    def test_without_an_installed_builder_the_update_stops_and_names_the_installer(self):
+        scripts = self.root / "installed-scripts"
+        shutil.copytree(SCRIPT.parent, scripts)
+        (scripts / "saturn-release-build.sh").unlink()
+        result = self.script(at=scripts / "update-saturn-go.sh", SATURN_RELEASE_BUILDER="")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("builder is not installed", result.stdout + result.stderr)
+        self.assertIn("install_saturn_go_nginx.sh", result.stdout + result.stderr)
+        self.assertEqual(self.builds(), [])
+        self.assertEqual(self.active(), B.OLD)
 
     def test_the_commit_is_resolved_once_and_that_commit_is_what_is_activated(self):
         result = self.script()

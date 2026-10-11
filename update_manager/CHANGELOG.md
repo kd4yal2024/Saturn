@@ -21,6 +21,8 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   nginx), builds no server or Bridge, copies no web assets, restarts no radio service, refreshes the Bridge unit without touching the running Bridge
   (`SATURN_BRIDGE_UNIT_ONLY`), and checks readiness against the release that is running instead of its own checkout's commit (which could only fail there).
   `SATURN_INSTALL_PLAN=1` prints what a run would do without root and without changing anything; `SATURN_INSTALL_APPLICATION=auto|force|skip` overrides the rule.
+- The Update action runs the installer-managed release builder that sits beside `update-saturn-go.sh`, not the copy in the working checkout (which can be many commits old and
+  is what the build fetches into); if it is missing the update stops and names the installer.
 - An installation that runs releases never falls through to the legacy deployment: with managed updates disabled the Update action refuses, naming the active release
   and the installer choice that enables them. The release builder takes `--expect-commit` and the Update action pins the build to the commit it resolved: a ref
   that moves in between stops the build before any work.

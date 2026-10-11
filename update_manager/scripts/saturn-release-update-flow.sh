@@ -43,7 +43,10 @@ run_release_flow(){
   manifest_tool="${SATURN_RELEASE_MANIFEST_TOOL:-$scripts_dir/saturn-release-manifest.py}"
   components="${SATURN_RELEASE_COMPONENTS_FILE:-/usr/local/lib/saturn-go/release/components-v1.json}"
   staging="${SATURN_RELEASE_STAGING_DIR:-/var/lib/saturn-state/release-staging}"
-  builder="${SATURN_RELEASE_BUILDER:-$REPO_ROOT/update_manager/scripts/saturn-release-build.sh}"
+  # The builder is the installer-managed copy next to this updater (the same commit's scripts, deployed by the installer), never the one in the working
+  # checkout: that checkout is whatever the administrator last pulled, can be many commits old, and is the thing being updated. The builder fetches
+  # the selected commit into it and then runs that commit's own builder to do the build.
+  builder="${SATURN_RELEASE_BUILDER:-$(dirname "$0")/saturn-release-build.sh}"
   read -r -a sudo_cmd <<<"${SATURN_RELEASE_SUDO:-sudo -n}"
   (( ! MIGRATE_TO_RELEASES )) || migrate=(--allow-legacy-migration)
 
@@ -65,7 +68,7 @@ run_release_flow(){
 
   active="$(release_active_commit)"
   info "Active release: ${active:-none (legacy layout)}"
-  [[ -x "$builder" ]] || die "The release builder is not executable: $builder"
+  [[ -x "$builder" ]] || die "The release builder is not installed or not executable ($builder). Re-run the Saturn Go installer (sudo bash update_manager/install_saturn_go_nginx.sh) from a current checkout."
 
   STATUS_PHASE="resolve"
   write_status "running" "$STATUS_PHASE" "Resolving the selected ref to one commit"
