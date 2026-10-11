@@ -31,7 +31,7 @@ set -u
 case ":$PATH:" in *":$HOME/.cargo/bin:"*) ;; *) PATH="$HOME/.cargo/bin:$PATH" ;; esac
 BRANCH=goldmarsh/headless-validation
 ACT_SHA=70d01fd3d36ab2dfbe3e2dba34d4ffbad054f52bceaab21e41fe9302d897bc2c
-VAL_SHA=1eb4307b8a8316a7a77fd0bc5ae830d45fed53658e7c8e3246ba849436142b50
+VAL_SHA=45c097d9be9dd08d93fac52665046981d446ae4458cc292a59bf025d776236e4
 GUARD_SHA=ff9200109db6dc01c524719fde03aa637eb536114322beea91475e6eedd1f2b7
 INSTALLER_SHA=6a094523d810f2058bcc22fa7c5d80a401d78e5760b145bef98451a7459f2b67
 PREV=329f3109b17428ee04e3f14031da6cf25cb04810
@@ -279,7 +279,10 @@ stage_check() {
   leftovers=$(find "${LEFTOVER_DIRS[@]}" -maxdepth 1 \( -name 'saturn-validate-*' -o -name 'systemd-private-*saturn-remote-validator*' \) 2>/dev/null | wc -l); echo "  leftover profile/temp directories: $leftovers"
   if [ "$units" != 0 ] || [ "$procs" != 0 ] || [ "$after_conn" != "$before_conn" ] || [ "$leftovers" != 0 ]; then echo "  CLEANUP NOT COMPLETE"; proven=0; fi
   perf_summary
-  if [ "$rc" = 0 ] && [ "$proven" = 1 ]; then echo "OK: reception, sandbox, memory cap and cleanup are all verified. Next:  bash ~/g2_headless_steps.sh reconcile"; return 0; fi
+  if [ "$rc" = 0 ] && [ "$proven" = 1 ]; then
+    next=activate; [ "$(txn_status)" != rollback_failed ] || next=reconcile      # a record that is still rollback_failed has to be reconciled first
+    echo "OK: reception, sandbox, memory cap and cleanup are all verified. Next:  bash ~/g2_headless_steps.sh $next"; return 0
+  fi
   echo "NOT PROVEN. Send me this output; the evidence directory above has the full log (readable by pi)."; return 1
 }
 

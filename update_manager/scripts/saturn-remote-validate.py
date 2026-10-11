@@ -37,6 +37,12 @@ browser's proportional memory four times a second and stops the unit above the c
 Every condition that does not depend on the audio and display counters is read even after one of those fails, and the evidence keeps where the
 resources went (diagnostics): memory by process type, CPU, I/O wait, swap, the page's main-thread load, the owner's drop counters.
 
+Restart timing: the services have usually just been restarted (an activation, or the rollback after one), and the first look at such a host is not
+the state it settles into: the Bridge writes its first telemetry a few seconds late and the available memory reads low for a moment. The owner's
+telemetry (present, fresh, the running service's own) and the memory headroom are therefore waited for within a bound (owner_wait_s and
+headroom_wait_s, 30 s each); the wait, and what was seen first and at best, are part of the condition's detail, a stop request ends it at once,
+and when the bound passes the validation fails with the reason.
+
 Viewer role: the Bridge must assign the viewer role (--viewer-role required, the default). The one exception is a named compatibility
 fallback (--viewer-role legacy-fallback), meant only for a release whose Bridge predates viewer-role enforcement (the release being rolled
 back TO, or a running release that was installed before the fix). It is recorded as legacy_fallback_used and in its own condition, never
@@ -83,6 +89,8 @@ HEADROOM_MARGIN_BYTES = 32 * 1024 ** 2
 
 DEFAULT_LIMITS = {
     "ready_url_wait_s": 30.0,     # the services were just restarted: how long the target may take to report itself ready
+    "owner_wait_s": 30.0,         # ... and the owner to write its first telemetry (a restarted Bridge creates perf.json a few seconds after it starts)
+    "headroom_wait_s": 30.0,      # ... and the host's available memory to climb back to what the browser needs (it dips just after a restart)
     "page_load_s": 45.0,
     "connect_s": 45.0,
     "data_s": 45.0,               # how long, once connected, fresh data and decoded audio may take to show up
@@ -886,17 +894,23 @@ class Validator:
         where = "readyz reports it" if self.args.no_exe_check else "readyz reports it and every service runs from its release directory"
         return self.recorder.condition("release.running", not problems, "; ".join(problems) or f"{self.args.target_commit} is running ({where}; {', '.join(self.args.unit)})")
 
-    def read_owner(self) -> dict[str, Any] | None:
-        """One coherent look at the owner: its telemetry, and whether that telemetry belongs to the running service."""
+    def owner_view(self) -> tuple[dict[str, Any] | None, str]:
+        """One coherent look at the owner: its telemetry, and whether that telemetry belongs to the running service. Records nothing; when
+        the telemetry cannot be read, the second item says why."""
         try:
             perf = self.owner.perf()
         except (OSError, ValueError) as error:
-            self.fail("owner.fresh_telemetry", f"cannot read {self.args.perf_json}: {error}")
-            return None
+            return None, f"cannot read {self.args.perf_json}: {error}"
         metrics = perf.get("metrics", {})
         age = (now() * 1000 - perf.get("updated_at_ms", 0)) / 1000.0
         pid = self.owner.main_pid(self.args.owner_unit)
-        return {"perf": perf, "metrics": metrics, "age_s": age, "pid_matches": pid is not None and metrics.get("pid") == pid, "service_pid": pid}
+        return {"perf": perf, "metrics": metrics, "age_s": age, "pid_matches": pid is not None and metrics.get("pid") == pid, "service_pid": pid}, ""
+
+    def read_owner(self) -> dict[str, Any] | None:
+        view, problem = self.owner_view()
+        if view is None:
+            self.fail("owner.fresh_telemetry", problem)
+        return view
 
     def check_memory_headroom(self) -> bool:
         """Before the browser is started: the host has the memory free that the cap lets the browser take, plus a margin. Where it has not, the
@@ -904,20 +918,53 @@ class Validator:
         if self.args.isolation != "required":
             return True
         wanted = parse_size(self.args.memory_max) + HEADROOM_MARGIN_BYTES
-        available = host_counters(Path(self.args.proc_root)).get("MemAvailable")
+        unreadable = "the host's available memory could not be read, so it cannot be shown that the browser fits"
+        available = first = best = host_counters(Path(self.args.proc_root)).get("MemAvailable")
         if available is None:
-            return self.recorder.condition("host.memory_headroom", False, "the host's available memory could not be read, so it cannot be shown that the browser fits")
-        return self.recorder.condition(
-            "host.memory_headroom", available >= wanted,
-            f"{available / 1048576:.0f} MiB available; the browser may take up to {self.args.memory_max} and {HEADROOM_MARGIN_BYTES // 1048576} MiB are kept in reserve"
-            + ("" if available >= wanted else f" ({wanted / 1048576:.0f} MiB needed): no browser was started"))
+            return self.recorder.condition("host.memory_headroom", False, unreadable)
+        # Just after the services were restarted (an activation, or the rollback after one) the host reads lower than it does at rest, and climbs
+        # back within seconds: wait, within a bound, for the memory instead of refusing at the first reading. Never longer than the bound, and
+        # a browser is not started until the memory is there.
+        started, waited_for = now(), False
+        while available < wanted and now() - started < self.limits["headroom_wait_s"] and not self.stop_requested.is_set():
+            waited_for = True
+            self.sleep(self.limits["poll_s"])
+            available = host_counters(Path(self.args.proc_root)).get("MemAvailable")
+            if available is None:
+                return self.recorder.condition("host.memory_headroom", False, unreadable)
+            best = max(best, available)
+        if available < wanted and self.stop_requested.is_set():
+            return self.interrupted("host.memory_headroom", "waiting for the host to have the memory the browser needs")
+        text = f"{available / 1048576:.0f} MiB available; the browser may take up to {self.args.memory_max} and {HEADROOM_MARGIN_BYTES // 1048576} MiB are kept in reserve"
+        if waited_for:
+            text += (f" (after waiting {now() - started:.1f} s: {first / 1048576:.0f} MiB at first"
+                     + ("" if available >= wanted else f", {best / 1048576:.0f} MiB at the most") + ")")
+        if available < wanted:
+            text += f" ({wanted / 1048576:.0f} MiB needed): no browser was started"
+        return self.recorder.condition("host.memory_headroom", available >= wanted, text)
 
     def baseline(self) -> bool:
-        view = self.read_owner()
+        """The owner's telemetry before the session: there, fresh, and the running service's own. The services were just restarted (an activation,
+        or the rollback after one) and a restarted Bridge writes its first telemetry a few seconds after it starts, so this waits, within a bound,
+        instead of failing at the first look. If it never comes right the condition says what was seen last and how long it waited."""
+        started = now()
+        polls = 0
+        while True:
+            view, problem = self.owner_view()
+            if view is not None and 0 <= view["age_s"] <= 5 and view["pid_matches"]:
+                break
+            if now() - started >= self.limits["owner_wait_s"] or self.stop_requested.is_set():
+                break
+            polls += 1
+            self.sleep(self.limits["poll_s"])
+        if self.stop_requested.is_set() and not (view is not None and 0 <= view["age_s"] <= 5 and view["pid_matches"]):
+            return self.interrupted("owner.fresh_telemetry", "waiting for the owner's telemetry")
+        waited = f" (after waiting {now() - started:.1f} s for the restarted owner's telemetry)" if polls else ""
         if view is None:
+            self.recorder.condition("owner.fresh_telemetry", False, problem + waited)
             return False
         ok = 0 <= view["age_s"] <= 5 and view["pid_matches"]
-        self.recorder.condition("owner.fresh_telemetry", ok, f"before the session: age {view['age_s']:.2f} s, telemetry pid {view['metrics'].get('pid')}, service pid {view['service_pid']}")
+        self.recorder.condition("owner.fresh_telemetry", ok, f"before the session: age {view['age_s']:.2f} s, telemetry pid {view['metrics'].get('pid')}, service pid {view['service_pid']}{waited}")
         self.baseline_radio = radio_state(view["perf"])
         self.baseline_connections = int(view["metrics"].get("connections") or 0)
         self.recorder.log("baseline", radio=self.baseline_radio, connections=self.baseline_connections, rxc1=(view["metrics"].get("rx_counter_v31") or {}).get("status"))

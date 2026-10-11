@@ -35,7 +35,8 @@ OTHER_COMMIT = "329f3109b17428ee04e3f14031da6cf25cb04810"
 SECRET = "saturn:Pw-7Hq2-zebra-TANGO-41"
 SECRET_PASSWORD = SECRET.split(":", 1)[1]
 FAST = {"ready_url_wait_s": 3, "page_load_s": 8, "connect_s": 5, "data_s": 6, "window_s": 1.0, "hold_stall_s": 2.0, "max_seconds": 40,
-        "cleanup_s": 4, "call_s": 4, "poll_s": 0.2, "min_audio_played": 20, "min_opus_frames": 20, "min_display": 5}
+        "cleanup_s": 4, "call_s": 4, "poll_s": 0.2, "min_audio_played": 20, "min_opus_frames": 20, "min_display": 5,
+        "owner_wait_s": 0.6, "headroom_wait_s": 0.6}
 
 spec = importlib.util.spec_from_file_location("saturn_remote_validate", VALIDATOR)
 V = importlib.util.module_from_spec(spec)
@@ -311,7 +312,7 @@ class Rig:
     def __init__(self, test, scenario=None, baseline=0, rxc1="unarmed", bridge_commit=COMMIT, ready_commit=COMMIT, freeze_owner=False,
                  sdr_never=False, limits=None, expect_rxc1="any", auth=True, ready_flag=True, bridge_pid_file=None, perf_pid=None,
                  freeze_on_session=False, owner_blind=False, p23_broken=False, sticky=False, isolation=None, unit_props=None, memory_controller=None,
-                 mem_available_kb=500000):
+                 mem_available_kb=500000, perf_after=None, old_pid_for=None, stale_for=None):
         self.test = test
         self.isolation = isolation          # None: not checked; "direct": a browser started directly; "systemd": in a (fake) transient unit
         self.unit_props = dict(DEFAULT_UNIT_PROPERTIES, **(unit_props or {}))
@@ -352,6 +353,9 @@ class Rig:
             (self.pids / "saturn-bridge.service").write_text(bridge_pid_file)
         self._service("saturn-go.service", COMMIT, "saturn-go", {"SATURN_REMOTE_BASIC_AUTH": SECRET})
         self.perf = self.root / "perf.json"
+        self.perf_after = perf_after        # a restarted Bridge writes its first telemetry this many seconds from now (None: it already has)
+        self.old_pid_for = old_pid_for      # ... and until then the file there is the previous process's (another pid)
+        self.stale_for = stale_for          # ... or an old one (its timestamp is a minute old)
         self.stop_world = threading.Event()
         self.started = time.time()
         self._write_perf(initial=True)
@@ -425,7 +429,10 @@ class Rig:
         except (OSError, ValueError):
             extra = 0
         tx_keyed = session and (self.world / "tx_override.json").exists()
-        return {"pid": self.perf_pid or self.bridge_pid, "client": 1 if (self.baseline > 0 or session or extra > 0) else 0,
+        pid = self.perf_pid or self.bridge_pid
+        if self.old_pid_for is not None and time.time() - self.started < self.old_pid_for:
+            pid = 999999
+        return {"pid": pid, "client": 1 if (self.baseline > 0 or session or extra > 0) else 0,
                 "connections": self.baseline + extra + (2 if session else 0),
                 "frequency_hz": frequency, "sample_rate_hz": 384000, "ddc": 6, "adc": "ADC1", "processing_mode": "audio" if (session or self.baseline > 0 or extra > 0) else "drain-only", "tx_keyed": tx_keyed,
                 "tx_stream": False, "rx_counter_v31": {"status": self.rxc1}}
@@ -438,7 +445,9 @@ class Rig:
         return (not self.sdr_never) and (self._seen() or self.baseline > 0)
 
     def _write_perf(self, initial=False):
-        stale = self.freeze or (self.freeze_on_session and self._session())
+        if self.perf_after is not None and time.time() - self.started < self.perf_after:
+            return
+        stale = self.freeze or (self.freeze_on_session and self._session()) or (self.stale_for is not None and time.time() - self.started < self.stale_for)
         updated = int((time.time() - (60 if stale else 0)) * 1000)
         document = {"schema_version": 1, "updated_at_ms": updated, "source": "saturn-bridge", "backend": "xdma", "status": "ready", "rf_safe": True,
                     "error": None, "metrics": self._metrics()}
@@ -1411,6 +1420,123 @@ class MemoryHeadroomTests(RigCase):
             self.assertNotIn(forbidden, flags, "no switch that weakens the browser's sandbox may be added for the sake of memory")
 
 
+class RestartTimingTests(RigCase):
+    """Right after an activation, or the rollback after one, the services have just been restarted. The first look at the host is not the
+    state it settles into, so the validator waits, within a bound, for the owner's first telemetry and for the memory to be back, and says so."""
+
+    def test_telemetry_that_appears_a_moment_after_the_start_is_waited_for(self):
+        rig = self.rig(perf_after=1.5, limits={"owner_wait_s": 6})
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0, rig.status().get("failed"))
+        detail = rig.condition("owner.fresh_telemetry")
+        self.assertTrue(detail["ok"], detail)
+        self.assertRegex(detail["detail"], r"after waiting [0-9.]+ s for the restarted owner's telemetry")
+        rig.stop(); rig.finish()
+
+    def test_telemetry_that_never_appears_fails_after_the_bound_and_says_how_long_it_waited(self):
+        rig = self.rig(perf_after=60, limits={"owner_wait_s": 1.0})
+        self.run_to_failure(rig, "owner.fresh_telemetry", detail=r"cannot read .*perf\.json.*\(after waiting [0-9.]+ s for the restarted owner's telemetry\)")
+        self.assertIsNone(rig.browser_pid(), "a browser was started although the owner never wrote telemetry")
+
+    def test_telemetry_that_is_there_and_right_is_not_waited_for(self):
+        rig = self.rig()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        self.assertNotIn("after waiting", rig.condition("owner.fresh_telemetry")["detail"])
+        rig.stop(); rig.finish()
+
+    def test_telemetry_that_stays_stale_still_fails(self):
+        rig = self.rig(freeze_owner=True, limits={"owner_wait_s": 1.0})
+        self.run_to_failure(rig, "owner.fresh_telemetry", detail=r"age 6[0-9]\.[0-9]+ s.*after waiting")
+
+    def test_telemetry_of_another_process_still_fails(self):
+        rig = self.rig(perf_pid=999999, limits={"owner_wait_s": 1.0})
+        self.run_to_failure(rig, "owner.fresh_telemetry", detail="telemetry pid 999999")
+
+    def test_telemetry_of_the_previous_process_is_waited_out(self):
+        rig = self.rig(old_pid_for=1.5, limits={"owner_wait_s": 6})
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0, rig.status().get("failed"))
+        detail = rig.condition("owner.fresh_telemetry")
+        self.assertTrue(detail["ok"], detail)
+        self.assertIn("after waiting", detail["detail"])
+        rig.stop(); rig.finish()
+
+    def test_telemetry_that_is_at_first_a_minute_old_is_waited_out(self):
+        rig = self.rig(stale_for=1.5, limits={"owner_wait_s": 6})
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0, rig.status().get("failed"))
+        detail = rig.condition("owner.fresh_telemetry")
+        self.assertTrue(detail["ok"], detail)
+        self.assertIn("after waiting", detail["detail"])
+        rig.stop(); rig.finish()
+
+    def test_memory_that_rises_and_falls_back_is_judged_by_the_last_reading_and_reports_the_best(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 2.5})
+        meminfo = rig.world / "proc" / "meminfo"
+        text = "MemTotal: 927000 kB\nMemAvailable: %d kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n"
+        threading.Timer(0.8, lambda: meminfo.write_text(text % (360 * 1024))).start()      # more than before, still less than the 382 MiB needed
+        threading.Timer(1.4, lambda: meminfo.write_text(text % (320 * 1024))).start()
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"320 MiB available.*300 MiB at first, 360 MiB at the most.*382 MiB needed\): no browser was started")
+        self.assertIsNone(rig.browser_pid())
+
+    def test_memory_that_becomes_unreadable_while_waiting_is_not_assumed(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 4})
+        meminfo = rig.world / "proc" / "meminfo"
+        threading.Timer(1.0, lambda: meminfo.unlink()).start()
+        self.run_to_failure(rig, "host.memory_headroom", detail="could not be read")
+        self.assertIsNone(rig.browser_pid())
+
+    def test_a_stop_request_ends_the_wait_for_telemetry_at_once(self):
+        rig = self.rig(perf_after=60, limits={"owner_wait_s": 30})
+        rig.start()
+        time.sleep(1.5)
+        began = time.time()
+        rig.stop()
+        code = rig.finish()
+        self.assertLess(time.time() - began, 8, "the stop request did not end the wait")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(rig.status()["failed"]["id"], "owner.fresh_telemetry")
+        self.assertIn("stopped while waiting for the owner's telemetry", rig.status()["failed"]["detail"])
+
+    def test_memory_that_climbs_back_is_waited_for_and_the_browser_starts_only_then(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 8})
+        meminfo = rig.world / "proc" / "meminfo"
+        threading.Timer(1.2, lambda: meminfo.write_text("MemTotal: 927000 kB\nMemAvailable: 450000 kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n")).start()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0, rig.status().get("failed"))
+        detail = rig.condition("host.memory_headroom")
+        self.assertTrue(detail["ok"], detail)
+        self.assertRegex(detail["detail"], r"439 MiB available.*after waiting [0-9.]+ s: 300 MiB at first")
+        rig.stop(); rig.finish()
+
+    def test_memory_that_never_climbs_back_is_refused_after_the_bound_with_what_was_seen(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 1.0})
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available.*after waiting [0-9.]+ s: 300 MiB at first, 300 MiB at the most.*382 MiB needed\): no browser was started")
+        self.assertIsNone(rig.browser_pid())
+        self.assertFalse((rig.world / "browser_argv.json").exists())
+
+    def test_memory_that_is_there_at_once_is_not_waited_for(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        self.assertNotIn("after waiting", rig.condition("host.memory_headroom")["detail"])
+        rig.stop(); rig.finish()
+
+    def test_a_stop_request_ends_the_wait_for_memory_at_once(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 30})
+        rig.start()
+        time.sleep(1.5)
+        began = time.time()
+        rig.stop()
+        code = rig.finish()
+        self.assertLess(time.time() - began, 8, "the stop request did not end the wait")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(rig.status()["failed"]["id"], "host.memory_headroom")
+        self.assertIn("stopped while waiting for the host to have the memory", rig.status()["failed"]["detail"])
+        self.assertIsNone(rig.browser_pid())
+
+
 class LeanBrowserTests(RigCase):
     """The browser on the appliance is a small Raspberry Pi: the page is validated in a background tab and the audio goes to Chrome's own fake
     sink, which is what takes a software-rendering browser from several cores to a fraction of one. Both are verified, not assumed."""
@@ -1616,6 +1742,11 @@ class UnitTests(unittest.TestCase):
         self.assertFalse(V.memory_verdict({k: v for k, v in props.items() if k != "MemoryMax"}, "350M")[0])
         self.assertFalse(V.memory_verdict(dict(props, MemorySwapMax="infinity"), "350M")[0])
         self.assertFalse(V.memory_verdict({k: v for k, v in props.items() if k != "MemorySwapMax"}, "350M")[0])
+
+    def test_the_restart_waits_are_long_enough_for_a_restarted_service_and_bounded(self):
+        for key in ("owner_wait_s", "headroom_wait_s"):
+            self.assertGreaterEqual(V.DEFAULT_LIMITS[key], 10, f"{key} is too short for a Bridge that has just been restarted")
+            self.assertLessEqual(V.DEFAULT_LIMITS[key], 60, f"{key} is not bounded well inside the helper's own validation time limit")
 
     def test_the_unit_is_the_oom_killers_first_choice(self):
         command = V.build_launch_command("systemd", "/usr/bin/chromium", ["--headless=new"], "saturn-remote-validator-1", 300, "350M")

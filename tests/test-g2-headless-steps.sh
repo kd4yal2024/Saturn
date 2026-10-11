@@ -292,7 +292,7 @@ check_stage() {
   bash -c '
     source "$SCRIPT"
     H="$TMP/helpers"; mkdir -p "$H"; : >"$H/saturn-remote-validate.py"; chmod +x "$H/saturn-remote-validate.py"
-    PERF="$TMP/perf.json"; EVIDENCE_ROOT="$TMP/evidence"; LEFTOVER_DIRS=("$TMP/leftover"); SETTLE_SECONDS=0
+    PERF="$TMP/perf.json"; EVIDENCE_ROOT="$TMP/evidence"; LEFTOVER_DIRS=("$TMP/leftover"); SETTLE_SECONDS=0; TXN="${CHECK_TXN:-$TMP/no-record.json}"
     ss() { echo "State Recv-Q Send-Q Local Peer"; }
     confirm() { echo "$1"; }
     systemctl() { printf "%s" "${UNITS_LEFT:-}"; }
@@ -321,6 +321,12 @@ fresh_host
 check_stage || fail "a complete check was refused: $(cat "$TMP/stage.out")"
 grep -Fq "OK: reception, sandbox, memory cap and cleanup are all verified" "$TMP/stage.out" || fail "no verdict printed: $(tail -12 "$TMP/stage.out")"
 [[ "$(cat "$TMP/check-sudo.args")" == *"saturn-release-activate-root.sh --check-reception" && "$(cat "$TMP/check-sudo.args")" != *"--memory-max"* ]] || fail "a plain check passed a memory cap: $(cat "$TMP/check-sudo.args")"
+grep -Fq 'verified. Next:  bash ~/g2_headless_steps.sh activate' "$TMP/stage.out" || fail "a check on a host with no failed record did not point at activate: $(tail -3 "$TMP/stage.out")"
+printf '{"status":"rollback_failed"}' >"$TMP/record-rollback-failed.json"; printf '{"status":"rolled_back"}' >"$TMP/record-rolled-back.json"
+CHECK_TXN="$TMP/record-rollback-failed.json" check_stage || fail "a check beside a rollback_failed record was refused: $(cat "$TMP/stage.out")"
+grep -Fq 'verified. Next:  bash ~/g2_headless_steps.sh reconcile' "$TMP/stage.out" || fail "a check beside a rollback_failed record did not point at reconcile: $(tail -3 "$TMP/stage.out")"
+CHECK_TXN="$TMP/record-rolled-back.json" check_stage || fail "a check beside a rolled_back record was refused: $(cat "$TMP/stage.out")"
+grep -Fq 'verified. Next:  bash ~/g2_headless_steps.sh activate' "$TMP/stage.out" || fail "a check beside a rolled_back record did not point at activate: $(tail -3 "$TMP/stage.out")"
 CHECK_ARG=500M check_stage || fail "a measuring check was refused: $(cat "$TMP/stage.out")"
 [[ "$(cat "$TMP/check-sudo.args")" == *"saturn-release-activate-root.sh --check-reception --memory-max 500M" ]] || fail "the measuring cap was not passed to the helper: $(cat "$TMP/check-sudo.args")"
 grep -Fq 'browser memory cap 500M for this check' "$TMP/stage.out" || fail "the confirmation did not say which cap was in force"

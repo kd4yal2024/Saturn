@@ -4,6 +4,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
 ### Changed
+- The receive validator no longer fails at its first look at a host whose services have just been restarted
+  (an activation, or the rollback after one). It waits, within 30 s each, for the owner's first telemetry
+  (present, fresh, the running service's own) and for `MemAvailable` to reach the browser's memory cap plus
+  the 32 MiB reserve, reports how long it waited and what it saw first and at best, ends the wait when told
+  to stop, and still fails with the reason when the bound passes. The first activation on the first
+  appliance was refused at 529 MiB available (532 needed) one second after the restart, and the rollback's
+  validation then ran before the restarted Bridge had written `perf.json`.
 - The staged appliance procedure for the headless-validation update (`g2_headless_steps.sh`) now
   switches the root-owned `ACTIVATION_ENABLED` policy on for the single helper run of `reconcile`,
   `failure` and `activate`, requires the configuration to be byte-identical afterwards (also on
