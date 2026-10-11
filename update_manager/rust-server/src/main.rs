@@ -5467,7 +5467,10 @@ mod tests {
         assert_eq!(counters["command_mic_cancelled"], 5);
         assert_eq!(counters["non_finite_controls_rejected"], 7);
         // The raw session totals are also available to the page as gauges.
-        assert_eq!(telemetry["current"]["gauges"]["bridge"]["command_arm_cancelled"], 3);
+        assert_eq!(
+            telemetry["current"]["gauges"]["bridge"]["command_arm_cancelled"],
+            3
+        );
 
         // An older Bridge does not write them: unavailable, not zero.
         let older = write("older", r#""client":1"#);
