@@ -48,8 +48,12 @@
               <input id="satgo-flag-skip-deploy" type="checkbox" class="h-5 w-5" />
               <span>Skip deploy</span>
             </label>
+            <label class="inline-flex items-center gap-2" title="Managed updates only. Moving an installation that has no managed release yet is a one-way change and is never done by an ordinary update.">
+              <input id="satgo-flag-migrate" type="checkbox" class="h-5 w-5" />
+              <span>Move this installation to managed releases (one-way)</span>
+            </label>
           </div>
-          <div class="text-xs opacity-75 mt-2">Use <code>Skip Git</code> for local rebuild/redeploy tests. Use <code>Dry run</code> to preview all steps without changing the system.</div>
+          <div class="text-xs opacity-75 mt-2">With managed updates enabled (installer choice) this builds a verified release of the selected ref on the device, installs it, proves reception with a temporary headless session and restores the previous release automatically if that fails; the outcome appears in the deploy status below. Use <code>Skip Git</code> for local rebuild/redeploy tests. Use <code>Dry run</code> to preview all steps without changing the system.</div>
         </div>
 
         <div class="flex flex-wrap gap-3 items-center mb-3">
@@ -664,6 +668,7 @@ function collectSatgoFlags(){
   if ($('satgo-flag-skip-git').checked) flags.push('--skip-git');
   if ($('satgo-flag-skip-build').checked) flags.push('--skip-build');
   if ($('satgo-flag-skip-deploy').checked) flags.push('--skip-deploy');
+  if ($('satgo-flag-migrate').checked) flags.push('--migrate-to-releases');
   return flags;
 }
 

@@ -3,6 +3,19 @@
 All notable changes to the Saturn Update Manager (Rust) are documented here.
 
 ## [Unreleased]
+### Added
+- Managed updates. With the activation policy on (`SATURN_MANAGED_UPDATES=enable` in the installer), the Update
+  action of the Saturn Go page builds a verified release of the selected ref on the device and installs it through
+  the existing root release installer and activator, which prove reception with a headless receive-only session and
+  restore the previous release automatically when that fails: `update-saturn-go.sh` resolves the ref to one commit
+  and builds that commit (`saturn-release-update-flow.sh`), and the new root broker `saturn-release-update-root.py`
+  (the service user may call only `--preflight` and `--dispatch`, only while the policy is on) runs the update in
+  its own transient unit under the host maintenance locks and writes the outcome, the release identities and the
+  radio settings before and after to the deploy status file. Privileged helpers stay installer-managed: a release
+  that declares a newer `saturn-helper-contract` than the installed helpers is refused with "installer update
+  required" before anything changes. A legacy installation is moved only by an explicit
+  `--migrate-to-releases`. With the policy off nothing changes.
+
 ### Changed
 - Running the installer again no longer rewrites `/etc/default/saturn-release-activate` from fixed text.
   `scripts/saturn-release-config.py` refreshes the installer's own paths and keeps the administrator's

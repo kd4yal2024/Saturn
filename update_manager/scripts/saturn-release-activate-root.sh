@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# saturn-helper-contract: 1
 set -Eeuo pipefail
 
 # Atomically select one already-installed Saturn application release and

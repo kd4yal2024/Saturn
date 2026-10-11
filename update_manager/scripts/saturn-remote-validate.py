@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# saturn-helper-contract: 1
 """Prove, with a temporary headless browser, that an installed Saturn Remote really receives.
 
 The update process used to depend on a human keeping a browser connected: the activation helper's readiness gate requires an active receive

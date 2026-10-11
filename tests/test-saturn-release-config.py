@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -260,6 +261,57 @@ class ActivatorAcceptsIt(Rig):
         self.assertIn("disabled by root-owned policy", self.run_activator("1", managed="disable", existing='ACTIVATION_ENABLED="1"\n'))
 
 
+class SudoersTests(Rig):
+    broker = "/usr/local/lib/saturn-go/scripts/saturn-release-update-root.py"
+
+    def fragment(self, activation):
+        config = self.path / "written"
+        config.write_text(f'ACTIVATION_ENABLED="{activation}"\n')
+        return C.sudoers_fragment("pi", self.broker, str(config))
+
+    def test_enabled_managed_updates_authorize_exactly_the_broker_modes_the_page_needs(self):
+        lines = self.fragment("1").splitlines()
+        self.assertEqual(lines, [f"pi ALL=(root) NOPASSWD: {self.broker} --preflight", f"pi ALL=(root) NOPASSWD: {self.broker} --preflight --allow-legacy-migration",
+                                 f"pi ALL=(root) NOPASSWD: {self.broker} --dispatch *"])
+        self.assertTrue(all("--run" not in line for line in lines), "the service user must not be able to call --run directly")
+
+    def test_disabled_or_unset_managed_updates_authorize_nothing(self):
+        self.assertEqual(self.fragment("0"), "")
+        self.assertEqual(C.sudoers_fragment("pi", self.broker, str(self.path / "does-not-exist")), "")
+
+    def test_turning_managed_updates_off_removes_the_authorization_on_the_next_installer_run(self):
+        self.merge(existing='ACTIVATION_ENABLED="1"\n', managed="keep")
+        self.assertNotEqual(C.sudoers_fragment("pi", self.broker, str(self.out)), "")
+        self.merge(existing=self.out.read_text(), managed="disable")
+        self.assertEqual(C.sudoers_fragment("pi", self.broker, str(self.out)), "")
+
+    def test_an_unusual_user_or_broker_path_is_refused(self):
+        config = self.path / "written"
+        config.write_text('ACTIVATION_ENABLED="1"\n')
+        for user, broker in (("pi extra", self.broker), ("pi", "relative/path.py"), ("pi", "/usr/bin/../../tmp/x"), ("pi", "/path with space/x.py"), ("Pi", self.broker),
+                             ("pi", "/usr/local/*/x.py"), ("pi,root", self.broker), ("pi", "/x\ny")):
+            with self.assertRaises(SystemExit, msg=(user, broker)):
+                C.sudoers_fragment(user, broker, str(config))
+
+    def test_the_command_line_prints_the_fragment_and_the_settings(self):
+        config = self.path / "written"
+        config.write_text('ACTIVATION_ENABLED="1"\nVALIDATION_MEMORY_MAX="500M"\n')
+        out = subprocess.run([sys.executable, str(TOOL), "sudoers", "--user", "pi", "--broker", self.broker, "--config", str(config)], capture_output=True, text=True)
+        self.assertEqual((out.returncode, out.stdout.count("NOPASSWD")), (0, 3), out.stderr)
+        got = subprocess.run([sys.executable, str(TOOL), "get", "--file", str(config), "--key", "VALIDATION_MEMORY_MAX"], capture_output=True, text=True)
+        self.assertEqual(got.stdout.strip(), "500M")
+
+    @unittest.skipUnless(shutil.which("visudo"), "visudo is not installed")
+    def test_the_fragment_is_valid_sudoers_syntax(self):
+        sudoers = self.path / "sudoers"
+        sudoers.write_text("# test\n" + self.fragment("1"))
+        sudoers.chmod(0o440)
+        result = subprocess.run(["visudo", "-cf", str(sudoers)], capture_output=True, text=True)
+        if "you do not exist" in result.stderr or "permission denied" in result.stderr.lower():
+            self.skipTest("visudo cannot check as this user")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 class InstallerUsesIt(unittest.TestCase):
     text = INSTALLER.read_text()
 
@@ -273,6 +325,18 @@ class InstallerUsesIt(unittest.TestCase):
     def test_the_default_is_to_keep_and_an_explicit_choice_is_validated(self):
         self.assertIn('SATURN_MANAGED_UPDATES=keep', self.text)
         self.assertIn('SATURN_MANAGED_UPDATES must be keep, enable or disable', self.text)
+
+    def test_the_installer_installs_the_broker_and_derives_the_sudoers_rule_from_the_written_policy(self):
+        self.assertIn('"$SOURCE_DIR/scripts/$SATURN_RELEASE_UPDATE_BROKER_NAME"', self.text)
+        self.assertIn('sudoers --user "$SERVICE_USER"', self.text)
+        self.assertIn('--config "$SATURN_RELEASE_ACTIVATE_CONFIG"', self.text)
+        self.assertIn("${managed_updates_sudoers}", self.text)
+        self.assertIn('cat >"$SUDOERS_FILE" <<EOF', self.text, "the sudoers file must be written from scratch so a disabled policy removes the rule")
+        self.assertLess(self.text.index('merge --defaults "$release_activate_defaults"'), self.text.index('sudoers --user "$SERVICE_USER"'),
+                        "the rule must be derived from the policy as written, so the policy is written first")
+
+    def test_a_legacy_layout_is_pointed_at_the_explicit_migration(self):
+        self.assertIn("--migrate-to-releases", self.text)
 
     def test_every_installer_default_key_is_one_the_activator_knows(self):
         block = self.text[self.text.index('cat >"$release_activate_defaults" <<EOF'):]

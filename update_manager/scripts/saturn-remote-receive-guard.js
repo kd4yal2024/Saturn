@@ -1,3 +1,4 @@
+// saturn-helper-contract: 1
 // Receive-only guard for the update process's headless validation session.
 //
 // The validator (saturn-remote-validate.py) injects this file into the temporary browser BEFORE any page script runs, whatever release the

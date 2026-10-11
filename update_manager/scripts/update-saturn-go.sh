@@ -11,6 +11,7 @@ SKIP_GIT=0
 SKIP_BUILD=0
 SKIP_DEPLOY=0
 STAGE_ONLY=0
+MIGRATE_TO_RELEASES=0
 DRY_RUN=0
 VERBOSE=0
 STATUS_PHASE="init"
@@ -18,7 +19,8 @@ STATUS_PHASE="init"
 progress(){ echo "Progress: $1%"; }
 info(){ echo "$@"; }
 warn(){ echo "WARN: $*" >&2; }
-die(){ echo "ERR: $*" >&2; exit 1; }
+LAST_ERROR=""
+die(){ LAST_ERROR="$*"; echo "ERR: $*" >&2; exit 1; }
 flag_enabled(){
   case "${1:-}" in
     1|true|TRUE|yes|YES|on|ON) return 0 ;;
@@ -67,6 +69,7 @@ write_status(){
   "finished_at": $finished_at,
   "exit_code": $exit_code,
   "unit_name": $unit_json,
+  "mode": "$(json_escape "${UPDATE_MODE:-legacy}")",
   "service_name": "$(json_escape "$SERVICE_NAME")",
   "repo_root": "$(json_escape "$REPO_ROOT")",
   "ref": "$(json_escape "$SATURNGO_REF")",
@@ -280,6 +283,7 @@ while [[ $# -gt 0 ]]; do
     --skip-build) SKIP_BUILD=1; shift ;;
     --skip-deploy) SKIP_DEPLOY=1; shift ;;
     --stage-only) STAGE_ONLY=1; shift ;;
+    --migrate-to-releases) MIGRATE_TO_RELEASES=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --verbose) VERBOSE=1; shift ;;
     -h|--help)
@@ -289,6 +293,9 @@ Usage: update-saturn-go.sh [flags]
   --skip-build     Skip cargo build --release
   --skip-deploy    Skip template/binary deployment dispatch
   --stage-only     Build and validate a staged payload without installing it
+  --migrate-to-releases
+                   Managed updates only: allow the one-way move of a legacy installation (no release
+                   active yet) to managed releases. Never implied by an ordinary update.
   --dry-run        Print actions only
   --verbose        Echo executed commands
 EOF
@@ -306,6 +313,29 @@ fi
 
 progress 2
 info "Saturn Go self-update ${SCRIPT_VERSION}"
+
+# Managed updates (the installer's explicit choice, the root-owned activation policy): build a release of the selected ref, hand it to the root
+# update broker, which installs it, proves reception with a headless session and restores the previous release if that fails. Otherwise the
+# installation keeps the legacy deployment below, unchanged.
+# shellcheck disable=SC1091  # the flow lives beside this script in the deployed scripts directory
+source "$(dirname "$0")/saturn-release-update-flow.sh"
+if managed_updates_enabled; then
+  need_cmd git
+  RUN_STARTED_AT="$(date -Is)"
+  REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
+  [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
+  git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Repo root is not a git checkout: $REPO_ROOT"
+  SATURNGO_URL="${SATURN_SATURNGO_POLICY_URL:-}"
+  SATURNGO_REMOTE="${SATURN_SATURNGO_POLICY_REMOTE:-origin}"
+  SATURNGO_REF="${SATURN_SATURNGO_POLICY_REF:-main}"
+  SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
+  STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-/var/lib/saturn-state/saturngo_deploy_status.json}"
+  trap 'rc=$?; if (( rc != 0 && ! BROKER_OWNS_STATUS )); then write_status "error" "$STATUS_PHASE" "${LAST_ERROR:-Saturn Go self-update failed}" 1 "$rc"; fi' EXIT
+  write_status "running" "init" "Starting a managed release update"
+  run_release_flow
+  exit 0
+fi
+(( ! MIGRATE_TO_RELEASES )) || die "--migrate-to-releases applies only when managed updates are enabled (installer: SATURN_MANAGED_UPDATES=enable)"
 
 need_cmd git
 need_cmd systemd-run
@@ -363,7 +393,7 @@ DEPLOY_ROOT_BROKER_SRC="$REPO_ROOT/update_manager/scripts/saturn-go-deploy-root.
 DEPLOY_ROOT_BROKER="${SATURN_SATURNGO_DEPLOY_BROKER:-$DEPLOY_PRIVILEGED_SCRIPTS_DIR/saturn-go-deploy-root.sh}"
 STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-/var/lib/saturn-state/saturngo_deploy_status.json}"
 
-trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "Saturn Go self-update failed" 1 "$rc"; fi' EXIT
+trap 'rc=$?; if (( rc != 0 )); then write_status "error" "$STATUS_PHASE" "${LAST_ERROR:-Saturn Go self-update failed}" 1 "$rc"; fi' EXIT
 
 [[ -f "$RUST_DIR/Cargo.toml" ]] || die "Rust server Cargo.toml not found: $RUST_DIR/Cargo.toml"
 [[ -d "$TEMPLATES_DIR" ]] || die "Templates dir not found: $TEMPLATES_DIR"

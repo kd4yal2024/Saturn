@@ -173,6 +173,7 @@ jobs:
             update_manager/scripts/saturn-release-install-root.sh \
             update_manager/scripts/saturn-radio-backend-switch-root.sh \
             update_manager/scripts/update-saturn-go.sh \
+            update_manager/scripts/saturn-release-update-flow.sh \
             update_manager/scripts/saturn-go-build-preflight.sh \
             update_manager/scripts/saturn-rust-toolchain.sh \
             update_manager/scripts/saturn-release-build.sh \
@@ -240,6 +241,7 @@ jobs:
             update_manager/scripts/saturn-xdma-backend-switch-smoke.sh \
             update_manager/scripts/saturn-xdma-operational-rx-smoke.sh \
             update_manager/scripts/update-saturn-go.sh \
+            update_manager/scripts/saturn-release-update-flow.sh \
             update_manager/install_saturn_go_nginx.sh \
             sw_tools/p2app-control/install.sh \
             tests/test-saturn-backup-types.sh \
@@ -346,6 +348,12 @@ jobs:
 
       - name: Test the activation configuration merge
         run: python3 -W ignore tests/test-saturn-release-config.py
+
+      - name: Test the managed-update broker
+        run: python3 -W ignore tests/test-saturn-release-update.py
+
+      - name: Test the Update action's managed-release flow
+        run: python3 -W ignore tests/test-saturn-release-update-flow.py
 
       - name: Test deskHPSDR integration patches
         run: tests/test-deskhpsdr-integration.sh

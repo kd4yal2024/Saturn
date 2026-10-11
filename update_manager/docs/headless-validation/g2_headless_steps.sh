@@ -30,9 +30,9 @@ set -u
 # A non-interactive shell (ssh pi@g2 'command') has no Rust toolchain on its PATH; the builder needs cargo.
 case ":$PATH:" in *":$HOME/.cargo/bin:"*) ;; *) PATH="$HOME/.cargo/bin:$PATH" ;; esac
 BRANCH=goldmarsh/headless-validation
-ACT_SHA=70d01fd3d36ab2dfbe3e2dba34d4ffbad054f52bceaab21e41fe9302d897bc2c
-VAL_SHA=45c097d9be9dd08d93fac52665046981d446ae4458cc292a59bf025d776236e4
-GUARD_SHA=ff9200109db6dc01c524719fde03aa637eb536114322beea91475e6eedd1f2b7
+ACT_SHA=4f5bcb3594a04f010efed7eafc1839691c329db04a6ebce885a5d8816f76bdf7
+VAL_SHA=089fbba97018677afd7a36c801edef7e9873d9e7cddd10240f455af29eaaffbd
+GUARD_SHA=b5ad14b439bf48bcc49703368fac9000a6dfd02b481419c3123ce35476a721fb
 INSTALLER_SHA=6a094523d810f2058bcc22fa7c5d80a401d78e5760b145bef98451a7459f2b67
 PREV=329f3109b17428ee04e3f14031da6cf25cb04810
 REPO_URL=https://github.com/kd4yal2024/Saturn.git

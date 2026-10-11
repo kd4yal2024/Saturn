@@ -82,6 +82,7 @@ if [[ -z "${SATURN_MANAGED_UPDATES:-}" ]]; then
 fi
 SATURN_RELEASE_ACTIVATION_ENABLED="${SATURN_RELEASE_ACTIVATION_ENABLED:-0}"
 SATURN_RELEASE_CONFIG_TOOL_NAME="saturn-release-config.py"
+SATURN_RELEASE_UPDATE_BROKER_NAME="saturn-release-update-root.py"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/livez}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
@@ -170,6 +171,7 @@ PRIVILEGED_HELPER_SCRIPTS=(
   "$SOURCE_DIR/scripts/$SATURN_GO_DEPLOY_BROKER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RELEASE_INSTALLER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RELEASE_ACTIVATOR_NAME"
+  "$SOURCE_DIR/scripts/$SATURN_RELEASE_UPDATE_BROKER_NAME"
   "$SOURCE_DIR/scripts/$SATURN_REMOTE_VALIDATOR_NAME"
   "$SOURCE_DIR/scripts/$SATURN_REMOTE_GUARD_NAME"
   "$SOURCE_DIR/scripts/$SATURN_RADIO_BACKEND_SWITCH_NAME"
@@ -840,6 +842,18 @@ STATE_GROUP="$SERVICE_GROUP"
 EOF
 chown root:root "$SATURN_RADIO_BACKEND_CONFIG"
 chmod 0644 "$SATURN_RADIO_BACKEND_CONFIG"
+# The service user may call the managed-update broker only while managed updates are enabled (the policy just written above). The file is written
+# from scratch on every run, so turning managed updates off removes the authorization.
+managed_updates_sudoers="$(python3 "$SOURCE_DIR/scripts/$SATURN_RELEASE_CONFIG_TOOL_NAME" sudoers --user "$SERVICE_USER" \
+  --broker "$PRIVILEGED_SCRIPTS_DIR/$SATURN_RELEASE_UPDATE_BROKER_NAME" --config "$SATURN_RELEASE_ACTIVATE_CONFIG")"
+if [[ -n "$managed_updates_sudoers" ]]; then
+  info "Managed updates are ENABLED: the Update action may install, verify and roll back releases."
+  if [[ ! -L "$SATURN_RELEASE_CURRENT_LINK" ]]; then
+    warn "This installation is not on a managed release yet (no $SATURN_RELEASE_CURRENT_LINK). The first update must be run with --migrate-to-releases: moving to managed releases is a one-way change and is never done implicitly."
+  fi
+else
+  info "Managed updates are disabled (SATURN_MANAGED_UPDATES=enable turns them on); the Update action keeps the legacy deployment."
+fi
 cat >"$SUDOERS_FILE" <<EOF
 # Managed by install_saturn_go_nginx.sh
 Defaults:${SERVICE_USER} secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -885,6 +899,7 @@ ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-tci-bind.s
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-satp-config.sh
 ${SERVICE_USER} ALL=(root) NOPASSWD: ${PRIVILEGED_SCRIPTS_DIR}/saturn-satp-config.sh *
 ${SERVICE_USER} ALL=(root) NOPASSWD: /usr/bin/systemd-run --unit saturn-go-self-deploy-* --collect --no-block ${SATURN_GO_DEPLOY_BROKER} ${SATURN_STAGING_DIR}/*
+${managed_updates_sudoers}
 EOF
 chmod 0440 "$SUDOERS_FILE"
 if command -v visudo >/dev/null 2>&1; then

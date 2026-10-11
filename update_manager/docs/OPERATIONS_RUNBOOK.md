@@ -102,6 +102,38 @@ sudo ./install.sh                                    # keep whatever is there (a
 `SATURN_RELEASE_ACTIVATION_ENABLED=1|0` in the environment is the older spelling
 of `enable|disable`. The merge is done by `scripts/saturn-release-config.py`.
 
+### Managed updates: what the Update action does
+
+With managed updates enabled, an authenticated administrator's **Run Saturn Go Update** on the Saturn Go page needs no other step. The script
+(`update-saturn-go.sh`, flow in `saturn-release-update-flow.sh`):
+
+1. asks the root update broker whether this installation can take a managed update (policy on, a release layout, the privileged helpers installed), before
+   spending any build time;
+2. resolves the selected GitHub ref to **one** full commit, and does nothing if that commit is already the active release;
+3. builds exactly that commit into a release bundle on the device (`saturn-release-build.sh`: tests, native build, manifest; never activates), about an hour and a half on a
+   Raspberry Pi 4/CM4, with the radio running throughout, and validates the bundle;
+4. hands the bundle to the broker (`saturn-release-update-root.py --dispatch`), which runs in its own transient `saturn-release-update-*` unit because activation restarts
+   `saturn-go.service`: it holds the host maintenance locks, runs the existing root installer and activator (install inactive, switch, restart, **prove reception with a
+   temporary receive-only headless session, restore the previous release if that fails**), and writes the outcome to the deploy status the page shows. No browser has to be connected.
+
+The status file records `success`; or `error` with the phase `rolled_back` (validation failed, the previous release was restored and its reception verified; the first
+failed condition is in the message), `rollback_unverified` (restored, reception on it not verified), `rollback_failed` (the previous release could not be restored: this needs
+attention, see `/var/lib/saturn-state/deployments/current.json` and the log named in the status), `refused`, `busy` (another maintenance operation holds the release or radio
+lock), `migration_required` or `installer_update_required`. It also records the release identities (requested ref, commit, previous commit, active commit), the radio settings
+(frequency, sample rate, DDC, ADC, backend) before and after, whether they were preserved, the RXC1 state afterwards and the validation summary. The full log of the steps is
+in `/var/lib/saturn-state/release-update/`.
+
+**Privileged helpers stay installer-managed.** The activator, the validator and the guard are never taken from a downloaded bundle. A release declares the helper contract it
+needs (`# saturn-helper-contract: N` in each); if it needs a newer one than is installed, the update stops before anything is changed with "installer update required":
+run `sudo ./install.sh` from the new checkout and update again.
+
+**Moving a legacy installation** (no managed release active yet; services running from `/opt/saturn-go`) is a one-way change and is never part of an ordinary update. With
+managed updates enabled the first update is refused with `migration_required` until it is requested explicitly: tick *Move this installation to managed releases (one-way)* on the page, or
+pass `--migrate-to-releases` to `update-saturn-go.sh`.
+
+**Turning managed updates off** (`SATURN_MANAGED_UPDATES=disable ./install.sh`) removes the service user's permission to call the broker and returns the Update action to the legacy
+deployment. The installer rewrites the sudoers file from scratch on every run, so nothing of the permission is left behind.
+
 Build an inactive release from a branch or tag without trusting the mutable ref
 after selection:
 

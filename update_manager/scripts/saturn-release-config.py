@@ -139,6 +139,22 @@ def merge(defaults_path: str, existing_path: str | None, managed: str, notes: li
     return "".join(line + "\n" for line in comments) + render(out_pairs)
 
 
+def sudoers_fragment(user: str, broker: str, config: str) -> str:
+    """The sudoers lines that let the service user call the managed-update broker, and nothing when managed updates are off. The installer writes
+    the sudoers file from scratch on every run, so turning managed updates off removes the authorization with it. The broker accepts only
+    --preflight and --dispatch from this user and validates everything else itself; the wildcard only lets the dispatch carry its one bundle path."""
+    if not re.fullmatch(r"[a-z_][a-z0-9_-]*", user):
+        raise SystemExit(f"refusing to write a sudoers rule for the unusual user name {user!r}")
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", broker) or ".." in broker.split("/"):
+        raise SystemExit(f"refusing to write a sudoers rule for the unusual broker path {broker!r}")
+    values = dict(parse(config))
+    if values.get("ACTIVATION_ENABLED") != "1":
+        return ""
+    return (f"{user} ALL=(root) NOPASSWD: {broker} --preflight\n"
+            f"{user} ALL=(root) NOPASSWD: {broker} --preflight --allow-legacy-migration\n"
+            f"{user} ALL=(root) NOPASSWD: {broker} --dispatch *\n")
+
+
 def write_atomic(path: str, text: str, mode: int) -> None:
     if os.path.islink(path):
         raise SystemExit(f"refusing to write through the symbolic link {path}")
@@ -172,7 +188,20 @@ def main(argv: list[str] | None = None) -> int:
     m.add_argument("--managed-updates", choices=("keep", "enable", "disable"), default="keep",
                    help="keep (default): never change an existing activation policy; enable/disable: set it, as an explicit choice")
     m.add_argument("--mode", default="0644")
+    g = sub.add_parser("get", help="print one setting of a configuration file (empty when unset)")
+    g.add_argument("--file", required=True)
+    g.add_argument("--key", required=True)
+    u = sub.add_parser("sudoers", help="print the sudoers lines for the managed-update broker (nothing when managed updates are off)")
+    u.add_argument("--user", required=True)
+    u.add_argument("--broker", required=True)
+    u.add_argument("--config", required=True, help="the written activation configuration; ACTIVATION_ENABLED decides")
     args = parser.parse_args(argv)
+    if args.command == "get":
+        print(dict(parse(args.file)).get(args.key, ""))
+        return 0
+    if args.command == "sudoers":
+        sys.stdout.write(sudoers_fragment(args.user, args.broker, args.config))
+        return 0
     notes: list[str] = []
     text = merge(args.defaults, args.existing, args.managed_updates, notes)
     write_atomic(args.out, text, int(args.mode, 8))
