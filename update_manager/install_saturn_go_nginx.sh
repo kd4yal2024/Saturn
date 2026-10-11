@@ -33,7 +33,7 @@ SATURN_GO_DEPLOY_CONFIG="/etc/default/saturn-go-deploy"
 SATURN_RELEASE_INSTALLER_NAME="saturn-release-install-root.sh"
 SATURN_RELEASE_INSTALL_CONFIG="/etc/default/saturn-release-install"
 SATURN_RELEASE_ACTIVATOR_NAME="saturn-release-activate-root.sh"
-SATURN_RELEASE_ACTIVATE_CONFIG="/etc/default/saturn-release-activate"
+SATURN_RELEASE_ACTIVATE_CONFIG="${SATURN_RELEASE_ACTIVATE_CONFIG:-/etc/default/saturn-release-activate}"
 SATURN_REMOTE_VALIDATOR_NAME="saturn-remote-validate.py"
 SATURN_REMOTE_GUARD_NAME="saturn-remote-receive-guard.js"
 SATURN_RADIO_BACKEND_SWITCH_NAME="saturn-radio-backend-switch-root.sh"
@@ -83,6 +83,14 @@ fi
 SATURN_RELEASE_ACTIVATION_ENABLED="${SATURN_RELEASE_ACTIVATION_ENABLED:-0}"
 SATURN_RELEASE_CONFIG_TOOL_NAME="saturn-release-config.py"
 SATURN_RELEASE_UPDATE_BROKER_NAME="saturn-release-update-root.py"
+# What the installer does to the APPLICATION depends on how this appliance runs it:
+#   release layout (/opt/saturn/current points into /opt/saturn/releases): the releases own the application, and an update installs, verifies and
+#     rolls back releases. The installer then refreshes only what it owns (privileged helpers, sudoers, configuration, unit files, scripts, nginx), builds
+#     no server or Bridge, copies no web assets, restarts no radio service, and checks readiness against the release that is running.
+#   legacy layout, or nothing deployed yet: unchanged (builds, installs and restarts, as before).
+# SATURN_INSTALL_APPLICATION=auto (default) | force (deploy the legacy payload regardless) | skip (never deploy it).
+# SATURN_INSTALL_PLAN=1 (exactly 1) prints what a run would do and changes nothing (no root needed).
+SATURN_INSTALL_APPLICATION="${SATURN_INSTALL_APPLICATION:-auto}"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/livez}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
@@ -146,7 +154,7 @@ check_tmp_space_preflight() {
   fi
 }
 
-if [[ ${EUID:-$(id -u)} -ne 0 ]]; then
+if [[ ${EUID:-$(id -u)} -ne 0 && "${SATURN_INSTALL_PLAN:-0}" != "1" ]]; then
   err "Run as root (sudo)."
   exit 1
 fi
@@ -239,6 +247,27 @@ case "$SATURN_MANAGED_UPDATES" in
   keep|enable|disable) ;;
   *) err "SATURN_MANAGED_UPDATES must be keep, enable or disable (got '$SATURN_MANAGED_UPDATES')"; exit 1 ;;
 esac
+case "$SATURN_INSTALL_APPLICATION" in
+  auto|force|skip) ;;
+  *) err "SATURN_INSTALL_APPLICATION must be auto, force or skip (got '$SATURN_INSTALL_APPLICATION')"; exit 1 ;;
+esac
+read -r SATURN_APP_LAYOUT ACTIVE_RELEASE_COMMIT SKIP_APPLICATION < <(python3 "$SOURCE_DIR/scripts/$SATURN_RELEASE_CONFIG_TOOL_NAME" layout \
+  --current-link "$SATURN_RELEASE_CURRENT_LINK" --releases-root "$SATURN_RELEASES_ROOT" --application "$SATURN_INSTALL_APPLICATION")
+if [[ "${SATURN_INSTALL_PLAN:-0}" == "1" ]]; then
+  python3 "$SOURCE_DIR/scripts/$SATURN_RELEASE_CONFIG_TOOL_NAME" plan --config "$SATURN_RELEASE_ACTIVATE_CONFIG" \
+    --current-link "$SATURN_RELEASE_CURRENT_LINK" --releases-root "$SATURN_RELEASES_ROOT" --managed-updates "$SATURN_MANAGED_UPDATES" \
+    --application "$SATURN_INSTALL_APPLICATION" --default-enabled "$SATURN_RELEASE_ACTIVATION_ENABLED"
+  exit 0
+fi
+if (( SKIP_APPLICATION )); then
+  if [[ "$SATURN_APP_LAYOUT" == "release" ]]; then
+    info "Release layout (active release $ACTIVE_RELEASE_COMMIT): the application is managed by releases; refreshing only what the installer owns."
+  else
+    info "SATURN_INSTALL_APPLICATION=skip: the application payload is not deployed."
+  fi
+elif [[ "$SATURN_APP_LAYOUT" == "release" ]]; then
+  warn "SATURN_INSTALL_APPLICATION=force on a release layout: the legacy payload deployed into $SATURN_ROOT is overridden by the active release ($ACTIVE_RELEASE_COMMIT)."
+fi
 for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
   if [[ ! -f "$privileged_script" ]]; then
     err "Privileged helper script not found: $privileged_script"
@@ -451,8 +480,13 @@ install_saturn_bridge_if_requested() {
   bridge_requested || return 0
   saturn_remote_bridge_preflight
 
-  info "Installing Saturn Remote bridge..."
+  if (( SKIP_APPLICATION )); then
+    info "Refreshing the Saturn Remote bridge unit only (no build, no binary, no restart)..."
+  else
+    info "Installing Saturn Remote bridge..."
+  fi
   env \
+    SATURN_BRIDGE_UNIT_ONLY="$SKIP_APPLICATION" \
     SATURN_USER="$SERVICE_USER" \
     SATURN_REPO_ROOT="$REPO_SOURCE_DIR" \
     SATURN_PIHPSDR_DIR="$SATURN_PIHPSDR_DIR" \
@@ -467,7 +501,11 @@ install_saturn_bridge_if_requested() {
     SATURN_BRIDGE_RF_TX_ENABLED="${SATURN_BRIDGE_RF_TX_ENABLED:-1}" \
     SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED="${SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED:-1}" \
     bash "$SOURCE_DIR/scripts/$SATURN_BRIDGE_INSTALLER_NAME"
-  ok "Saturn Remote bridge installed"
+  if (( SKIP_APPLICATION )); then
+    ok "Saturn Remote bridge unit refreshed"
+  else
+    ok "Saturn Remote bridge installed"
+  fi
 }
 
 remove_legacy_apt_rust() {
@@ -589,6 +627,9 @@ chmod 0644 "$SATURN_MAINTENANCE_TMPFILES"
 systemd-tmpfiles --create "$SATURN_MAINTENANCE_TMPFILES"
 ok "Directories ready"
 
+if (( SKIP_APPLICATION )); then
+  info "Web assets are part of the application; left as they are (the active release carries its own)."
+else
 info "Copying web assets..."
 if declare -F saturn_go_check_source_checkout >/dev/null; then
   if ! saturn_go_check_source_checkout "$SOURCE_DIR"; then
@@ -631,6 +672,7 @@ else
   exit 1
 fi
 ok "Web assets copied"
+fi
 
 info "Copying scripts..."
 added_scripts=0
@@ -907,6 +949,11 @@ if command -v visudo >/dev/null 2>&1; then
 fi
 ok "Sudoers policy installed at $SUDOERS_FILE"
 
+if (( SKIP_APPLICATION )); then
+  info "Rust server: not built or installed (the application is managed by releases)."
+  # readiness is checked against the release that is running, not against this checkout
+  RUST_BUILD_COMMIT="$ACTIVE_RELEASE_COMMIT"
+else
 info "Building Rust server..."
 RUST_BUILD_COMMIT="$(git -C "$REPO_SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
 if [[ ! "$RUST_BUILD_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -926,6 +973,7 @@ cp -f "$RUST_BUILD_TARGET_DIR/release/saturn-go" "$BIN_DIR/saturn-go"
 popd >/dev/null
 chmod 0755 "$BIN_DIR/saturn-go"
 ok "Rust binary installed to $BIN_DIR/saturn-go"
+fi
 
 if [[ ! -f "$SATURN_REPO_ROOT_FILE" ]]; then
   printf '%s\n' "$DEFAULT_REPO_ROOT" > "$SATURN_REPO_ROOT_FILE"
@@ -1223,7 +1271,12 @@ WATCHDOG_TIMER
 systemctl daemon-reload
 systemctl enable saturn-go.service
 systemctl enable saturn-go-watchdog.timer
-if systemctl is-active --quiet saturn-go.service; then
+if (( SKIP_APPLICATION )); then
+  # The unit files are refreshed (they take effect when the services next start, with the next update); the running release is not disturbed.
+  if ! systemctl is-active --quiet saturn-go.service; then
+    systemctl start saturn-go.service
+  fi
+elif systemctl is-active --quiet saturn-go.service; then
   systemctl restart saturn-go.service
 else
   systemctl start saturn-go.service
@@ -1233,7 +1286,11 @@ if systemctl is-active --quiet saturn-go-watchdog.timer; then
 else
   systemctl start saturn-go-watchdog.timer
 fi
-ok "Service and watchdog enabled and restarted"
+if (( SKIP_APPLICATION )); then
+  ok "Service and watchdog enabled; the running release was not restarted"
+else
+  ok "Service and watchdog enabled and restarted"
+fi
 
 install_saturn_bridge_if_requested
 

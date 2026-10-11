@@ -17,6 +17,17 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `--migrate-to-releases`. With the policy off nothing changes.
 
 ### Changed
+- The installer is layout-aware. On an appliance that runs releases it refreshes only what it owns (helpers, sudoers, configuration, unit files, scripts,
+  nginx), builds no server or Bridge, copies no web assets, restarts no radio service, refreshes the Bridge unit without touching the running Bridge
+  (`SATURN_BRIDGE_UNIT_ONLY`), and checks readiness against the release that is running instead of its own checkout's commit (which could only fail there).
+  `SATURN_INSTALL_PLAN=1` prints what a run would do without root and without changing anything; `SATURN_INSTALL_APPLICATION=auto|force|skip` overrides the rule.
+- An installation that runs releases never falls through to the legacy deployment: with managed updates disabled the Update action refuses, naming the active release
+  and the installer choice that enables them. The release builder takes `--expect-commit` and the Update action pins the build to the commit it resolved: a ref
+  that moves in between stops the build before any work.
+- The Bridge keeps the receive settings it has accepted (tuning of both VFOs, mode and filter, antenna, attenuation, volume, AGC, noise reduction, noise blanker,
+  squelch) in `SATURN_BRIDGE_STATE_DIR` (`/var/lib/saturn-bridge`, `rx-state-v1.txt`: versioned, private, written atomically and debounced) and restores them before
+  anything receives or listens, so an update or a restart no longer returns the radio to 14.2 MHz. Nothing about transmitting is ever written or restored. The Bridge unit
+  and the deploy broker (contract 3) name the state directory.
 - Running the installer again no longer rewrites `/etc/default/saturn-release-activate` from fixed text.
   `scripts/saturn-release-config.py` refreshes the installer's own paths and keeps the administrator's
   settings: the activation (managed-updates) policy, including an explicit `0`, and `VALIDATION_MEMORY_MAX`,

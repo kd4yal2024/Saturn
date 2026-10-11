@@ -123,6 +123,21 @@ lock), `migration_required` or `installer_update_required`. It also records the 
 (frequency, sample rate, DDC, ADC, backend) before and after, whether they were preserved, the RXC1 state afterwards and the validation summary. The full log of the steps is
 in `/var/lib/saturn-state/release-update/`.
 
+**Running the installer on an appliance that runs releases.** The installer detects the layout (`/opt/saturn/current` pointing into `/opt/saturn/releases`). On a release layout it
+refreshes only what it owns (privileged helpers including the update broker, the sudoers rule for the broker while managed updates are on, the activation configuration with your settings kept, unit
+files, the packaged scripts the page runs, nginx), builds no server or Bridge, copies no web assets, **restarts no radio service**, refreshes the Bridge unit without touching the running Bridge, and
+checks readiness against the release that is running. A legacy or fresh installation is unchanged. Look first at what a run would do, without root and changing nothing:
+
+```bash
+SATURN_INSTALL_PLAN=1 SATURN_MANAGED_UPDATES=enable bash update_manager/install_saturn_go_nginx.sh
+```
+
+This is the Saturn-Go installer, not the whole-appliance `sudo ./install.sh`: that one runs the shared provisioner (packages, build, XDMA driver, P2) and its Saturn Go phase builds and restarts the Bridge
+and checks readiness against the checkout, so it is not release-aware yet. On an appliance that runs releases use the Saturn-Go installer.
+
+`SATURN_INSTALL_APPLICATION=force` deploys the legacy payload even on a release layout (it is overridden by the active release; a warning says so), `skip` never deploys it.
+Unit-file changes (for example the Bridge's new state directory for its saved receive settings) take effect the next time the services start, which an update does.
+
 **Privileged helpers stay installer-managed.** The activator, the validator and the guard are never taken from a downloaded bundle. A release declares the helper contract it
 needs (`# saturn-helper-contract: N` in each); if it needs a newer one than is installed, the update stops before anything is changed with "installer update required":
 run `sudo ./install.sh` from the new checkout and update again.

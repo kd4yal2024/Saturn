@@ -28,6 +28,9 @@ SATURN_BRIDGE_RUSTFLAGS="${SATURN_BRIDGE_RUSTFLAGS:-}"
 SATURN_BRIDGE_REQUIRED_RTPRIO=22
 SATURN_BRIDGE_REQUIRED_MEMLOCK_BYTES=16777216
 SATURN_BRIDGE_BUILD_ONLY="${SATURN_BRIDGE_BUILD_ONLY:-0}"
+# Unit only: write and verify the service unit and nothing else (no build, no binary, no backend switch, no restart). For an appliance whose Bridge is
+# a release's, where the installer owns the unit and the releases own the binary.
+SATURN_BRIDGE_UNIT_ONLY="${SATURN_BRIDGE_UNIT_ONLY:-0}"
 SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
@@ -562,6 +565,10 @@ EOF
   # replacement binary.  A conflicting drop-in must fail the install rather
   # than leave Direct-XDMA cycling on mlock or scheduling errors.
   verify_service_contract
+  if flag_enabled "$SATURN_BRIDGE_UNIT_ONLY"; then
+    log "Unit refreshed and verified; the running service and its backend were not touched (SATURN_BRIDGE_UNIT_ONLY=1)"
+    return 0
+  fi
   # The backend transaction owns both the active and boot-time service policy.
   # P2 is deliberately P2app-only at boot; the browser bridge is started on
   # demand. Direct XDMA instead enables the bridge and disables P2app.
@@ -636,6 +643,11 @@ main() {
   fi
 
   need_root
+  if flag_enabled "$SATURN_BRIDGE_UNIT_ONLY"; then
+    capture_selected_backend
+    install_service
+    return 0
+  fi
   ensure_apt_packages
   ensure_rust_toolchain
   verify_bridge_inputs

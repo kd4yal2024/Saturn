@@ -4,8 +4,9 @@ GoldMarsh, 2026-10-10 and 11. Branch `goldmarsh/headless-validation`, built on `
 FPGA 1.31.002 / build ID `0x53460004` and the XDMA kernel driver are untouched. **The G2 now runs release `cc09c61f91030d4c5a38d6c570a20c28b5d97e03`**, activated on 2026-10-11 at 16:25 EDT
 by the staged procedure: the receive validation ran as the viewer, the record is `committed`, RXC1 reads `valid` (see "Activation of `cc09c61` on the G2"). The route here: the first hardware `check` failed, for reasons
 described next, and the source answered it (see "Hardware results with release `50898660`"); the first `activate`, of release `50898660`, then rolled back with exit 71 for two timing assumptions of the validator
-(see "First activation attempt"), which `cc09c61` corrects. **This is the bootstrap through the staged shell procedure. It is not yet the normal user-facing update**: the ordinary updater still deploys through the
-older helper into `/opt/saturn-go`, and the installer rewrites the activation configuration without keeping `VALIDATION_MEMORY_MAX`; both are the next work (see "What is still open").
+(see "First activation attempt"), which `cc09c61` corrects. **That was the bootstrap through the staged shell procedure.** The normal user-facing update (the Update action of the Saturn Go page, and the Saturn-Go installer) has since been
+connected to the same machinery on this branch for *existing installations that run releases* (see "Managed updates for existing installations"). That work is implemented and tested on a development
+machine; **it has not yet been run on the G2** (see "What is still open").
 
 This file and `g2_headless_steps.sh` live in the source tree (`update_manager/docs/headless-validation/`) so that nothing depends on a scratch directory. The commit
 under test is the **release** `cc09c61f91030d4c5a38d6c570a20c28b5d97e03` (the earlier `50898660388fba554e0cbfc63844cbac7c87326b` was installed and rolled back, and stays installed inactive): it is what was built, is
@@ -170,22 +171,49 @@ The helper exited 0. Read independently over ssh afterwards, not from the helper
 * **All 25 conditions of the validation passed**: display data (36 rows), Opus frames (144), decoded audio (77 played in 3.5 s), AudioContext running, no decode errors, the owner's readiness gate with the session
   attached, the receive-only guard before any page script, 63 frames left the browser all inside the allowlist, the radio unchanged, `Seccomp: 2` on all four renderers with no `--no-sandbox`, the memory cap enforced by the
   validator's watchdog (peak **437 MiB** of 500M), and a complete cleanup (no unit, process, connection or leftover directory; the owner counts 0 connections).
-* **The new page behaves very differently from the old one.** 297 Opus frames, 230 played, 1 late drop, 2 underruns (the old release's page: about 320 frames, 100 to 220 played, 74 to 115 late drops, 20 to 28 underruns),
+* **The new page behaves very differently from the old one** (in these short validation runs; they are not the matched audio comparison, which is still to come). 297 Opus frames, 230 played, 1 late drop, 2 underruns (the old release's page: about 320 frames, 100 to 220 played, 74 to 115 late drops, 20 to 28 underruns),
   the browser averaged 96% of a core (the old page's 140 to 165%), and none of the Bridge's drop counters moved (the old page raised the IQ-queue overflow counters by 6 to 22 per session).
 * **RXC1 reads `valid`** at the validator's baseline and in the Bridge's telemetry afterwards; the one-use arm was spent as designed.
-* **The headroom passed by 1 MiB**: 533 MiB available against 532 needed, on the first reading (no wait was needed). One reading that low earlier (529 MiB) refused the first attempt. The bounded wait is what keeps the next
-  restart from failing on a dip, but the margin on this 905 MB host is real and small: it is the first thing to revisit if validation is refused again (a leaner browser, or a smaller reserve).
+* **The launch check passed by 1 MiB**: 533 MiB available against the 532 MiB the browser needs (cap plus reserve), on the first reading (no wait was needed). That is the margin of the launch check at that instant, not
+  the radio's remaining memory. One reading just below it (529 MiB) refused the first attempt. The bounded wait lets a validation recover from a temporary dip; it cannot guarantee that enough memory is there. The reserve
+  stays as it is while this work is completed; a leaner browser, or a smaller reserve, is the first thing to revisit if validation is refused again.
 * **Radio settings.** The Bridge restarted at its default tuning of 14.2 MHz, as the previous restarts did. Settings do not survive an update yet.
 
 The evidence (the `committed` record, the target validation directory, the journal and the state) is kept off the G2 in the review folder `activation_cc09c61_20261011/`, hashes verified. The earlier exit-71 attempt is kept
 in `exit71_attempt_20261011/`.
 
+## Managed updates for existing installations (implemented and tested here; not yet run on the G2)
+
+* **Entry point.** The Update action of the Saturn Go page runs `update-saturn-go.sh`. It now decides on the *layout* (is a release what runs: `/opt/saturn/current` is a link to `/opt/saturn/releases/<commit>`)
+  separately from the *authorization* (`ACTIVATION_ENABLED`). A release layout with managed updates enabled takes the release flow; a release layout with updates disabled **refuses** (phase `managed_updates_disabled`,
+  naming the setting) and never falls to the legacy `/opt/saturn-go` deployment. A legacy layout with updates disabled keeps the legacy deployment; with updates enabled the update is refused until it is run
+  with the explicit `--migrate-to-releases` (an ordinary update never changes the layout).
+* **The flow** (`saturn-release-update-flow.sh`): preflight, resolve the selected GitHub ref to one commit, stop if it is already the active release, build that commit into a bundle on the device
+  (`saturn-release-build.sh --expect-commit <that commit>`: if the ref has moved the build stops before any work), validate the manifest, then hand the bundle to the root broker
+  (`saturn-release-update-root.py --dispatch`). The broker runs the existing root installer and activator in a transient unit (activating restarts the page's own service): install inactive, switch, restart,
+  prove reception with the temporary headless receive-only session, restore the previous release if that fails. It reports success only when the transaction record is `committed` for this commit.
+  Prebuilt ARM releases can replace the local compilation later through the same bundle and manifest.
+* **Authorization.** `SATURN_MANAGED_UPDATES=keep|enable|disable` is an explicit choice made when the Saturn-Go installer runs (default `keep`). The sudoers rule that lets the service user call the broker is written from the
+  resulting policy on every installer run, so disabling removes it. An existing configuration is preserved: an explicitly disabled policy stays disabled unless `enable` is chosen, and the administrator's
+  `VALIDATION_MEMORY_MAX` (500M on this G2), timeout, expected RXC1 state and the six validation overrides survive, while unknown or invalid keys are dropped with a note. The 32 MiB reserve is unchanged.
+* **Installer on a release layout.** The Saturn-Go installer (`update_manager/install_saturn_go_nginx.sh`) refreshes only what it owns, builds and restarts nothing of the application, and checks readiness against the
+  running release. `SATURN_INSTALL_PLAN=1` prints what it would do without root and without changing anything. **The whole-appliance `sudo ./install.sh` is not release-aware** (see below).
+* **Receive settings.** The Bridge keeps the receive settings it has accepted in `/var/lib/saturn-bridge/rx-state-v1.txt` (outside every release, versioned, atomic, debounced), restores them before reception starts, and never
+  stores or restores PTT, MOX or a transmit session. The Bridge unit must name that state directory (the installer refreshes the unit); until it has, the Bridge runs without persistence.
+* **What was verified, and where.** Unit and integration tests on a development machine: the configuration merge, the broker (with stand-ins for the installer and activator and the real lock tool), the flow and the routing,
+  the builder's pin, the installer's plan mode for both layouts, and the Bridge's persistence including three end-to-end tests against the real Bridge with WDSP and replayed hardware. Mutation runs over each of these
+  (a no-op control must survive; every mutant is killed by a named test). **Nothing of this has run on the G2.**
+
 ## What is still open
 
-* **The normal updater does not use this flow.** `update-saturn-go.sh` (Saturn Go self-update, `/saturngo`) builds on the device and ends in the detached `saturn-go-deploy-root.sh`, which installs into `/opt/saturn-go`; no
-  ordinary update path calls `saturn-release-build`, `saturn-release-install-root` or `saturn-release-activate-root`. A user who selects an update therefore still gets the old deployment and the old readiness gate.
-* **The installer rewrites the activation configuration** (`cat >` in `install_saturn_go_nginx.sh`) and so drops `VALIDATION_MEMORY_MAX` and resets `ACTIVATION_ENABLED`; this host's checks and activation depend on the 500M.
-* **Radio settings are not preserved across an update** (tuning returns to the Bridge's default).
+* **Scope of the managed-update work.** What exists is *managed updates for existing installations*: an installation that already runs releases (this G2) updates through the Update action, with the activation
+  policy an explicit installer choice. A fresh installation still deploys the legacy layout, and moving it onto releases is done with the explicit `--migrate-to-releases`; converting the installer's fresh-install path to
+  the same release machinery is separate, not yet done work.
+* **Not yet run on the G2:** the installer refresh on the release layout (with the choice to enable managed updates), an update through the normal page with no browser attached, the saved receive settings coming
+  back after the restart, and the reruns of the installer that must leave the activation policy and the 500M allowance as they are. These are the completion test; `main` stays unchanged until it passes and is reviewed.
+* **The whole-appliance installer is not release-aware.** `sudo ./install.sh` runs the shared provisioner (packages, build, XDMA driver through DKMS, P2, then Saturn Go and the Bridge). Its Saturn-Go phase calls the
+  Saturn-Go installer, which is release-aware, but it then runs `install-saturn-bridge.sh` without unit-only mode (building the Bridge, switching the backend and restarting it) and verifies readiness against the checkout's
+  commit rather than the running release. On an appliance that runs releases use the Saturn-Go installer directly; making the provisioner's Saturn-Go phase release-aware is part of the separate fresh-install work.
 * A controlled rollback has not yet been exercised on the appliance (the `failure` stage exists for it); the unplanned one, on 14:17, ended in exit 71 and is the reason for the restart-timing waits.
 
 ## Evidence (all run on this machine, except where the hardware results above say otherwise)

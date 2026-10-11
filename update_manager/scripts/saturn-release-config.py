@@ -155,6 +155,47 @@ def sudoers_fragment(user: str, broker: str, config: str) -> str:
             f"{user} ALL=(root) NOPASSWD: {broker} --dispatch *\n")
 
 
+COMMIT_NAME = re.compile(r"[0-9a-f]{40}")
+
+
+def detect_layout(current_link: str, releases_root: str) -> tuple[str, str | None]:
+    """('release', commit) when the active pointer is a symbolic link to an installed release; ('legacy', None) otherwise (a legacy deployment,
+    or a machine with nothing deployed yet)."""
+    if os.path.islink(current_link):
+        target = os.path.realpath(current_link)
+        if os.path.dirname(target) == os.path.realpath(releases_root) and COMMIT_NAME.fullmatch(os.path.basename(target)):
+            return "release", os.path.basename(target)
+    return "legacy", None
+
+
+def skip_application(layout: str, mode: str) -> bool:
+    """Whether the installer leaves the application (server binary, web assets, Bridge binary, the services' running state) alone. On a release
+    layout the application is the release's business: an install there deploys nothing into /opt/saturn-go that the services would not run.
+    auto: skip on a release layout; force: deploy regardless; skip: never deploy."""
+    return mode == "skip" or (mode == "auto" and layout == "release")
+
+
+def plan_text(config: str, current_link: str, releases_root: str, managed: str, application: str, default_enabled: str) -> str:
+    layout, commit = detect_layout(current_link, releases_root)
+    skip = skip_application(layout, application)
+    existing = dict(parse(config)) if os.path.exists(config) else {}
+    before = existing.get("ACTIVATION_ENABLED") if ADMIN_KEYS["ACTIVATION_ENABLED"](existing.get("ACTIVATION_ENABLED", "")) else None
+    after = {"enable": "1", "disable": "0"}.get(managed, before if before is not None else default_enabled)
+    kept = [f"{k}={existing[k]}" for k in ADMIN_KEYS if k in existing and k != "ACTIVATION_ENABLED" and ADMIN_KEYS[k](existing[k])]
+    lines = ["installer plan (nothing is changed)",
+             f"  application layout: {layout}" + (f" (active release {commit})" if commit else ""),
+             "  application payload: " + ("NOT deployed (" + ("the releases own the application" if layout == "release" else "SATURN_INSTALL_APPLICATION=skip") + "): no server or Bridge build, no web assets, no service restart"
+                                          if skip else "deployed (server and Bridge are built and installed, services restarted)"),
+             f"  managed updates (ACTIVATION_ENABLED): {before if before is not None else 'unset'} -> {after} (SATURN_MANAGED_UPDATES={managed})",
+             "  administrator settings kept: " + (", ".join(kept) if kept else "none set"),
+             "  readiness check after the run: " + (f"the running release {commit}" if skip and commit else "the commit of this checkout")]
+    if layout == "legacy" and after == "1":
+        lines.append("  NOTE: managed updates are on but no release is active yet; the first update must be run with --migrate-to-releases")
+    if layout == "release" and not skip:
+        lines.append("  WARNING: SATURN_INSTALL_APPLICATION=force deploys a legacy payload into /opt/saturn-go that the active release overrides")
+    return "\n".join(lines) + "\n"
+
+
 def write_atomic(path: str, text: str, mode: int) -> None:
     if os.path.islink(path):
         raise SystemExit(f"refusing to write through the symbolic link {path}")
@@ -195,7 +236,25 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--user", required=True)
     u.add_argument("--broker", required=True)
     u.add_argument("--config", required=True, help="the written activation configuration; ACTIVATION_ENABLED decides")
+    lo = sub.add_parser("layout", help="print '<layout> <active commit or -> <skip application 0|1>'")
+    lo.add_argument("--current-link", required=True)
+    lo.add_argument("--releases-root", required=True)
+    lo.add_argument("--application", choices=("auto", "force", "skip"), default="auto")
+    pl = sub.add_parser("plan", help="print what the installer would do, changing nothing")
+    pl.add_argument("--config", required=True)
+    pl.add_argument("--current-link", required=True)
+    pl.add_argument("--releases-root", required=True)
+    pl.add_argument("--managed-updates", choices=("keep", "enable", "disable"), default="keep")
+    pl.add_argument("--application", choices=("auto", "force", "skip"), default="auto")
+    pl.add_argument("--default-enabled", choices=("0", "1"), default="0")
     args = parser.parse_args(argv)
+    if args.command == "layout":
+        layout, commit = detect_layout(args.current_link, args.releases_root)
+        print(layout, commit or "-", int(skip_application(layout, args.application)))
+        return 0
+    if args.command == "plan":
+        sys.stdout.write(plan_text(args.config, args.current_link, args.releases_root, args.managed_updates, args.application, args.default_enabled))
+        return 0
     if args.command == "get":
         print(dict(parse(args.file)).get(args.key, ""))
         return 0

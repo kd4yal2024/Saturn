@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -312,6 +313,100 @@ class SudoersTests(Rig):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+class LayoutTests(Rig):
+    def test_a_pointer_into_the_releases_root_is_a_release_layout(self):
+        releases = self.path / "releases"
+        (releases / COMMIT).mkdir(parents=True)
+        os.symlink(releases / COMMIT, self.path / "current")
+        self.assertEqual(C.detect_layout(str(self.path / "current"), str(releases)), ("release", COMMIT))
+
+    def test_anything_else_is_a_legacy_layout(self):
+        releases = self.path / "releases"
+        (releases / COMMIT).mkdir(parents=True)
+        other = self.path / "elsewhere" / COMMIT
+        other.mkdir(parents=True)
+        (self.path / "plain").mkdir()
+        os.symlink(other, self.path / "outside")
+        os.symlink(releases, self.path / "root-itself")
+        (releases / "cc09c61").mkdir()
+        os.symlink(releases / "cc09c61", self.path / "short-name")
+        for name in ("missing", "plain", "outside", "root-itself", "short-name"):
+            self.assertEqual(C.detect_layout(str(self.path / name), str(releases)), ("legacy", None), name)
+        # A real directory, even one that is a release, is not the `current` link: activation switches a symbolic link, so a layout without one is not
+        # a release layout (the link test cannot be left to the "inside the release directory" test, which this directory passes).
+        self.assertEqual(C.detect_layout(str(releases / COMMIT), str(releases)), ("legacy", None), "a real release directory used as the link")
+
+    def test_the_application_rule(self):
+        self.assertTrue(C.skip_application("release", "auto"))
+        self.assertFalse(C.skip_application("legacy", "auto"))
+        self.assertFalse(C.skip_application("release", "force"))
+        self.assertTrue(C.skip_application("legacy", "skip"))
+        self.assertTrue(C.skip_application("release", "skip"))
+        self.assertFalse(C.skip_application("legacy", "force"))
+
+
+@unittest.skipIf(os.geteuid() == 0, "the plan is checked as an ordinary user, like an administrator looking before sudo")
+class InstallerPlan(Rig):
+    """The REAL installer in its plan mode: it says what it would do on this layout, and changes nothing."""
+
+    def plan(self, layout="release", config='ACTIVATION_ENABLED="0"\nVALIDATION_MEMORY_MAX="500M"\n', **extra):
+        releases = self.path / "releases"
+        (releases / COMMIT).mkdir(parents=True, exist_ok=True)
+        link = self.path / "current"
+        if layout == "release" and not link.exists():
+            os.symlink(releases / COMMIT, link)
+        (self.path / "conf").write_text(config)
+        env = dict(os.environ, SATURN_INSTALL_PLAN="1", SATURN_SERVICE_USER=subprocess.check_output(["id", "-un"], text=True).strip(),
+                   SATURN_RELEASE_CURRENT_LINK=str(link), SATURN_RELEASES_ROOT=str(releases), SATURN_RELEASE_ACTIVATE_CONFIG=str(self.path / "conf"))
+        env.update(extra)
+        before = (self.path / "conf").read_text()
+        result = subprocess.run(["bash", str(INSTALLER)], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual((self.path / "conf").read_text(), before, "the plan changed the configuration")
+        return result
+
+    def test_a_release_layout_leaves_the_application_alone(self):
+        result = self.plan()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"application layout: release (active release {COMMIT})", result.stdout)
+        self.assertIn("application payload: NOT deployed", result.stdout)
+        self.assertIn("no service restart", result.stdout)
+        self.assertIn(f"readiness check after the run: the running release {COMMIT}", result.stdout)
+        self.assertIn("administrator settings kept: VALIDATION_MEMORY_MAX=500M", result.stdout)
+        self.assertIn("ACTIVATION_ENABLED): 0 -> 0 (SATURN_MANAGED_UPDATES=keep)", result.stdout)
+
+    def test_the_policy_changes_only_on_an_explicit_choice(self):
+        self.assertIn("0 -> 1 (SATURN_MANAGED_UPDATES=enable)", self.plan(SATURN_MANAGED_UPDATES="enable").stdout)
+        self.assertIn("1 -> 0 (SATURN_MANAGED_UPDATES=disable)", self.plan(config='ACTIVATION_ENABLED="1"\n', SATURN_MANAGED_UPDATES="disable").stdout)
+        self.assertIn("1 -> 1 (SATURN_MANAGED_UPDATES=keep)", self.plan(config='ACTIVATION_ENABLED="1"\n').stdout)
+
+    def test_a_legacy_layout_still_deploys_and_points_at_the_explicit_migration(self):
+        result = self.plan(layout="legacy", SATURN_MANAGED_UPDATES="enable")
+        self.assertIn("application layout: legacy", result.stdout)
+        self.assertIn("application payload: deployed", result.stdout)
+        self.assertIn("the commit of this checkout", result.stdout)
+        self.assertIn("--migrate-to-releases", result.stdout)
+
+    def test_forcing_the_application_on_a_release_layout_is_warned_about(self):
+        result = self.plan(SATURN_INSTALL_APPLICATION="force")
+        self.assertIn("application payload: deployed", result.stdout)
+        self.assertIn("WARNING", result.stdout)
+
+    def test_skipping_the_application_is_honoured_anywhere(self):
+        result = self.plan(layout="legacy", SATURN_INSTALL_APPLICATION="skip")
+        self.assertIn("NOT deployed (SATURN_INSTALL_APPLICATION=skip)", result.stdout)
+
+    def test_an_unknown_choice_is_refused(self):
+        for key, value in (("SATURN_INSTALL_APPLICATION", "maybe"), ("SATURN_MANAGED_UPDATES", "maybe")):
+            result = self.plan(**{key: value})
+            self.assertNotEqual(result.returncode, 0, key)
+            self.assertIn(f"{key} must be", result.stderr)
+
+    def test_without_the_plan_mode_it_still_needs_root(self):
+        result = self.plan(SATURN_INSTALL_PLAN="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Run as root", result.stderr)
+
+
 class InstallerUsesIt(unittest.TestCase):
     text = INSTALLER.read_text()
 
@@ -334,6 +429,51 @@ class InstallerUsesIt(unittest.TestCase):
         self.assertIn('cat >"$SUDOERS_FILE" <<EOF', self.text, "the sudoers file must be written from scratch so a disabled policy removes the rule")
         self.assertLess(self.text.index('merge --defaults "$release_activate_defaults"'), self.text.index('sudoers --user "$SERVICE_USER"'),
                         "the rule must be derived from the policy as written, so the policy is written first")
+
+    def test_on_a_release_layout_nothing_of_the_application_is_built_copied_or_restarted(self):
+        text = self.text
+        gate = "if (( SKIP_APPLICATION )); then\n"
+        # Each application step is the ELSE branch of exactly this test (not a negated or loosened one), so a release layout does not run it.
+        for skipped, marker in (("  info \"Web assets are part of the application; left as they are", 'else\ninfo "Copying web assets..."'),
+                                ("  info \"Rust server: not built or installed", 'else\ninfo "Building Rust server..."')):
+            self.assertRegex(text, re.escape(gate + skipped) + r"[^\n]*\n(?:  [^\n]*\n)*" + re.escape(marker), marker)
+        restart_block = text[text.index("systemctl enable saturn-go-watchdog.timer"):text.index("Service and watchdog enabled")]
+        self.assertRegex(restart_block, re.compile(re.escape(gate) + r"  # The unit files are refreshed.*?\nelif systemctl is-active --quiet saturn-go\.service; then\n  systemctl restart saturn-go\.service\n", re.S))
+        self.assertNotRegex(restart_block.split("elif")[0], r"systemctl restart saturn-go")
+        self.assertIn('RUST_BUILD_COMMIT="$ACTIVE_RELEASE_COMMIT"', text, "readiness must be checked against the running release")
+        self.assertIn('SATURN_BRIDGE_UNIT_ONLY="$SKIP_APPLICATION"', text)
+        self.assertEqual(text.count(gate), 7, "an application gate was added or lost without this test being told")
+
+    def test_what_the_installer_says_for_each_layout_and_choice_before_it_changes_anything(self):
+        """The announcement block of the real installer, run with stand-ins for info and warn: plan mode exits before it, so it is checked here."""
+        start = self.text.index("if (( SKIP_APPLICATION )); then\n  if [[ \"$SATURN_APP_LAYOUT\" == \"release\" ]]; then\n    info \"Release layout")
+        end = self.text.index("\nfi\n", start) + len("\nfi\n")
+        block = self.text[start:end]
+        script = 'info(){ echo "INFO $*"; }\nwarn(){ echo "WARN $*"; }\nACTIVE_RELEASE_COMMIT=' + COMMIT + '\nSATURN_ROOT=/opt/saturn-go\n' + block
+        cases = (  # (SKIP_APPLICATION, layout) -> the line that is said
+            (1, "release", f"INFO Release layout (active release {COMMIT}): the application is managed by releases"),
+            (1, "legacy", "INFO SATURN_INSTALL_APPLICATION=skip: the application payload is not deployed."),
+            (0, "release", "WARN SATURN_INSTALL_APPLICATION=force on a release layout"),
+            (0, "legacy", ""),
+        )
+        for skip, layout, expected in cases:
+            result = subprocess.run(["bash", "-c", f"SKIP_APPLICATION={skip}; SATURN_APP_LAYOUT={layout}\n{script}"], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            if expected:
+                self.assertTrue(result.stdout.startswith(expected), (skip, layout, result.stdout))
+            else:
+                self.assertEqual(result.stdout, "", (skip, layout))
+
+    def test_the_bridge_installer_has_a_mode_that_touches_neither_the_binary_nor_the_service(self):
+        bridge = (REPO / "update_manager/scripts/install-saturn-bridge.sh").read_text()
+        self.assertIn('SATURN_BRIDGE_UNIT_ONLY="${SATURN_BRIDGE_UNIT_ONLY:-0}"', bridge)
+        unit_mode = bridge[bridge.index('  if flag_enabled "$SATURN_BRIDGE_UNIT_ONLY"; then\n    capture_selected_backend'):]
+        unit_mode = unit_mode[:unit_mode.index("return 0")]
+        for forbidden in ("build_bridge", "install_binary", "ensure_apt_packages", "systemctl restart", "BACKEND_SWITCH_HELPER"):
+            self.assertNotIn(forbidden, unit_mode)
+        service = bridge[bridge.index("install_service() {"):bridge.index("require_service_limit() {")]
+        before_switch = service[:service.index("The backend transaction owns")]
+        self.assertIn('flag_enabled "$SATURN_BRIDGE_UNIT_ONLY"', before_switch, "unit-only must return before the backend switch and the restart")
 
     def test_a_legacy_layout_is_pointed_at_the_explicit_migration(self):
         self.assertIn("--migrate-to-releases", self.text)

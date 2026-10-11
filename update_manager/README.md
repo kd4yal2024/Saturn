@@ -570,6 +570,8 @@ Default URL:
   and installing `saturn-bridge.service`
 - `SATURN_REQUIRE_BRIDGE` defaults to `SATURN_INSTALL_BRIDGE`; when enabled,
   native source/build failures fail the full installation
+- `SATURN_INSTALL_APPLICATION` is `auto` (default), `force` or `skip`. With `auto`, an appliance that already runs releases gets only what the installer owns refreshed (no
+  server or Bridge build, no web assets, no radio service restart); `SATURN_INSTALL_PLAN=1` prints what a run would do and changes nothing. This is a property of this Saturn-Go installer; the whole-appliance `sudo ./install.sh` is not release-aware yet.
 - `SATURN_MANAGED_UPDATES` is `keep` (default), `enable` or `disable`: the
   managed-updates (activation) policy in `/etc/default/saturn-release-activate`.
   Running the installer again keeps an existing policy and the administrator's
