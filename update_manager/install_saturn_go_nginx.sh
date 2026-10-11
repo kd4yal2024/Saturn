@@ -68,7 +68,20 @@ SATURN_RELEASES_ROOT="${SATURN_RELEASES_ROOT:-/opt/saturn/releases}"
 SATURN_RELEASE_CURRENT_LINK="${SATURN_RELEASE_CURRENT_LINK:-/opt/saturn/current}"
 SATURN_RELEASE_TRANSACTION_FILE="${SATURN_RELEASE_TRANSACTION_FILE:-${SATURN_STATE_DIR}/deployments/current.json}"
 SATURN_DEPLOYMENT_STATE_DIR="$(dirname "$SATURN_RELEASE_TRANSACTION_FILE")"
+# Managed updates (the Update action installing, verifying and, if need be, rolling back a release by itself) are the root-owned activation
+# policy. An existing policy, including an explicit 0, is never changed by running the installer again; only an explicit choice changes it:
+#   SATURN_MANAGED_UPDATES=enable | disable | keep      (keep is the default)
+# SATURN_RELEASE_ACTIVATION_ENABLED=1|0 given in the environment is the older spelling of enable|disable. A fresh installation with neither
+# takes SATURN_RELEASE_ACTIVATION_ENABLED's default, 0.
+if [[ -z "${SATURN_MANAGED_UPDATES:-}" ]]; then
+  case "${SATURN_RELEASE_ACTIVATION_ENABLED-unset}" in
+    1) SATURN_MANAGED_UPDATES=enable ;;
+    0) SATURN_MANAGED_UPDATES=disable ;;
+    *) SATURN_MANAGED_UPDATES=keep ;;
+  esac
+fi
 SATURN_RELEASE_ACTIVATION_ENABLED="${SATURN_RELEASE_ACTIVATION_ENABLED:-0}"
+SATURN_RELEASE_CONFIG_TOOL_NAME="saturn-release-config.py"
 SATURN_WATCHDOG_URL="${SATURN_WATCHDOG_URL:-http://${SATURN_ADDR}/livez}"
 SATURN_WATCHDOG_INTERVAL="${SATURN_WATCHDOG_INTERVAL:-30s}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
@@ -216,6 +229,14 @@ if [[ ! -f "$SOURCE_DIR/release/$SATURN_RELEASE_COMPONENTS_NAME" ]]; then
   err "Release component policy not found: $SOURCE_DIR/release/$SATURN_RELEASE_COMPONENTS_NAME"
   exit 1
 fi
+if [[ ! -f "$SOURCE_DIR/scripts/$SATURN_RELEASE_CONFIG_TOOL_NAME" ]]; then
+  err "Release configuration tool not found: $SOURCE_DIR/scripts/$SATURN_RELEASE_CONFIG_TOOL_NAME"
+  exit 1
+fi
+case "$SATURN_MANAGED_UPDATES" in
+  keep|enable|disable) ;;
+  *) err "SATURN_MANAGED_UPDATES must be keep, enable or disable (got '$SATURN_MANAGED_UPDATES')"; exit 1 ;;
+esac
 for privileged_script in "${PRIVILEGED_HELPER_SCRIPTS[@]}"; do
   if [[ ! -f "$privileged_script" ]]; then
     err "Privileged helper script not found: $privileged_script"
@@ -759,9 +780,13 @@ INSTALL_GROUP="root"
 EOF
 chown root:root "$SATURN_RELEASE_INSTALL_CONFIG"
 chmod 0644 "$SATURN_RELEASE_INSTALL_CONFIG"
-cat >"$SATURN_RELEASE_ACTIVATE_CONFIG" <<EOF
+# Rendered to a temporary file and merged with the existing configuration: an administrator's settings (the activation policy, the browser memory
+# allowance, ...) survive running the installer again, and the installer's own paths are refreshed. See saturn-release-config.py.
+release_activate_defaults="$(mktemp)"
+cat >"$release_activate_defaults" <<EOF
 # Managed by install_saturn_go_nginx.sh. Parsed as data by the root activator.
-# Keep disabled until automatic rollback passes an explicitly approved live appliance test.
+# ACTIVATION_ENABLED is the managed-updates policy: the installer keeps an existing value unless SATURN_MANAGED_UPDATES=enable|disable says otherwise.
+# VALIDATION_MEMORY_MAX and the other VALIDATION_* settings below are the administrator's and survive an installer run.
 ACTIVATION_ENABLED="$SATURN_RELEASE_ACTIVATION_ENABLED"
 SATURN_ROOT="$(dirname "$SATURN_RELEASES_ROOT")"
 RELEASES_ROOT="$SATURN_RELEASES_ROOT"
@@ -788,6 +813,12 @@ VALIDATION_ENABLED="${SATURN_RELEASE_VALIDATION_ENABLED:-1}"
 VALIDATOR="$PRIVILEGED_SCRIPTS_DIR/$SATURN_REMOTE_VALIDATOR_NAME"
 VALIDATOR_GUARD="$PRIVILEGED_SCRIPTS_DIR/$SATURN_REMOTE_GUARD_NAME"
 EOF
+existing_activate_config=()
+[[ ! -f "$SATURN_RELEASE_ACTIVATE_CONFIG" ]] || existing_activate_config=(--existing "$SATURN_RELEASE_ACTIVATE_CONFIG")
+python3 "$SOURCE_DIR/scripts/$SATURN_RELEASE_CONFIG_TOOL_NAME" merge --defaults "$release_activate_defaults" "${existing_activate_config[@]}" \
+  --managed-updates "$SATURN_MANAGED_UPDATES" --out "$SATURN_RELEASE_ACTIVATE_CONFIG" --mode 0644 \
+  || { rm -f "$release_activate_defaults"; err "Could not write $SATURN_RELEASE_ACTIVATE_CONFIG"; exit 1; }
+rm -f "$release_activate_defaults"
 chown root:root "$SATURN_RELEASE_ACTIVATE_CONFIG"
 chmod 0644 "$SATURN_RELEASE_ACTIVATE_CONFIG"
 install -d -m 0750 -o root -g "$SERVICE_GROUP" "$SATURN_RADIO_BACKEND_STATE_DIR"

@@ -344,6 +344,9 @@ jobs:
       - name: Test the staged appliance procedure
         run: tests/test-g2-headless-steps.sh
 
+      - name: Test the activation configuration merge
+        run: python3 -W ignore tests/test-saturn-release-config.py
+
       - name: Test deskHPSDR integration patches
         run: tests/test-deskhpsdr-integration.sh
 

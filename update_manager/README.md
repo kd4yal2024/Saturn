@@ -570,6 +570,11 @@ Default URL:
   and installing `saturn-bridge.service`
 - `SATURN_REQUIRE_BRIDGE` defaults to `SATURN_INSTALL_BRIDGE`; when enabled,
   native source/build failures fail the full installation
+- `SATURN_MANAGED_UPDATES` is `keep` (default), `enable` or `disable`: the
+  managed-updates (activation) policy in `/etc/default/saturn-release-activate`.
+  Running the installer again keeps an existing policy and the administrator's
+  other settings there (for example `VALIDATION_MEMORY_MAX`); only an explicit
+  `enable` or `disable` changes the policy. A fresh installation starts disabled.
 
 ## Installing from a checkout (UI downgrade guard)
 

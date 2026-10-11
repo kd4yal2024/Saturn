@@ -80,10 +80,24 @@ sudo /usr/local/lib/saturn-go/scripts/saturn-release-activate-root.sh \
   --validate <full-commit>
 ```
 
-Do not set `ACTIVATION_ENABLED=1` in
-`/etc/default/saturn-release-activate` during normal installation. The
-installer keeps it disabled. The current legacy deployment remains active
-until a live activation and deliberate rollback test are explicitly approved.
+`ACTIVATION_ENABLED` in `/etc/default/saturn-release-activate` is the
+managed-updates policy. Running the installer again never changes it: an
+existing value, including an explicit `0`, is kept, together with the
+administrator's other settings in that file (`VALIDATION_MEMORY_MAX`,
+`VALIDATION_TIMEOUT_SECONDS`, `VALIDATION_LEGACY_BRIDGE_RELEASES`,
+`VALIDATION_EXPECT_RXC1`, `VALIDATION_ENABLED`, `READY_TIMEOUT_SECONDS`); the
+installer's own paths and service names are refreshed. A value that would make
+the activator refuse the file is reported and dropped. Changing the policy is an
+explicit choice of whoever runs the installer:
+
+```bash
+sudo SATURN_MANAGED_UPDATES=enable  ./install.sh    # turn managed updates on
+sudo SATURN_MANAGED_UPDATES=disable ./install.sh    # turn them off
+sudo ./install.sh                                    # keep whatever is there (a fresh installation starts with 0)
+```
+
+`SATURN_RELEASE_ACTIVATION_ENABLED=1|0` in the environment is the older spelling
+of `enable|disable`. The merge is done by `scripts/saturn-release-config.py`.
 
 Build an inactive release from a branch or tag without trusting the mutable ref
 after selection:
