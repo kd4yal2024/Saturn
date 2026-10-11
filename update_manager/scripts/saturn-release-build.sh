@@ -25,6 +25,7 @@ DRY_RUN=0
 RESOLVE_ONLY=0
 SOURCE_REMOTE=""
 SOURCE_REF=""
+EXPECT_COMMIT=""
 SOURCE_WORKTREE=""
 FINAL_DIR=""
 TEMP_STAGE=""
@@ -36,9 +37,12 @@ need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "required command not found: 
 
 usage(){
   cat <<'EOF'
-Usage: saturn-release-build.sh [--output-root DIR] [--dry-run]
-       saturn-release-build.sh --source-remote URL --source-ref REF [--output-root DIR] [--dry-run]
-       saturn-release-build.sh --source-remote URL --source-ref REF --resolve-only
+Usage: saturn-release-build.sh [--output-root DIR] [--dry-run] [--expect-commit COMMIT]
+       saturn-release-build.sh --source-remote URL --source-ref REF [--output-root DIR] [--dry-run] [--expect-commit COMMIT]
+       saturn-release-build.sh --source-remote URL --source-ref REF --resolve-only [--expect-commit COMMIT]
+
+--expect-commit pins the build to a commit that was resolved earlier (by --resolve-only, for example): if the ref now resolves to another
+commit, or the checkout is not at that commit, the script stops before fetching or building anything.
 
 Without source options, builds the current clean Git commit. With source
 options, resolves the requested remote branch/tag once, fetches and verifies
@@ -82,6 +86,12 @@ while [[ $# -gt 0 ]]; do
     --source-ref)
       [[ $# -ge 2 ]] || die "--source-ref requires a branch or tag"
       SOURCE_REF="$2"
+      shift 2
+      ;;
+    --expect-commit)
+      [[ $# -ge 2 ]] || die "--expect-commit requires a full lowercase commit"
+      [[ "$2" =~ ^[0-9a-f]{40}$ ]] || die "--expect-commit must be a full lowercase 40-character commit, got: $2"
+      EXPECT_COMMIT="$2"
       shift 2
       ;;
     --resolve-only) RESOLVE_ONLY=1; shift ;;
@@ -183,6 +193,9 @@ build_resolved_remote_source(){
   local -a child_args=(--output-root "$OUTPUT_ROOT")
 
   resolve_remote_source
+  if [[ -n "$EXPECT_COMMIT" && "$RESOLVED_SOURCE_COMMIT" != "$EXPECT_COMMIT" ]]; then
+    die "source ref moved since it was resolved: expected $EXPECT_COMMIT, but $SOURCE_REF now resolves to $RESOLVED_SOURCE_COMMIT; nothing was built"
+  fi
   if (( RESOLVE_ONLY )); then
     printf 'source_remote=%s\n' "$SOURCE_REMOTE"
     printf 'requested_ref=%s\n' "$SOURCE_REF"
@@ -224,6 +237,9 @@ ensure_clean_exact_source(){
   RELEASE_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true)"
   [[ "$RELEASE_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] || die "cannot resolve full source commit"
   RELEASE_COMMIT="${RELEASE_COMMIT,,}"
+  if [[ -n "$EXPECT_COMMIT" && "$EXPECT_COMMIT" != "$RELEASE_COMMIT" ]]; then
+    die "source checkout is at $RELEASE_COMMIT, not the expected $EXPECT_COMMIT; nothing was built"
+  fi
   if [[ -n "${SATURN_RELEASE_EXPECTED_COMMIT:-}" ]]; then
     [[ "${SATURN_RELEASE_EXPECTED_COMMIT,,}" == "$RELEASE_COMMIT" ]] \
       || die "source checkout commit differs from resolved commit: expected ${SATURN_RELEASE_EXPECTED_COMMIT,,}, got $RELEASE_COMMIT"

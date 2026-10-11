@@ -79,12 +79,14 @@ run_release_flow(){
   else
     [[ -n "$SATURNGO_URL" ]] || die "Saturn Go policy repo URL not configured. Save the Saturn Go page settings first."
     ensure_public_policy_repo_accessible "$SATURNGO_URL" "$SATURNGO_REF"
-    builder_args=(--source-remote "$SATURNGO_URL" --source-ref "$SATURNGO_REF")
-    out="$(SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" GIT_TERMINAL_PROMPT=0 "$builder" "${builder_args[@]}" --resolve-only 2>&1)" \
+    out="$(SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" GIT_TERMINAL_PROMPT=0 "$builder" --source-remote "$SATURNGO_URL" --source-ref "$SATURNGO_REF" --resolve-only 2>&1)" \
       || die "The selected ref could not be resolved: ${out##*$'\n'}"
     resolved="$(printf '%s\n' "$out" | sed -n 's/^resolved_commit=//p' | head -1)"
   fi
   [[ "$resolved" =~ ^[0-9a-f]{40}$ ]] || die "The selected ref did not resolve to a full commit (got '${resolved:-nothing}')"
+  # The commit resolved here is the one built: the builder is told which commit to build and stops before doing any work if the ref has moved.
+  (( SKIP_GIT )) || builder_args=(--source-remote "$SATURNGO_URL" --source-ref "$SATURNGO_REF")
+  builder_args+=(--expect-commit "$resolved")
   info "Ref '${SATURNGO_REF}' resolves to commit $resolved"
 
   if [[ "$resolved" == "$active" ]]; then
@@ -115,7 +117,7 @@ run_release_flow(){
     (
       export SATURN_RELEASE_OUTPUT_ROOT="$staging" SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" GIT_TERMINAL_PROMPT=0
       "$builder" "${builder_args[@]}"
-    ) || die "The release build failed (see the output above); nothing was installed or changed"
+    ) || die "The release build failed or stopped (see the output above; a ref that moved after it was resolved stops it before any work); nothing was installed or changed"
     [[ -d "$bundle" ]] || die "The build finished but did not produce $bundle"
   fi
 

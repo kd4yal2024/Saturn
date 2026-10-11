@@ -200,6 +200,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install-activator.sh \
             tests/test-g2-headless-steps.sh \
+            tests/test-no-external-symlinks.sh \
             update_manager/docs/headless-validation/g2_headless_steps.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
@@ -252,6 +253,7 @@ jobs:
             tests/test-saturn-release-activate.sh \
             tests/test-saturn-release-install-activator.sh \
             tests/test-g2-headless-steps.sh \
+            tests/test-no-external-symlinks.sh \
             update_manager/docs/headless-validation/g2_headless_steps.sh \
             tests/test-saturn-release-install.sh \
             tests/test-saturn-release-manifest.sh \
@@ -345,6 +347,9 @@ jobs:
 
       - name: Test the staged appliance procedure
         run: tests/test-g2-headless-steps.sh
+
+      - name: Test that no tracked symbolic link points outside the repository
+        run: tests/test-no-external-symlinks.sh
 
       - name: Test the activation configuration merge
         run: python3 -W ignore tests/test-saturn-release-config.py

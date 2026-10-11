@@ -23,16 +23,23 @@ spec.loader.exec_module(B)
 
 FAKE_BUILDER = r'''#!/usr/bin/env bash
 echo "builder $*" >>"$FAKE_CALLS"
-remote="" ref="" resolve=0
-while [ $# -gt 0 ]; do case "$1" in --source-remote) remote=$2; shift 2;; --source-ref) ref=$2; shift 2;; --resolve-only) resolve=1; shift;; --output-root) shift 2;; *) shift;; esac; done
+remote="" ref="" resolve=0 expect=""
+while [ $# -gt 0 ]; do case "$1" in --source-remote) remote=$2; shift 2;; --source-ref) ref=$2; shift 2;; --resolve-only) resolve=1; shift;; --expect-commit) expect=$2; shift 2;; --output-root) shift 2;; *) shift;; esac; done
 if [ -n "$remote" ]; then
   commit=$(git ls-remote "$remote" "refs/heads/$ref" | cut -f1)
   [ -n "$commit" ] || { echo "ref not found" >&2; exit 1; }
 else
   commit=$(git -C "$SATURN_RELEASE_REPO_ROOT" rev-parse HEAD)
 fi
+if [ -n "$expect" ] && [ "$commit" != "$expect" ]; then
+  echo "source ref moved since it was resolved: expected $expect, but $ref now resolves to $commit; nothing was built" >&2
+  exit 1
+fi
 if [ "$resolve" = 1 ]; then
   printf 'source_remote=%s\nrequested_ref=%s\nresolved_ref=refs/heads/%s\nresolved_commit=%s\n' "$remote" "$ref" "$ref" "${FAKE_RESOLVED_COMMIT-$commit}"
+  if [ -n "${FAKE_MOVE_AFTER_RESOLVE:-}" ]; then      # somebody pushes to the branch while the flow is between resolving and building
+    git -C "$FAKE_WORK" commit -q --allow-empty -m moved && git -C "$FAKE_WORK" push -q "$remote" main
+  fi
   exit 0
 fi
 [ "${FAKE_BUILD_RC:-0}" = 0 ] || { echo "compile error: boom" >&2; exit "$FAKE_BUILD_RC"; }
@@ -82,7 +89,8 @@ class Flow(B.Rig):
             SATURN_RELEASE_ACTIVATE_CONFIG=str(self.root / "activate.conf"), SATURN_RELEASE_UPDATE_BROKER=str(B.BROKER), SATURN_RELEASE_SUDO="env",
             SATURN_RELEASE_STAGING_DIR=str(self.staging), SATURN_RELEASE_BUILDER=str(self.builder), SATURN_RELEASE_MANIFEST_TOOL=str(self.root / "no-such-tool"),
             SATURN_SATURNGO_DEPLOY_STATUS_FILE=str(self.status_file), SATURN_ACTIVE_REPO_ROOT=str(self.checkout), SATURN_SATURNGO_POLICY_URL=str(self.remote),
-            SATURN_SATURNGO_POLICY_REF=ref, SATURN_SATURNGO_POLICY_REMOTE="origin", SATURN_RELEASE_REPO_ROOT=str(self.checkout))
+            SATURN_SATURNGO_POLICY_REF=ref, SATURN_SATURNGO_POLICY_REMOTE="origin", SATURN_RELEASE_REPO_ROOT=str(self.checkout),
+            FAKE_WORK=str(self.work), GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
         environment.update(env)
         return subprocess.run(["bash", str(SCRIPT), *flags], capture_output=True, text=True, env=environment, timeout=180)
 
@@ -144,6 +152,73 @@ class HappyPath(Flow):
         self.assertEqual(self.active(), self.head)
 
 
+class Pinning(Flow):
+    def test_the_build_is_told_which_commit_to_build(self):
+        result = self.script()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"--expect-commit {self.head}", self.builds()[0])
+
+    def test_a_skipped_git_update_is_pinned_too(self):
+        result = self.script("--skip-git")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"--expect-commit {self.head}", self.builds()[0])
+
+    def test_a_branch_that_moves_between_resolving_and_building_builds_nothing(self):
+        result = self.script(FAKE_MOVE_AFTER_RESOLVE="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("moved since it was resolved", result.stdout + result.stderr)
+        self.assertEqual(list(self.staging.iterdir()), [], "a bundle of some commit was built although the ref had moved")
+        self.assertNotIn("systemd-run", self.calls_text())
+        self.assertEqual(self.active(), B.OLD)
+        self.assertEqual(self.status()["status"], "error")
+
+    def test_the_commit_that_was_resolved_is_the_one_installed_when_the_branch_does_not_move(self):
+        self.assertEqual(self.script().returncode, 0)
+        self.assertEqual(self.active(), self.head)
+
+
+class Routing(Flow):
+    """Which updater runs is decided by the layout, not only by the authorization."""
+
+    def test_a_release_installation_with_managed_updates_disabled_refuses_and_never_falls_back_to_the_legacy_deployment(self):
+        self.set_config(enabled="0")
+        for flags in ((), ("--dry-run",), ("--migrate-to-releases",), ("--skip-git",), ("--stage-only",)):
+            with self.subTest(flags=flags):
+                result = self.script(*flags)
+                self.assertNotEqual(result.returncode, 0)
+                text = result.stdout + result.stderr
+                self.assertIn("runs managed releases", text)
+                self.assertIn("SATURN_MANAGED_UPDATES=enable", text)
+                self.assertNotIn("Cargo", text)
+                self.assertNotIn("Building saturn-go", text)
+                status = self.status()
+                self.assertEqual((status["status"], status["phase"], status["mode"]), ("error", "managed_updates_disabled", "release"))
+                self.assertEqual(self.builds(), [])
+                self.assertNotIn("systemd-run", self.calls_text())
+                self.assertEqual(self.active(), B.OLD)
+
+    def test_the_refusal_names_the_active_release(self):
+        self.set_config(enabled="0")
+        self.script()
+        self.assertIn(B.OLD[:12], self.status()["message"])
+
+    def test_a_release_installation_whose_configuration_is_missing_also_refuses(self):
+        (self.root / "activate.conf").unlink()
+        result = self.script(SATURN_RELEASE_ACTIVATE_CONFIG=str(self.root / "activate.conf"))
+        # no configuration: the default pointer (/opt/saturn/current) is not this test's, so this is a legacy layout and is not entered as a release
+        self.assertNotIn("runs managed releases", result.stdout + result.stderr)
+
+    def test_a_legacy_installation_with_managed_updates_disabled_keeps_the_legacy_updater(self):
+        self.current.unlink()
+        self.set_config(enabled="0")
+        result = self.script("--dry-run")
+        text = result.stdout + result.stderr
+        self.assertNotIn("Managed release update", text)
+        self.assertNotIn("runs managed releases", text)
+        self.assertEqual(self.builds(), [])
+        self.assertNotIn("systemd-run", self.calls_text())
+
+
 class Options(Flow):
     def test_dry_run_resolves_and_changes_nothing(self):
         result = self.script("--dry-run")
@@ -199,7 +274,8 @@ class Refusals(Flow):
                 self.assertEqual(self.builds(), [])
                 self.assertNotIn("systemd-run", self.calls_text())
 
-    def test_managed_updates_off_means_the_flow_is_not_entered(self):
+    def test_the_migration_flag_means_nothing_to_a_legacy_installation_that_has_managed_updates_off(self):
+        self.current.unlink()
         self.set_config(enabled="0")
         result = self.script("--migrate-to-releases")
         self.assertNotEqual(result.returncode, 0)

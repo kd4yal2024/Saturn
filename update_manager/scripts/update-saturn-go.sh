@@ -319,18 +319,26 @@ info "Saturn Go self-update ${SCRIPT_VERSION}"
 # installation keeps the legacy deployment below, unchanged.
 # shellcheck disable=SC1091  # the flow lives beside this script in the deployed scripts directory
 source "$(dirname "$0")/saturn-release-update-flow.sh"
-if managed_updates_enabled; then
+# The layout (are releases what runs?) is detected apart from the authorization (are managed updates enabled?): an installation that runs releases
+# must never fall through to the legacy deployment, which would copy a binary into /opt/saturn-go that nothing runs.
+ACTIVE_RELEASE_AT_START="$(release_active_commit)"
+if managed_updates_enabled || [[ -n "$ACTIVE_RELEASE_AT_START" ]]; then
   need_cmd git
   RUN_STARTED_AT="$(date -Is)"
   REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-}}"
-  [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
-  git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Repo root is not a git checkout: $REPO_ROOT"
   SATURNGO_URL="${SATURN_SATURNGO_POLICY_URL:-}"
   SATURNGO_REMOTE="${SATURN_SATURNGO_POLICY_REMOTE:-origin}"
   SATURNGO_REF="${SATURN_SATURNGO_POLICY_REF:-main}"
   SERVICE_NAME="${SATURN_SATURNGO_SERVICE_NAME:-saturn-go.service}"
   STATUS_FILE="${SATURN_SATURNGO_DEPLOY_STATUS_FILE:-/var/lib/saturn-state/saturngo_deploy_status.json}"
   trap 'rc=$?; if (( rc != 0 && ! BROKER_OWNS_STATUS )); then write_status "error" "$STATUS_PHASE" "${LAST_ERROR:-Saturn Go self-update failed}" 1 "$rc"; fi' EXIT
+  if ! managed_updates_enabled; then
+    UPDATE_MODE="release"
+    STATUS_PHASE="managed_updates_disabled"
+    die "This installation runs managed releases (active release ${ACTIVE_RELEASE_AT_START:0:12}) but managed updates are disabled, so there is nothing this update could safely do: the legacy deployment into /opt/saturn-go would not change what runs. Enable managed updates by running the installer with SATURN_MANAGED_UPDATES=enable."
+  fi
+  [[ -n "$REPO_ROOT" ]] || die "SATURN_ACTIVE_REPO_ROOT is not set"
+  git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 || die "Repo root is not a git checkout: $REPO_ROOT"
   write_status "running" "init" "Starting a managed release update"
   run_release_flow
   exit 0

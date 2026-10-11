@@ -81,4 +81,36 @@ if SATURN_RELEASE_EXPECTED_COMMIT="$WRONG_COMMIT" \
   exit 1
 fi
 
+# A build can be pinned to the commit that was resolved earlier: if the ref has moved, nothing is fetched, built or written.
+pinned="$("$BUILDER" --source-remote "$REMOTE" --source-ref main --resolve-only --expect-commit "$FIRST_COMMIT")"
+grep -Fxq "resolved_commit=$FIRST_COMMIT" <<<"$pinned"
+for bad in abc "${FIRST_COMMIT^^}" "${FIRST_COMMIT:0:39}" "${FIRST_COMMIT}0" ""; do
+  if "$BUILDER" --source-remote "$REMOTE" --source-ref main --resolve-only --expect-commit "$bad" >/dev/null 2>&1; then
+    printf 'builder accepted the malformed --expect-commit %q\n' "$bad" >&2
+    exit 1
+  fi
+done
+printf 'second\n' >"$SOURCE/release-input"
+git -C "$SOURCE" commit --quiet -am "second"
+SECOND_COMMIT="$(git -C "$SOURCE" rev-parse HEAD)"
+git -C "$SOURCE" push --quiet "$REMOTE" main
+for extra in --resolve-only --dry-run; do
+  rm -rf -- "$TMP_ROOT/pinned-out"
+  if "$BUILDER" --source-remote "$REMOTE" --source-ref main --output-root "$TMP_ROOT/pinned-out" --expect-commit "$FIRST_COMMIT" "$extra" >"$TMP_ROOT/moved.out" 2>"$TMP_ROOT/moved.err"; then
+    printf 'builder built a ref that had moved since it was resolved (%s)\n' "$extra" >&2
+    exit 1
+  fi
+  grep -Fq "source ref moved since it was resolved: expected $FIRST_COMMIT" "$TMP_ROOT/moved.err"
+  grep -Fq "$SECOND_COMMIT" "$TMP_ROOT/moved.err"
+  grep -Fq "nothing was built" "$TMP_ROOT/moved.err"
+  [[ ! -e "$TMP_ROOT/pinned-out" ]] || { printf 'a moved ref still produced output (%s)\n' "$extra" >&2; exit 1; }
+done
+# resolving again with the new commit pinned works, and a local build is pinned to its checkout too
+"$BUILDER" --source-remote "$REMOTE" --source-ref main --resolve-only --expect-commit "$SECOND_COMMIT" >/dev/null
+if SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" "$BUILDER" --dry-run --expect-commit "$WRONG_COMMIT" >/dev/null 2>"$TMP_ROOT/local.err"; then
+  printf 'a local build ignored --expect-commit\n' >&2
+  exit 1
+fi
+grep -Fq "not the expected $WRONG_COMMIT" "$TMP_ROOT/local.err"
+
 printf 'Saturn exact release source tests passed\n'
