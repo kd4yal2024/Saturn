@@ -377,7 +377,9 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         model.desired.pure_signal_enabled = false;
         model.observed.pure_signal_state = PureSignalState::Off;
         rx_state_store.as_ref().and_then(|store| {
-            store.restore(&mut model, &|hz| crate::xdma_rx::validate_frequency(hz).is_ok())
+            store.restore(&mut model, &|hz| {
+                crate::xdma_rx::validate_frequency(hz).is_ok()
+            })
         })
     };
     let tx_radio = Arc::new(DirectXdmaTxRadio::open(
