@@ -407,6 +407,83 @@ class InstallerPlan(Rig):
         self.assertIn("Run as root", result.stderr)
 
 
+class ApplianceInstallerGuard(Rig):
+    """The whole-appliance installer (install.sh) on an appliance that runs releases: it refuses before it changes anything, and says what to run."""
+    WRAPPER = REPO / "scripts/install-saturn-appliance.sh"
+
+    def run_wrapper(self, layout="release", *args, **extra):
+        releases = self.path / "releases"
+        (releases / COMMIT).mkdir(parents=True, exist_ok=True)
+        link = self.path / "current"
+        if layout == "release" and not link.exists():
+            os.symlink(releases / COMMIT, link)
+        env = dict(os.environ, SATURN_USER=subprocess.check_output(["id", "-un"], text=True).strip(),
+                   SATURN_RELEASE_CURRENT_LINK=str(link), SATURN_RELEASES_ROOT=str(releases))
+        env.pop("SATURN_INSTALL_APPLICATION", None)
+        env.update(extra)
+        return subprocess.run(["bash", str(self.WRAPPER), "--dry-run", *args], capture_output=True, text=True, env=env, timeout=60)
+
+    def test_a_release_layout_is_refused_before_anything_else_happens(self):
+        result = self.run_wrapper()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn(f"this appliance runs managed releases (active release {COMMIT})", result.stderr)
+        self.assertIn("Nothing was changed", result.stderr)
+        self.assertIn("update_manager/install_saturn_go_nginx.sh", result.stderr, "it must name the command to run instead")
+        self.assertIn("SATURN_INSTALL_APPLICATION=force", result.stderr)
+        # refused FIRST: none of the later checks or the provisioner hand-over was reached
+        for later in ("install source:", "runtime user:", "would execute shared provisioner", "invalid Saturn checkout", "user does not exist"):
+            self.assertNotIn(later, result.stdout + result.stderr)
+
+    def test_the_explicit_skip_choice_does_not_make_it_safe(self):
+        self.assertEqual(self.run_wrapper(SATURN_INSTALL_APPLICATION="skip").returncode, 1)
+
+    def test_force_goes_ahead_and_says_what_that_means(self):
+        result = self.run_wrapper(SATURN_INSTALL_APPLICATION="force")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("would execute shared provisioner", result.stdout)
+        self.assertIn("SATURN_INSTALL_APPLICATION=force on an appliance that runs managed releases", result.stderr)
+        self.assertIn("--skip-saturn-go", result.stderr)
+
+    def test_a_legacy_layout_or_a_fresh_machine_is_not_affected(self):
+        """No release link at all is both a fresh machine and the legacy layout."""
+        result = self.run_wrapper("legacy")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("would execute shared provisioner", result.stdout)
+        self.assertNotIn("managed releases", result.stderr)
+
+    def test_an_unknown_choice_is_refused_even_on_a_legacy_layout(self):
+        result = self.run_wrapper("legacy", SATURN_INSTALL_APPLICATION="maybe")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("SATURN_INSTALL_APPLICATION must be auto, force or skip", result.stderr)
+
+    def test_when_the_layout_cannot_be_determined_it_refuses_rather_than_assuming_a_fresh_machine(self):
+        """Fail closed: a broken layout tool must not turn into 'nothing to protect'."""
+        tree = self.path / "checkout"
+        tool = tree / "update_manager/scripts/saturn-release-config.py"
+        tool.parent.mkdir(parents=True)
+        tool.write_text("import sys\nsys.exit(2)\n")
+        result = self.run_wrapper("legacy", SATURN_REPO_DIR=str(tree))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("could not determine whether this appliance runs managed releases", result.stderr)
+        self.assertNotIn("invalid Saturn checkout", result.stderr, "the layout question must be settled before any later check")
+
+    def test_help_still_works_on_a_release_layout(self):
+        releases = self.path / "releases"
+        (releases / COMMIT).mkdir(parents=True)
+        os.symlink(releases / COMMIT, self.path / "current")
+        env = dict(os.environ, SATURN_RELEASE_CURRENT_LINK=str(self.path / "current"), SATURN_RELEASES_ROOT=str(releases))
+        result = subprocess.run(["bash", str(self.WRAPPER), "--help"], capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Usage: sudo ./install.sh", result.stdout)
+
+    def test_the_guard_runs_before_every_phase_in_the_script(self):
+        text = self.WRAPPER.read_text()
+        call = text.index("\nrefuse_on_release_layout\n")
+        for later in ("check_source_checkout\n", 'getent passwd "$SATURN_USER"', "(( EUID == 0 ))", 'exec bash "$PROVISIONER"'):
+            self.assertLess(call, text.index(later, call), later)
+        self.assertIn("update_manager/scripts/saturn-release-config.py", text, "one layout rule for both installers")
+
+
 class InstallerUsesIt(unittest.TestCase):
     text = INSTALLER.read_text()
 

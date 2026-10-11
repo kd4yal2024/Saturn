@@ -121,6 +121,44 @@ credentials are retained during upgrades.
 EOF
 }
 
+# An appliance that runs managed releases is updated through the release machinery: the Update action of the Saturn Go page, or, for what the installer owns
+# (helpers, sudoers, activation configuration, unit files, scripts, nginx) and for enabling managed updates, the Saturn Go installer. This whole-appliance
+# installer is not release-aware: it would rebuild the applications and the XDMA driver, rebuild and restart the Bridge, and then check readiness against
+# its own checkout instead of the running release. It refuses BEFORE anything is touched (before packages, drivers, builds or services), using the same
+# layout rule as the Saturn Go installer. SATURN_INSTALL_APPLICATION=force is the explicit override.
+refuse_on_release_layout(){
+  local tool="$REPO_ROOT/update_manager/scripts/saturn-release-config.py" application="${SATURN_INSTALL_APPLICATION:-auto}" out layout commit
+  case "$application" in
+    auto|force|skip) ;;
+    *) die "SATURN_INSTALL_APPLICATION must be auto, force or skip (got '$application')" ;;
+  esac
+  [[ -f "$tool" ]] || return 0
+  # A release installation has python3 (its update broker is Python); an image without it has no releases to protect.
+  command -v python3 >/dev/null 2>&1 || return 0
+  out="$(python3 "$tool" layout --current-link "${SATURN_RELEASE_CURRENT_LINK:-/opt/saturn/current}" \
+    --releases-root "${SATURN_RELEASES_ROOT:-/opt/saturn/releases}" --application "$application")" \
+    || die "could not determine whether this appliance runs managed releases ($tool failed)"
+  read -r layout commit _ <<<"$out"
+  [[ "$layout" == release ]] || return 0
+  if [[ "$application" == force ]]; then
+    warn "SATURN_INSTALL_APPLICATION=force on an appliance that runs managed releases (active release $commit): this installer will rebuild applications, the driver and"
+    warn "the Bridge from $REPO_ROOT and check readiness against that checkout. Add --skip-saturn-go to leave the release application alone."
+    return 0
+  fi
+  {
+    printf '[saturn-install] ERROR: this appliance runs managed releases (active release %s). Nothing was changed.\n' "$commit"
+    printf '[saturn-install]   This whole-appliance installer is not release-aware: it would rebuild applications and the XDMA driver, rebuild and restart the Bridge,\n'
+    printf '[saturn-install]   and check readiness against this checkout instead of the running release.\n'
+    printf '[saturn-install]   - To update the application: use the Update action of the Saturn Go page.\n'
+    printf '[saturn-install]   - To refresh what the installer owns, or to enable managed updates (SATURN_MANAGED_UPDATES=enable), run the Saturn Go installer:\n'
+    printf '[saturn-install]       sudo bash %s/update_manager/install_saturn_go_nginx.sh\n' "$REPO_ROOT"
+    printf '[saturn-install]     (SATURN_INSTALL_PLAN=1 shows what it would do without root; see update_manager/docs/OPERATIONS_RUNBOOK.md,\n'
+    printf '[saturn-install]     "Running the installer on an appliance that runs releases")\n'
+    printf '[saturn-install]   - To run this installer anyway: SATURN_INSTALL_APPLICATION=force\n'
+  } >&2
+  exit 1
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --user) [[ $# -ge 2 ]] || die "--user requires a value"; SATURN_USER="$2"; shift 2 ;;
@@ -171,6 +209,7 @@ case "$VERIFY_MODE" in
   *) die "unsupported verification mode '$VERIFY_MODE'" ;;
 esac
 
+refuse_on_release_layout
 [[ -f "$REPO_ROOT/sw_projects/P2_app/Makefile" ]] || die "invalid Saturn checkout: $REPO_ROOT"
 [[ -x "$PROVISIONER" ]] || die "shared provisioner not found or executable: $PROVISIONER"
 check_source_checkout

@@ -132,8 +132,10 @@ checks readiness against the release that is running. A legacy or fresh installa
 SATURN_INSTALL_PLAN=1 SATURN_MANAGED_UPDATES=enable bash update_manager/install_saturn_go_nginx.sh
 ```
 
-This is the Saturn-Go installer, not the whole-appliance `sudo ./install.sh`: that one runs the shared provisioner (packages, build, XDMA driver, P2) and its Saturn Go phase builds and restarts the Bridge
-and checks readiness against the checkout, so it is not release-aware yet. On an appliance that runs releases use the Saturn-Go installer.
+This is the Saturn-Go installer, not the whole-appliance `sudo ./install.sh`. That one runs the shared provisioner (packages, build, XDMA driver, P2) and its Saturn Go phase builds and restarts the Bridge
+and checks readiness against the checkout, so it is not release-aware. **On an appliance that runs releases `./install.sh` refuses, before packages, drivers, builds or services are touched** (also with `--dry-run`, which is
+how to see it without root), says what it found and names this installer. `SATURN_INSTALL_APPLICATION=force` runs it anyway (add `--skip-saturn-go` to leave the release application alone). Converting the
+whole-appliance installer to the release machinery, for fresh installations, is separate work.
 
 `SATURN_INSTALL_APPLICATION=force` deploys the legacy payload even on a release layout (it is overridden by the active release; a warning says so), `skip` never deploys it.
 Unit-file changes (for example the Bridge's new state directory for its saved receive settings) take effect the next time the services start, which an update does.

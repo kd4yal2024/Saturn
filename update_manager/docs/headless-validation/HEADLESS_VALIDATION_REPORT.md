@@ -197,7 +197,7 @@ in `exit71_attempt_20261011/`.
   resulting policy on every installer run, so disabling removes it. An existing configuration is preserved: an explicitly disabled policy stays disabled unless `enable` is chosen, and the administrator's
   `VALIDATION_MEMORY_MAX` (500M on this G2), timeout, expected RXC1 state and the six validation overrides survive, while unknown or invalid keys are dropped with a note. The 32 MiB reserve is unchanged.
 * **Installer on a release layout.** The Saturn-Go installer (`update_manager/install_saturn_go_nginx.sh`) refreshes only what it owns, builds and restarts nothing of the application, and checks readiness against the
-  running release. `SATURN_INSTALL_PLAN=1` prints what it would do without root and without changing anything. **The whole-appliance `sudo ./install.sh` is not release-aware** (see below).
+  running release. `SATURN_INSTALL_PLAN=1` prints what it would do without root and without changing anything. **The whole-appliance `sudo ./install.sh` is not release-aware; on a release layout it refuses before changing anything and names the Saturn-Go installer** (see below).
 * **Receive settings.** The Bridge keeps the receive settings it has accepted in `/var/lib/saturn-bridge/rx-state-v1.txt` (outside every release, versioned, atomic, debounced), restores them before reception starts, and never
   stores or restores PTT, MOX or a transmit session. The Bridge unit must name that state directory (the installer refreshes the unit); until it has, the Bridge runs without persistence.
 * **What was verified, and where.** Unit and integration tests on a development machine: the configuration merge, the broker (with stand-ins for the installer and activator and the real lock tool), the flow and the routing,
@@ -211,9 +211,11 @@ in `exit71_attempt_20261011/`.
   the same release machinery is separate, not yet done work.
 * **Not yet run on the G2:** the installer refresh on the release layout (with the choice to enable managed updates), an update through the normal page with no browser attached, the saved receive settings coming
   back after the restart, and the reruns of the installer that must leave the activation policy and the 500M allowance as they are. These are the completion test; `main` stays unchanged until it passes and is reviewed.
-* **The whole-appliance installer is not release-aware.** `sudo ./install.sh` runs the shared provisioner (packages, build, XDMA driver through DKMS, P2, then Saturn Go and the Bridge). Its Saturn-Go phase calls the
-  Saturn-Go installer, which is release-aware, but it then runs `install-saturn-bridge.sh` without unit-only mode (building the Bridge, switching the backend and restarting it) and verifies readiness against the checkout's
-  commit rather than the running release. On an appliance that runs releases use the Saturn-Go installer directly; making the provisioner's Saturn-Go phase release-aware is part of the separate fresh-install work.
+* **The whole-appliance installer is not release-aware, and is now safe on a release installation.** `sudo ./install.sh` runs the shared provisioner (packages, build, XDMA driver through DKMS, P2, then Saturn Go and the Bridge); its
+  Saturn-Go phase would run `install-saturn-bridge.sh` without unit-only mode (building the Bridge, switching the backend and restarting it) and verify readiness against the checkout's commit rather than the running release.
+  `scripts/install-saturn-appliance.sh` therefore refuses on a release layout, with the same layout rule as the Saturn-Go installer, **before** packages, drivers, builds or services are touched (also with `--dry-run`), says what it found and names
+  `update_manager/install_saturn_go_nginx.sh`; `SATURN_INSTALL_APPLICATION=force` is the explicit override, and it fails closed when the layout cannot be determined. Delegating to, or converting, the provisioner's Saturn-Go
+  phase (the fresh-install conversion) remains separate work.
 * A controlled rollback has not yet been exercised on the appliance (the `failure` stage exists for it); the unplanned one, on 14:17, ended in exit 71 and is the reason for the restart-timing waits.
 
 ## Evidence (all run on this machine, except where the hardware results above say otherwise)
@@ -282,6 +284,7 @@ unit names only `saturn-rxc1-bridge` as a state directory; RXC1 reads `valid` (l
    `cd ~/saturn-installer-<sha12> && sudo env HOME=/home/pi SUDO_USER=pi SATURN_SERVICE_USER=pi SATURN_SERVICE_GROUP=pi SATURN_REPO_ROOT=/home/pi/github/Saturn SATURN_INSTALL_PACKAGES=0 SATURN_INSTALL_LEGACY_XDMA_HOOK=0 SATURN_MANAGED_UPDATES=enable bash update_manager/install_saturn_go_nginx.sh`.
    (Those variables are what the whole-appliance provisioner gives this installer: no apt, no legacy XDMA hook. `SATURN_P2APP_PANEL_ENABLED` defaults to 0, which is this G2's value.) I then check, read-only: the same PIDs for
    `saturn-go` and `saturn-bridge`, the configuration (`ACTIVATION_ENABLED="1"`, `500M`), the broker's sudoers rule, `/opt/saturn-go/scripts/update-saturn-go.sh` and the builder beside it, and the Bridge unit's state directory.
+   Also, as you or I without root: from the same worktree `bash ./install.sh --dry-run` must refuse with "this appliance runs managed releases (active release `cc09c61f…`)" and name the Saturn-Go installer, having changed nothing.
 2. **Update 1, through the page.** Close every Saturn Remote tab. In the Saturn Go page choose the custom ref `goldmarsh/headless-validation`, press Update. The build runs on the G2 (about 1.5 hours; the radio keeps running). Expected:
    the ref resolved once to the branch tip, that commit built, the broker's unit installs, switches and restarts, the headless check runs as the viewer, the browser and profile are gone, the record is `committed` for that commit,
    and the page shows success. RXC1 is recorded, and not required (`VALIDATION_EXPECT_RXC1` is `any`); it is not expected to read `valid` again without an arm. **The tuning resets once here**: the running `cc09c61` Bridge has no
