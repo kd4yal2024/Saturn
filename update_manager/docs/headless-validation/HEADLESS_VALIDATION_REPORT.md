@@ -80,7 +80,7 @@ the pinned commit as a clean tree, with every component built from it, and `stat
 | shellcheck on every shell file CI checks | clean (see "Found in my own earlier push") |
 | Bridge (unchanged since `dfb0b19`): 462 tests; web: 761 tests, typecheck, seam check | pass at the earlier head; no Bridge or web file changed since |
 
-## Found in my own earlier push (`4762a81`)
+## Found in my own earlier work
 
 * `tests/test-saturn-release-activate.sh` as pushed would have failed the repository's shellcheck gate (SC2012/SC2034/SC2123/SC2030/SC2031). Fixed; the new files are in the
   CI lists and the validator, installer-guard and procedure tests now run in CI.
@@ -89,6 +89,12 @@ the pinned commit as a clean tree, with every component built from it, and `stat
   and one assertion in `rust-server/src/main.rs` (from `a8fcad2`; my earlier note that `main` was clean covered only the Bridge crate). Two formatting-only commits fix them, with the
   toolchain CI pins (1.98.1): re-wrapping, re-indentation, and the braces rustfmt puts around closure bodies it wraps. Every changed file was compared with its previous text: the same
   characters once whitespace and commas are ignored, except those closure braces. No other file was touched; `cargo fmt -- --check` is clean in both crates.
+* **The `build` stage had never been run, and its first run on the G2 stopped.** Two defects, both mine: (1) a non-interactive shell (`ssh pi@g2 'command'`) has no `~/.cargo/bin` on
+  its `PATH`, so the builder reported `required command not found: cargo`; the procedure now puts that directory on the `PATH`. (2) Behind it, the stage looked for `@ <commit>` in the
+  builder's `--resolve-only` output, which prints `resolved_commit=<commit>` (the `@` text is only in a real build's log line), so it would have refused the right commit and blamed the push;
+  it now requires the exact line `resolved_commit=<pinned commit>` and shows the builder's own message when it cannot run. The test drives the stage with a builder that reports each case
+  (the pinned commit, another commit, a longer string, a look-alike line, a builder that fails) and checks the real builder's source still prints that line. Nothing was built and nothing
+  on the G2 changed in the failed run beyond `~/g2_headless_steps.sh` and `~/.g2_headless_pin`.
 
 ## Sequence on the G2 (you run the sudo stages; I read the evidence; ~nothing is restarted before `activate`)
 

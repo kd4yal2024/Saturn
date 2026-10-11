@@ -100,6 +100,51 @@ STAGE=install STAGED=good INSTALLED=good stage_manifest || fail "the install sta
 STAGE=install STAGED=good INSTALLED=other-commit stage_manifest && fail "the install stage accepted an installed release of another commit"
 grep -Fq "the installed release's manifest" "$TMP/stage-manifest.out" || fail "install refused without saying why: $(cat "$TMP/stage-manifest.out")"
 
+# --- the build stage: a non-interactive shell gets the Rust toolchain on its PATH, and only the builder's own resolve-only report counts
+path_of() { bash -c 'source "$SCRIPT"; printf "%s" "$PATH"' _ ; }
+# shellcheck disable=SC2016  # the program text for the child shell is meant to be expanded there, not here
+[[ "$(env -i HOME="$HOME" PATH=/usr/bin:/bin SCRIPT="$SCRIPT" "$(command -v bash)" -c 'source "$SCRIPT"; printf "%s" "$PATH"')" == "$HOME/.cargo/bin:/usr/bin:/bin" ]] || fail "the toolchain directory was not put on the PATH of a bare shell"
+[[ "$(PATH="$HOME/.cargo/bin:$PATH" path_of)" == "$HOME/.cargo/bin:"* && "$(PATH="$HOME/.cargo/bin:$PATH" path_of)" != *"$HOME/.cargo/bin:$HOME/.cargo/bin"* ]] || fail "the toolchain directory was added twice"
+# the stage reads the format the real builder prints; if that changes, this must fail rather than the hardware stage
+grep -Fq "printf 'resolved_commit=%s\\n' \"\$RESOLVED_SOURCE_COMMIT\"" "$ROOT/update_manager/scripts/saturn-release-build.sh" || fail "the builder no longer prints resolved_commit=<sha> in --resolve-only mode; update stage_build"
+mkdir -p "$TMP/fakebuild"
+cat >"$TMP/fakebuild/saturn-release-build.sh" <<'FAKE'
+#!/bin/bash
+# Same report as the real builder's --resolve-only mode (build_resolved_remote_source), or a failure before it
+case "$FAKE_MODE" in nocargo) echo "[saturn-release-build] ERROR: required command not found: cargo"; exit 1 ;; esac
+if [[ " $* " == *" --resolve-only "* ]]; then
+  printf 'source_remote=%s\nrequested_ref=%s\nresolved_ref=refs/heads/%s\n' "$2" "$4" "$4"
+  case "$FAKE_MODE" in
+    ok) printf 'resolved_commit=%s\n' "$FAKE_PIN" ;;
+    moved) printf 'resolved_commit=%s\n' "$FAKE_OTHER"; printf '[saturn-release-build] Resolved x -> y @ %s\n' "$FAKE_PIN" ;;
+    longer) printf 'resolved_commit=%s0\n' "$FAKE_PIN" ;;
+    quoted) printf 'note: resolved_commit=%s\n' "$FAKE_PIN" ;;
+  esac
+  exit 0
+fi
+printf 'built %s\n' "$FAKE_PIN" >"$FAKE_BUILT"
+FAKE
+chmod +x "$TMP/fakebuild/saturn-release-build.sh"
+build_stage() {  # $1 = what the fake builder does
+  rm -f "$TMP/built"; rm -rf "$TMP/bundles"
+  FAKE_MODE="$1" FAKE_PIN="$A" FAKE_OTHER="$B" FAKE_BUILT="$TMP/built" PIN_UNDER_TEST="$A" bash -c '
+    source "$SCRIPT"
+    C="$PIN_UNDER_TEST"; B="$TMP/bundles/$C"
+    cd() { builtin cd "$TMP/fakebuild"; }
+    stage_build
+    wait
+  ' _ >"$TMP/stage-build.out" 2>&1
+}
+build_stage ok || fail "the build stage refused a branch that resolves to the pinned commit: $(cat "$TMP/stage-build.out")"
+grep -Fq 'build started' "$TMP/stage-build.out" || fail "no build was started: $(cat "$TMP/stage-build.out")"
+[[ "$(cat "$TMP/built" 2>/dev/null)" == "built $A" ]] || fail "the builder was not run for the pinned commit"
+for mode in moved longer quoted nocargo; do
+  if build_stage "$mode"; then fail "the build stage went ahead on a '$mode' report: $(cat "$TMP/stage-build.out")"; fi
+  [[ ! -e "$TMP/built" ]] || fail "a build was started on a '$mode' report"
+  grep -Fq 'did not report resolved_commit' "$TMP/stage-build.out" || fail "'$mode' was refused without saying why: $(cat "$TMP/stage-build.out")"
+done
+grep -Fq 'required command not found: cargo' "$TMP/stage-build.out" || fail "the builder's own error was hidden from the operator: $(cat "$TMP/stage-build.out")"
+
 # --- the verdict on the evidence
 python3 - "$TMP" <<'PY'
 import copy

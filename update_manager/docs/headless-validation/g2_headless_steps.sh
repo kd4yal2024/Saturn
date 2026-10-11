@@ -23,6 +23,8 @@
 # must resolve to, as published in the hand-off message; the script cannot name the commit it is stored in. The three hashes below are those of
 # the committed blobs of the helper, the validator and the guard.
 set -u
+# A non-interactive shell (ssh pi@g2 'command') has no Rust toolchain on its PATH; the builder needs cargo.
+case ":$PATH:" in *":$HOME/.cargo/bin:"*) ;; *) PATH="$HOME/.cargo/bin:$PATH" ;; esac
 BRANCH=goldmarsh/headless-validation
 ACT_SHA=2e3b8a98733eb82cc1ce4190a9550feb6cdc09be9e5419980da71341150bea9b
 VAL_SHA=03c7228a2c4ce4f9561dad092261a65337309504d8065861ad9b552580a6c21f
@@ -151,8 +153,8 @@ stage_build() {
   [ ! -d "$B" ] || die "the bundle already exists: $B"
   cd /home/pi/github/Saturn/update_manager/scripts || die "the Saturn checkout is not where I expect it"
   say "resolving $BRANCH (no build yet)"
-  out=$(./saturn-release-build.sh --source-remote "$REPO_URL" --source-ref "$BRANCH" --resolve-only 2>&1); echo "$out" | tail -3
-  echo "$out" | grep -q "@ $C" || die "the branch does not resolve to the pinned commit $C. Has it been pushed? Tell me."
+  out=$(./saturn-release-build.sh --source-remote "$REPO_URL" --source-ref "$BRANCH" --resolve-only 2>&1); echo "$out" | tail -4
+  echo "$out" | grep -Fxq "resolved_commit=$C" || die "the builder did not report resolved_commit=$C (its output is above: either the branch is not at the pinned commit or has not been pushed, or the builder could not run)"
   SATURN_RELEASE_OUTPUT_ROOT=/var/lib/saturn-state/release-staging nohup ./saturn-release-build.sh --source-remote "$REPO_URL" --source-ref "$BRANCH" > ~/release-build-headless.log 2>&1 &
   echo "build started, pid $!. It runs the whole test gate and compiles natively; it takes a while. Progress: tail -f ~/release-build-headless.log"
 }
