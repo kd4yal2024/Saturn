@@ -81,6 +81,11 @@ pub struct Replay {
 
 impl Replay {
     pub fn start() -> Self {
+        Self::start_with_env(&[])
+    }
+
+    /// As `start`, with extra environment for the Bridge (the runner passes its environment through to it).
+    pub fn start_with_env(extra: &[(&str, &std::ffi::OsStr)]) -> Self {
         let port = TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -102,6 +107,9 @@ impl Replay {
             .arg(format!("{TONE_OFFSET_HZ}:-30"));
         if let Ok(wisdom) = std::env::var("SATURN_REPLAY_E2E_WISDOM") {
             command.arg("--wisdom").arg(wisdom);
+        }
+        for (key, value) in extra {
+            command.env(key, value);
         }
         Self::spawn(command, root, port)
     }

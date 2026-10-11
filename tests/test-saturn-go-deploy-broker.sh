@@ -78,13 +78,22 @@ expect_rejected "$stage" "staged executable helper"
 # rewrite helper against both legacy and already-canonical redirect lines.
 # shellcheck disable=SC1090
 source "$BROKER"
-[[ "$SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION" == "2" ]]
+[[ "$SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION" == "3" ]]
 bridge_unit="$TMP_ROOT/saturn-bridge.service"
 write_bridge_unit "$bridge_unit"
 grep -Fxq 'RuntimeDirectory=saturn-bridge' "$bridge_unit"
 grep -Fxq 'RuntimeDirectoryMode=0750' "$bridge_unit"
 grep -Fxq 'LimitRTPRIO=22' "$bridge_unit"
 grep -Fxq 'LimitMEMLOCK=16M' "$bridge_unit"
+# The Bridge keeps the receive settings it accepted across restarts in its own state directory (outside every release), writable under
+# ProtectSystem=strict only because the unit names it; the unit template of the installer must say the same.
+grep -Fxq 'StateDirectory=saturn-rxc1-bridge saturn-bridge' "$bridge_unit"
+grep -Fxq 'Environment=SATURN_BRIDGE_STATE_DIR=/var/lib/saturn-bridge' "$bridge_unit"
+installer_unit_lines="$(grep -E '^(StateDirectory=|Environment=SATURN_BRIDGE_STATE_DIR=)' "$REPO_ROOT/update_manager/scripts/install-saturn-bridge.sh")"
+[[ "$installer_unit_lines" == $'StateDirectory=saturn-rxc1-bridge saturn-bridge\nEnvironment=SATURN_BRIDGE_STATE_DIR=/var/lib/saturn-bridge' ]] || {
+  printf 'the installer and the deploy broker disagree about the Bridge state directory: %s\n' "$installer_unit_lines" >&2
+  exit 1
+}
 
 # The broker must reject an effective service policy too small for the locked
 # direct-XDMA ring, even when its generated unit text is correct.

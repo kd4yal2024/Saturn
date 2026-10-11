@@ -365,7 +365,10 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         config.tx_fft_size,
         config.tx_low_latency,
     )));
-    {
+    // The receive settings the Bridge accepted before it was restarted (an update, a crash) are put back before anything is listening or
+    // receiving. Only receive fields are restored; the transmit state below is forced to receive-only whatever a file says.
+    let rx_state_store = crate::rx_state::RxStateStore::from_env();
+    let rx_state_baseline = {
         let mut model = radio_model.lock_unpoisoned();
         model.desired.running = true;
         model.desired.tx_enabled = false;
@@ -373,7 +376,10 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         model.desired.tx_drive = model.desired.tx_drive.min(DIRECT_TX_MAX_WATTS);
         model.desired.pure_signal_enabled = false;
         model.observed.pure_signal_state = PureSignalState::Off;
-    }
+        rx_state_store.as_ref().and_then(|store| {
+            store.restore(&mut model, &|hz| crate::xdma_rx::validate_frequency(hz).is_ok())
+        })
+    };
     let tx_radio = Arc::new(DirectXdmaTxRadio::open(
         config.tx_power_meter_scale,
         radio_model.clone(),
@@ -487,6 +493,10 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     // threshold. Drain once more immediately before entering the runtime loop,
     // where actual overflow and underflow conditions remain fail-fast.
     rx.drain_startup_fifo(&mut iq_samples)?;
+    // Keeps the saved receive settings current (debounced, atomic) and writes the last change when the Bridge stops, on any path out of here.
+    let _rx_state_saver = rx_state_store.map(|store| {
+        crate::rx_state::RxStateSaver::spawn(store, radio_model.clone(), rx_state_baseline)
+    });
 
     let runtime_result = (|| -> Result<(), Box<dyn Error>> {
         while !STOP_REQUESTED.load(Ordering::Relaxed) {

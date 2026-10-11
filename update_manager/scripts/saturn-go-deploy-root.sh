@@ -14,7 +14,7 @@ VALIDATE_ONLY=0
 # broker from pairing a new executable with an obsolete systemd unit.
 # Read externally by the updater, not by this script.
 # shellcheck disable=SC2034
-SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION=2
+SATURN_GO_DEPLOY_BROKER_CONTRACT_VERSION=3
 
 die(){ printf '[saturn-go-deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 info(){ printf '[saturn-go-deploy] %s\n' "$*"; }
@@ -308,7 +308,7 @@ Restart=on-failure
 RestartSec=5
 RuntimeDirectory=saturn-bridge
 RuntimeDirectoryMode=0750
-StateDirectory=saturn-rxc1-bridge
+StateDirectory=saturn-rxc1-bridge saturn-bridge
 StateDirectoryMode=0700
 LimitRTPRIO=22
 LimitMEMLOCK=16M
@@ -323,6 +323,7 @@ Environment=SATURN_BRIDGE_RADIO_HOST=127.0.0.1
 Environment=SATURN_BRIDGE_RADIO_PORT=1024
 Environment=SATURN_BRIDGE_RADIO_BACKEND=p2
 Environment=SATURN_RXC1_POLL_ENABLED=0
+Environment=SATURN_BRIDGE_STATE_DIR=/var/lib/saturn-bridge
 Environment=SATURN_BRIDGE_XDMA_READY_PATH=/run/saturn-bridge/xdma-ready.json
 Environment=SATURN_BRIDGE_PERF_PATH=/run/saturn-bridge/perf.json
 Environment=SATURN_BRIDGE_FFTW_WISDOM_PATH=/var/cache/saturn-bridge/wdspWisdom01

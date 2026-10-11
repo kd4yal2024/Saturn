@@ -3,6 +3,7 @@ mod display_spectrum;
 mod fftw_wisdom;
 mod p2;
 mod radio_model;
+mod rx_state;
 mod rx_counter_v31;
 mod rx_thread;
 mod satp;
@@ -430,6 +431,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.tx_fft_size,
         config.tx_low_latency,
     )));
+    // Receive settings accepted before this Bridge was restarted are put back before the radio is told anything. Only receive fields.
+    let rx_state_store = rx_state::RxStateStore::from_env();
+    let rx_state_baseline = rx_state_store.as_ref().and_then(|store| {
+        store.restore(&mut radio_model.lock_unpoisoned(), &rx_state::generic_frequency_ok)
+    });
     let session = Arc::new(P2Session::bind(config.clone())?);
     let (tci, tci_command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
     let tci = Arc::new(tci);
@@ -488,6 +494,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         config.rx_audio_transport_channels
     );
 
+    let _rx_state_saver = rx_state_store
+        .map(|store| rx_state::RxStateSaver::spawn(store, radio_model.clone(), rx_state_baseline));
     let hp_thread = session.spawn_high_priority_loop(radio_model.clone(), stop_flag.clone())?;
     let tx_thread = tx_thread::spawn(
         session.clone(),
