@@ -16,7 +16,7 @@ Optional: SATURN_REH_WISDOM (FFTW wisdom file), SATURN_REH_CHROME (default googl
           SATURN_REH_OLD_BRIDGE_BIN (a saturn-bridge built WITHOUT the viewer-role fix: adds the "oldbridge" cases, which are the rollback target's
           situation: the Bridge assigns the operator role and only the injected guard, the live wire audit and the unchanged-radio check hold the line).
 
-Usage: rehearse-saturn-remote-validate.py [new|legacy|stalled|nosandbox|oldbridge|all]
+Usage: rehearse-saturn-remote-validate.py [new|legacy|stalled|nosandbox|watchdog|oldbridge|all]
 Exit status 0 only if every requested case behaved as required.
 """
 import http.server
@@ -251,7 +251,7 @@ def chrome_running(stack, grace=10.0):
         time.sleep(0.5)
 
 
-def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_role="required", expect_role="viewer", no_sandbox=False):
+def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_role="required", expect_role="viewer", no_sandbox=False, memory_cap=None, expect_trip=False):
     say(f"case {label}: page from {webroot}")
     stack = Stack(webroot, label, bridge_bin)
     try:
@@ -259,7 +259,8 @@ def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_rol
         before = stack.perf()["metrics"]
         check(before.get("connections") == 0 and before.get("client") == 0, f"{label}: nothing is connected to the Bridge before validation (connections={before.get('connections')}, client={before.get('client')})")
         radio_before = {k: before.get(k) for k in ("frequency_hz", "sample_rate_hz", "ddc", "adc", "tx_keyed", "tx_stream")}
-        ctrl, process = validator(stack, label, extra=("--viewer-role", viewer_role),
+        enforcement = ("--memory-enforcement", "watchdog", "--memory-max", memory_cap) if memory_cap else ()
+        ctrl, process = validator(stack, label, extra=("--viewer-role", viewer_role, *enforcement),
                                   limits={"max_seconds": 150, "data_s": 40, "connect_s": 40, "page_load_s": 40} if stall else {"max_seconds": 150},
                                   no_sandbox=no_sandbox)
         if no_sandbox:
@@ -272,6 +273,18 @@ def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_rol
             check(not chrome_running(stack), f"{label}: the temporary Chrome is gone after the refusal")
             time.sleep(2)
             check(stack.perf()["metrics"].get("connections") == 0, f"{label}: nothing of ours remains at the Bridge")
+            return
+        if expect_trip:
+            # the real Chrome's memory is read from the real /proc; a cap far below what it uses must stop it, and that must be the first failure
+            process.wait(timeout=140)
+            status = json.loads((ctrl / "status.json").read_text())
+            failed = status.get("failed") or {}
+            check(status["state"] == "failed" and failed.get("id") == "browser.memory_within_cap",
+                  f"{label}: a real Chrome over a {memory_cap} cap is stopped by the watchdog, and that is the first failure: {failed.get('id')}: {failed.get('detail')}")
+            check(status.get("memory_enforcement") == "watchdog", f"{label}: the evidence says the cap was enforced by the watchdog")
+            check(not chrome_running(stack), f"{label}: the temporary Chrome is gone after it was stopped")
+            time.sleep(2)
+            check(stack.perf()["metrics"].get("connections") == 0, f"{label}: nothing of ours remains at the Bridge after the watchdog stopped the browser")
             return
         if stall:
             # stop the Bridge's data the moment the session is measuring: the Bridge accepted the connection, then media delivery fails
@@ -323,6 +336,24 @@ def case(webroot, label, expect_driver, stall=False, bridge_bin=None, viewer_rol
         code, final = cli("stop", ctrl, "--timeout", "60")
         check(code == 0 and final.get("state") == "done", f"{label}: stop returned done: {final}")
         process.wait(timeout=30)
+        kept = json.loads((ctrl / "status.json").read_text())
+        diagnostics = kept.get("diagnostics") or {}
+        summary = diagnostics.get("summary") or {}
+        pss = (summary.get("browser_pss_mb") or {}).get("max", 0)
+        check(pss > 30 and diagnostics.get("watch", {}).get("errors") == 0 and diagnostics.get("watch", {}).get("readings", 0) >= 5,
+              f"{label}: the real Chrome's memory was read from /proc ({pss} MiB proportional at most, {diagnostics.get('watch')})")
+        check(isinstance(summary.get("page_main_thread_busy"), float) and "browser_cpu_pct" in summary,
+              f"{label}: the real page's main-thread load and the browser's CPU were recorded (page {summary.get('page_main_thread_busy')}, cpu {summary.get('browser_cpu_pct')})")
+        cpu = (summary.get("browser_cpu_pct") or {}).get("mean", 1e9)
+        check(kept.get("page_visibility") == "hidden", f"{label}: the validated page ran in a background tab (visibility {kept.get('page_visibility')!r})")
+        # measured here: about 350% of a core with the page in front and a null ALSA sink, about 18% with the page hidden and Chrome's fake sink; the
+        # appliance has four slow cores, so a regression to the former is what would make the check fail there
+        check(cpu < 120, f"{label}: the browser stayed light ({cpu}% of one core on average)")
+        say(f"{label}: resources: {json.dumps(summary, sort_keys=True)[:700]}")
+        if memory_cap:
+            peak = int((kept.get("isolation") or {}).get("memory", {}).get("peak_bytes") or 0)
+            check(kept.get("memory_enforcement") == "watchdog" and 0 < peak < 4 * 1024 ** 3,
+                  f"{label}: under a generous watchdog cap the real Chrome stayed within it (peak {peak / 1048576:.0f} MiB)")
         time.sleep(2.5)
         after = stack.perf()["metrics"]
         check(after.get("connections") == 0 and after.get("client") == 0, f"{label}: after stop nothing is connected (connections={after.get('connections')}, client={after.get('client')})")
@@ -404,8 +435,10 @@ def main():
              "legacy": lambda: case(Path(ENV["SATURN_REH_OLD_WEBROOT"]), "legacy", "legacy"),
              "stalled": lambda: case(Path(ENV["SATURN_REH_WEBROOT"]), "stalled", "native", stall=True),
              "oldbridge": oldbridge_case,
+             "watchdog": lambda: (case(Path(ENV["SATURN_REH_WEBROOT"]), "watchdog-trips", "native", memory_cap="60M", expect_trip=True),
+                                  case(Path(ENV["SATURN_REH_WEBROOT"]), "watchdog-within", "native", memory_cap="4G")),
              "nosandbox": lambda: case(Path(ENV["SATURN_REH_WEBROOT"]), "nosandbox", "native", no_sandbox=True)}
-    for name in (["new", "legacy", "stalled", "nosandbox"] + (["oldbridge"] if os.environ.get("SATURN_REH_OLD_BRIDGE_BIN") else []) if which == "all" else [which]):
+    for name in (["new", "legacy", "stalled", "nosandbox", "watchdog"] + (["oldbridge"] if os.environ.get("SATURN_REH_OLD_BRIDGE_BIN") else []) if which == "all" else [which]):
         try:
             cases[name]()
         except Exception as error:  # a rehearsal that cannot run is a failure, not a pass

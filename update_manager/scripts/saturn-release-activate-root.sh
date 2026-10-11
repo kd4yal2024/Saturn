@@ -63,6 +63,7 @@ STATE_MIGRATED=0
 SELECTED_BACKEND=""
 RECONCILE_ROLLBACK=0
 CHECK_RECEPTION=0
+CHECK_MEMORY_MAX=""
 VALIDATION_ENABLED=1
 VALIDATOR="/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py"
 VALIDATOR_GUARD="/usr/local/lib/saturn-go/scripts/saturn-remote-receive-guard.js"
@@ -102,7 +103,7 @@ Usage:
   saturn-release-activate-root.sh --approve-one-way-migration <full-commit>
   saturn-release-activate-root.sh --validate <full-commit>
   saturn-release-activate-root.sh --reconcile-rollback
-  saturn-release-activate-root.sh --check-reception
+  saturn-release-activate-root.sh --check-reception [--memory-max SIZE]
 
 The validation form verifies an installed immutable release without changing
 the host. Activation requires ACTIVATION_ENABLED=1 in the root-owned config.
@@ -120,7 +121,9 @@ recorded previous release is verifiably the one running and receiving.
 
 --check-reception proves reception on the release that is running now, with
 exactly the launcher an activation uses, and changes nothing: no pointer,
-service, drop-in or transaction record.
+service, drop-in or transaction record. --memory-max SIZE (for example 600M)
+replaces the configured browser memory cap for that one check, to measure what a
+host's browser really needs; it is refused with anything else and never stored.
 EOF
 }
 
@@ -948,10 +951,13 @@ record[label] = {
     "viewer_role_policy": status.get("role_policy"),
     "legacy_fallback_used": status.get("legacy_fallback_used"),
     "sandbox_requested": status.get("sandbox_requested"),
+    "memory_enforcement": status.get("memory_enforcement"),
+    "page_visibility": status.get("page_visibility"),
+    "diagnostics_summary": (status.get("diagnostics") or {}).get("summary"),
     "isolation": status.get("isolation"),
     "isolation_detail": {
         key: (status.get("conditions") or {}).get(key, {}).get("detail")
-        for key in ("browser.sandbox_intact", "browser.memory_limit_applied", "session.role_legacy_fallback")
+        for key in ("browser.sandbox_intact", "browser.memory_limit_applied", "browser.memory_within_cap", "session.role_legacy_fallback")
     },
     "conditions": {key: value.get("ok") for key, value in sorted((status.get("conditions") or {}).items())},
     "started_at": status.get("started_at"),
@@ -1215,7 +1221,13 @@ print(f"session role: {entry.get('role')} (viewer-role policy {entry.get('viewer
 if entry.get("legacy_fallback_used"):
     print("LEGACY BRIDGE FALLBACK USED: " + str(detail.get("session.role_legacy_fallback")))
 print(f"browser sandbox: {detail.get('browser.sandbox_intact')}")
-print(f"browser memory limit: {detail.get('browser.memory_limit_applied')}; peak {memory.get('peak_bytes')} bytes")
+print(f"browser memory limit: {detail.get('browser.memory_limit_applied')}; peak {memory.get('peak_bytes')} bytes ({memory.get('peak_source', 'the kernel')})")
+print(f"browser memory cap enforced by: {entry.get('memory_enforcement')}" + (f"; {detail.get('browser.memory_within_cap')}" if detail.get("browser.memory_within_cap") else ""))
+summary = entry.get("diagnostics_summary") or {}
+if summary:
+    pss, cpu = (summary.get("browser_pss_mb") or {}), (summary.get("browser_cpu_pct") or {})
+    print(f"browser resources: page {entry.get('page_visibility')}, memory (Pss) at most {pss.get('max')} MiB, CPU {cpu.get('mean')}% of one core on average, "
+          f"host I/O wait {(summary.get('host_iowait_pct') or {}).get('mean')}%, page main thread busy {summary.get('page_main_thread_busy')}")
 PY
 }
 
@@ -1350,6 +1362,11 @@ while [[ "${1:-}" == --* ]]; do
     --check-reception)
       CHECK_RECEPTION=1
       ;;
+    --memory-max)
+      [[ $# -ge 2 ]] || { usage >&2; exit 2; }
+      CHECK_MEMORY_MAX="$2"
+      shift
+      ;;
     *)
       usage >&2
       exit 2
@@ -1357,6 +1374,9 @@ while [[ "${1:-}" == --* ]]; do
   esac
   shift
 done
+if [[ -n "$CHECK_MEMORY_MAX" ]] && (( ! CHECK_RECEPTION )); then
+  die "--memory-max applies to --check-reception only"
+fi
 if (( RECONCILE_ROLLBACK || CHECK_RECEPTION )); then
   [[ $# -eq 0 ]] || { usage >&2; exit 2; }
   (( ! VALIDATE_ONLY && ! APPROVE_ONE_WAY_MIGRATION && ! (RECONCILE_ROLLBACK && CHECK_RECEPTION) )) \
@@ -1381,6 +1401,9 @@ need_cmd realpath
 need_cmd systemctl
 need_cmd sync
 load_config
+if [[ -n "$CHECK_MEMORY_MAX" ]]; then
+  VALIDATION_MEMORY_MAX="$CHECK_MEMORY_MAX"      # one diagnostic check only; checked by validate_configuration like the configured value
+fi
 validate_configuration
 install -d -m 0755 "$(dirname "$LOCK_FILE")"
 exec 9>"$LOCK_FILE"

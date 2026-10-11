@@ -56,6 +56,28 @@ def put(name, value):
 def session(connected):
     put("session.json", {"pid": os.getpid(), "connected": connected})
 put("browser_argv.json", {"argv": sys.argv, "env": dict(os.environ)})
+FAKE_PIDS, PARENTS = [], {}
+T0 = time.time()
+def usage_loop():
+    """What a running browser's processes and the host would show, changing over time: memory (growing when the scenario says so), CPU ticks,
+    the host's CPU, swap and fault counters."""
+    while True:
+        age = time.time() - T0
+        pss_kb = SC.get("pss_kb", 40000) + int(SC.get("pss_growth_kb_s", 0) * age)
+        for pid in list(FAKE_PIDS):
+            d = os.path.join(W, "proc", str(pid))
+            ticks = int(SC.get("cpu_ticks_per_s", 25) * age)
+            with open(os.path.join(d, "stat"), "w") as h:
+                h.write(f"{pid} (chromium) S {PARENTS.get(pid, 1)} 0 0 0 0 0 0 0 {int(age)} 0 {ticks} {ticks // 5} 0 0\n")
+            if not SC.get("no_smaps") and not SC.get("no_usage"):
+                with open(os.path.join(d, "smaps_rollup"), "w") as h: h.write(f"00400000-ffffffff ---p 00000000 00:00 0 [rollup]\nRss: 1 kB\nPss: {pss_kb} kB\n")
+        host = os.path.join(W, "proc")
+        with open(os.path.join(host, "stat"), "w") as h:
+            h.write(f"cpu  {int(100 * age)} 0 {int(20 * age)} {int(180 * age)} {int(100 * age)} 0 0 0 0 0\n")
+        with open(os.path.join(host, "vmstat"), "w") as h: h.write(f"pgmajfault {int(3 * age)}\npswpin {int(5 * age)}\npswpout {int(2 * age)}\n")
+        with open(os.path.join(host, "meminfo"), "w") as h: h.write("MemTotal: 927000 kB\nMemAvailable: 500000 kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n")
+        with open(os.path.join(host, "loadavg"), "w") as h: h.write("0.80 0.70 0.60 1/200 1234\n")
+        time.sleep(0.2)
 def fake_tree():
     """What /proc and the unit's cgroup would show for a real browser: a main process, GPU, and renderers (Seccomp: 2 when sandboxed)."""
     me = os.getpid()
@@ -67,15 +89,19 @@ def fake_tree():
         # as on a real host: the browser process has NUL-separated arguments, the processes it forks one space-separated string
         with open(os.path.join(d, "cmdline"), "wb") as h:
             h.write(b"\0".join(a.encode() for a in args) + b"\0" if kind == "browser" else " ".join(args).encode() + b"\0")
-        with open(os.path.join(d, "status"), "w") as h: h.write(f"Name:\tchromium\nSeccomp:\t{seccomp}\nNoNewPrivs:\t1\n")
+        with open(os.path.join(d, "status"), "w") as h: h.write(f"Name:\tchromium\nSeccomp:\t{seccomp}\nNoNewPrivs:\t1\n" + ("" if SC.get("no_usage") else f"VmRSS:\t{SC.get('rss_kb', 50000)} kB\n"))
+        parents[pid] = ppid
+    parents = {}
     entry(me, os.getppid(), "browser", 0)
     pids = [me]
     for i in range(SC.get("renderers", 2)):
         entry(900001 + i, me, "renderer", SC.get("renderer_seccomp", 2)); pids.append(900001 + i)
     entry(900100, me, "gpu-process", 0); pids.append(900100)
+    FAKE_PIDS.extend(pids); PARENTS.update(parents)
     cg = os.path.join(W, "cgroup", "system.slice", "fake.service"); os.makedirs(cg, exist_ok=True)
     with open(os.path.join(cg, "cgroup.procs"), "w") as h: h.write("\n".join(str(p) for p in pids) + "\n")
 fake_tree()
+usage_loop_thread = threading.Thread(target=usage_loop, daemon=True); usage_loop_thread.start()
 session(False)
 if SC.get("stubborn"):
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -144,6 +170,8 @@ def stop():
         st["stopped"] = True; session(False)
     return json.dumps({"ok": True})
 def evaluate(expr):
+    if expr == "document.visibilityState":
+        return "visible" if SC.get("no_background_tab") else "hidden"
     if "receiveOnlyGuard" in expr:
         return json.dumps({"active": not SC.get("guard_inactive")})
     if "document.readyState" in expr:
@@ -185,11 +213,22 @@ def handle(message):
         else: body["result"] = result or {}
         out(body)
     if method == "Target.getTargets": return reply({"targetInfos": [{"type": "page", "targetId": "T1"}]})
-    if method == "Target.attachToTarget": return reply({"sessionId": "S1"})
+    if method == "Target.createTarget":
+        put("created_target.json", params)
+        if SC.get("no_background_tab"): return reply(error="Target.createTarget is not available")
+        return reply({"targetId": "T2"})
+    if method == "Target.attachToTarget":
+        put("attached_target.json", params)
+        return reply({"sessionId": "S1"})
     if method == "Page.addScriptToEvaluateOnNewDocument":
         put("injected.json", {"sha256": __import__("hashlib").sha256(params["source"].encode()).hexdigest(), "length": len(params["source"])})
         return reply({"identifier": "1"})
     if method == "Fetch.enable": put("fetch_enable.json", params); return reply()
+    if method == "Performance.getMetrics" and SC.get("no_metrics"): return reply(error="Performance domain is not available")
+    if method == "Performance.getMetrics":
+        age = time.time() - T0
+        return reply({"metrics": [{"name": "TaskDuration", "value": SC.get("page_busy", 0.4) * age}, {"name": "ScriptDuration", "value": 0.2 * age},
+                                  {"name": "JSHeapUsedSize", "value": 30e6}, {"name": "Nodes", "value": 900}]})
     if method == "Fetch.continueRequest":
         reply()
         if params.get("requestId") == "req0" and st["challenge"]:
@@ -233,6 +272,10 @@ if [ "$1" = show ]; then
   cat "$FAKE_PIDS/$5" 2>/dev/null || echo 0; exit 0
 fi
 echo "$@" >> "$FAKE_PIDS/systemctl.log"
+if [ "$1" = kill ]; then
+  pid=$(sed -n 's/.*"pid": \\([0-9]*\\).*/\\1/p' "$FAKE_WORLD/session.json" 2>/dev/null)
+  [ -n "$pid" ] && kill -9 "$pid" 2>/dev/null
+fi
 exit 0
 """
 
@@ -249,7 +292,9 @@ exec "$@"
 """
 
 DEFAULT_UNIT_PROPERTIES = {"ControlGroup": "/system.slice/fake.service", "MemoryMax": "367001600", "MemorySwapMax": "0",
-                           "MemoryCurrent": "123456789", "MemoryPeak": "222222222", "ActiveState": "active"}
+                           "MemoryCurrent": "123456789", "MemoryPeak": "222222222", "ActiveState": "active", "OOMScoreAdjust": "1000"}
+# this Raspberry Pi image: no memory controller, so the kernel reports nothing it could account
+NO_MEMORY_CONTROLLER_PROPERTIES = {"MemoryMax": "infinity", "MemorySwapMax": "infinity", "MemoryCurrent": "[not set]", "MemoryPeak": "[not set]"}
 
 
 def alive(pid):
@@ -265,10 +310,12 @@ class Rig:
 
     def __init__(self, test, scenario=None, baseline=0, rxc1="unarmed", bridge_commit=COMMIT, ready_commit=COMMIT, freeze_owner=False,
                  sdr_never=False, limits=None, expect_rxc1="any", auth=True, ready_flag=True, bridge_pid_file=None, perf_pid=None,
-                 freeze_on_session=False, owner_blind=False, p23_broken=False, sticky=False, isolation=None, unit_props=None):
+                 freeze_on_session=False, owner_blind=False, p23_broken=False, sticky=False, isolation=None, unit_props=None, memory_controller=None,
+                 mem_available_kb=500000):
         self.test = test
         self.isolation = isolation          # None: not checked; "direct": a browser started directly; "systemd": in a (fake) transient unit
         self.unit_props = dict(DEFAULT_UNIT_PROPERTIES, **(unit_props or {}))
+        self.memory_controller = memory_controller      # None: the kernel is not asked; True/False: cgroup.controllers lists (or lacks) memory
         self.root = Path(tempfile.mkdtemp(prefix="saturn-validate-test-"))
         self.world = self.root / "world"
         self.world.mkdir()
@@ -276,6 +323,12 @@ class Rig:
         self.releases = self.root / "releases"
         self.pids = self.root / "pids"
         self.pids.mkdir()
+        if isolation is not None:       # the host's memory figures exist before the browser does, as /proc/meminfo does
+            (self.world / "proc").mkdir()
+            (self.world / "proc" / "meminfo").write_text(f"MemTotal: 927000 kB\nMemAvailable: {mem_available_kb} kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n")
+        if memory_controller is not None:
+            (self.world / "cgroup").mkdir()
+            (self.world / "cgroup" / "cgroup.controllers").write_text("cpuset cpu io memory pids\n" if memory_controller else "cpuset cpu io pids\n")
         self.scenario = scenario or {}
         self.scenario.setdefault("auth", auth)
         self.baseline, self.rxc1, self.ready_commit, self.freeze, self.sdr_never = baseline, rxc1, ready_commit, freeze_owner, sdr_never
@@ -1080,6 +1133,314 @@ class IsolationTests(RigCase):
         rig.stop(); rig.finish()
 
 
+class EverythingIsReadTests(RigCase):
+    """One run says everything it can: the sandbox, the memory cap, the owner's view, the wire and the radio are read even when the audio or
+    the display failed, and the first failure is still the one reported."""
+
+    ALSO_READ = ("browser.sandbox_intact", "browser.memory_limit_applied", "owner.fresh_telemetry_with_session", "owner.session_registered",
+                 "owner.gate_equivalent", "radio.unchanged", "wire.only_allowed_commands", "page.no_fatal_errors")
+
+    def test_stalled_audio_still_reports_the_sandbox_the_cap_the_owner_the_wire_and_the_radio(self):
+        rig = self.rig(isolation="systemd", scenario={"audio_stalled": True, "legacy": True})
+        rig.start()
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "audio.decoded_progress", "the first failure stays the headline")
+        for identifier in self.ALSO_READ:
+            self.assertIn(identifier, status["conditions"], f"{identifier} was never read although the browser was running")
+            self.assertTrue(status["conditions"][identifier]["ok"], (identifier, status["conditions"][identifier]))
+        self.assertTrue(status["conditions"]["data.display_fresh"]["ok"])
+        self.assertCleanedUp(rig)
+
+    def test_a_failure_in_the_data_does_not_hide_a_failure_in_the_isolation(self):
+        rig = self.rig(isolation="systemd", scenario={"no_display": True, "renderer_seccomp": 0})
+        rig.start()
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "data.display_fresh")
+        self.assertFalse(status["conditions"]["browser.sandbox_intact"]["ok"], "an unconfined renderer must be reported even though the display failed first")
+        self.assertCleanedUp(rig)
+
+    def test_a_session_that_never_connected_still_gets_its_isolation_read(self):
+        rig = self.rig(isolation="systemd", scenario={"mode": "no_connect"})
+        rig.start()
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "session.connected_as_viewer")
+        self.assertTrue(status["conditions"]["browser.sandbox_intact"]["ok"])
+        self.assertCleanedUp(rig)
+
+    def test_a_run_that_is_stopped_does_not_go_on_reading(self):
+        rig = self.rig(isolation="systemd", scenario={"audio_stalled": True}, limits={"data_s": 30})
+        rig.start()
+        time.sleep(2.5)
+        rig.cli("stop", "--timeout", "40", timeout=80)
+        rig.finish()
+        self.assertNotIn("browser.sandbox_intact", rig.status()["conditions"], "a validation that was told to stop must not start further checks")
+
+
+class MemoryWatchdogTests(RigCase):
+    """Where the kernel has no memory controller (cgroup_disable=memory, as on the appliance's Raspberry Pi image) the validator is the cap, and
+    says so."""
+
+    def pi(self, **kwargs):
+        props = dict(NO_MEMORY_CONTROLLER_PROPERTIES, **kwargs.pop("unit_props", {}))
+        return self.rig(isolation="systemd", memory_controller=False, unit_props=props, **kwargs)
+
+    def test_a_browser_within_the_cap_is_enforced_by_the_watchdog_and_the_evidence_says_so(self):
+        rig = self.pi()
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), ready)
+        status = rig.status()
+        self.assertEqual(status["memory_enforcement"], "watchdog")
+        applied = status["conditions"]["browser.memory_limit_applied"]
+        self.assertTrue(applied["ok"], applied)
+        self.assertIn("ENFORCED BY THE VALIDATOR'S WATCHDOG", applied["detail"])
+        self.assertIn("not by the kernel", applied["detail"])
+        self.assertEqual(status["isolation"]["memory"]["enforcement"], "watchdog")
+        self.assertEqual(status["isolation"]["memory"]["cap_bytes"], 350 * 1024 ** 2)
+        rig.stop()
+        self.assertEqual(rig.finish(), 0)
+        status = rig.status()
+        within = status["conditions"]["browser.memory_within_cap"]
+        self.assertTrue(within["ok"], within)
+        memory = status["isolation"]["memory"]
+        self.assertEqual(memory["peak_source"], "validator sampling (proportional set size)", "the kernel reports no peak here, so the measured one is kept and named")
+        self.assertAlmostEqual(int(memory["peak_bytes"]) / 1048576, 4 * 40000 / 1024, delta=2)      # four processes, 40000 kB each
+        self.assertCleanedUp(rig)
+
+    def test_the_unit_still_carries_the_cap_and_the_oom_setting_so_a_kernel_with_a_controller_applies_it(self):
+        rig = self.pi()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        rig.stop(); rig.finish()
+        given = (rig.pids / "systemd-run.args").read_text().split()
+        for needed in ("MemoryMax=350M", "MemorySwapMax=0", "OOMScoreAdjust=1000"):
+            self.assertIn(needed, given)
+
+    def test_a_browser_that_outgrows_the_cap_is_stopped_and_that_is_the_first_failure(self):
+        rig = self.pi(scenario={"pss_growth_kb_s": 100000}, limits={"data_s": 20, "max_seconds": 60})
+        rig.start()
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "browser.memory_within_cap", status["failed"])
+        self.assertIn("MEMORY CAP EXCEEDED, enforced by the watchdog", status["failed"]["detail"])
+        self.assertRegex(status["failed"]["detail"], r"use \d+ MiB \(proportional set size\) against the 350M cap")
+        self.assertIn("kill --signal=SIGKILL " + status["unit"] + ".service", (rig.pids / "systemctl.log").read_text(), "the unit itself is what is stopped")
+        self.assertIsNone(status.get("ready_at"), "a browser over the cap never reports ready")
+        self.assertFalse(status["conditions"]["browser.memory_within_cap"]["ok"], "the evidence kept at the end must still say the cap was exceeded")
+        failing = sorted(k for k, v in status["conditions"].items() if not v["ok"])
+        self.assertEqual(failing, ["browser.memory_within_cap"], "a browser stopped on purpose must not leave a trail of unrelated failures about its death")
+        self.assertCleanedUp(rig)
+
+    def test_a_browser_that_outgrows_the_cap_while_the_session_is_held_ends_the_hold_as_a_failure(self):
+        rig = self.pi(scenario={"pss_growth_kb_s": 12000}, limits={"data_s": 20, "max_seconds": 60})
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), "it was within the cap when it was declared ready")
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["state"], "failed")
+        self.assertEqual(status["failed"]["id"], "browser.memory_within_cap", status["failed"])
+        self.assertFalse(status["conditions"]["browser.memory_within_cap"]["ok"], "the evidence kept at the end must still say the cap was exceeded")
+        failing = sorted(k for k, v in status["conditions"].items() if not v["ok"])
+        self.assertEqual(failing, ["browser.memory_within_cap"], "a browser stopped on purpose must not leave a trail of unrelated failures about its death")
+        self.assertCleanedUp(rig)
+
+    def test_a_browser_stopped_for_its_memory_while_the_validator_waits_on_it_is_not_reported_as_unresponsive(self):
+        # the second snapshot never answers, so the validator is inside a DevTools call when the watchdog stops the browser: the call then fails
+        # because the pipe closed, and that failure is a consequence of the memory stop, not a finding of its own
+        rig = self.pi(scenario={"pss_growth_kb_s": 15000, "hang_on_snapshot": 1}, limits={"data_s": 30, "max_seconds": 60, "call_s": 8})
+        rig.start()
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "browser.memory_within_cap", status["failed"])
+        failing = sorted(k for k, v in status["conditions"].items() if not v["ok"])
+        self.assertEqual(failing, ["browser.memory_within_cap"], failing)
+        self.assertGreaterEqual(rig.read_world("session.json")["pid"], 1)
+        self.assertCleanedUp(rig)
+
+    def test_a_unit_that_is_not_the_oom_killers_first_choice_does_not_count_as_capped(self):
+        rig = self.pi(unit_props={"OOMScoreAdjust": "0"})
+        status = self.run_to_failure(rig, "browser.memory_limit_applied", detail="first choice")
+        self.assertCleanedUp(rig)
+
+    def test_without_proportional_memory_the_resident_size_is_read_instead(self):
+        rig = self.pi(scenario={"no_smaps": True})
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual(code, 0, ready)
+        rig.stop(); rig.finish()
+        self.assertAlmostEqual(int(rig.status()["isolation"]["memory"]["peak_bytes"]) / 1048576, 4 * 50000 / 1024, delta=2)
+
+    def test_memory_that_cannot_be_read_at_all_is_not_a_cap(self):
+        rig = self.pi(scenario={"no_usage": True})
+        status = self.run_to_failure(rig, "browser.memory_limit_applied", detail="could not be measured")
+        self.assertCleanedUp(rig)
+
+    def test_a_browser_that_outgrows_the_resident_size_cap_is_stopped_too(self):
+        rig = self.pi(scenario={"no_smaps": True, "rss_kb": 120000}, limits={"data_s": 20, "max_seconds": 60})        # 4 x 120000 kB = 469 MiB resident
+        rig.start()
+        rig.finish()
+        status = rig.status()
+        self.assertEqual(status["failed"]["id"], "browser.memory_within_cap", status["failed"])
+        self.assertCleanedUp(rig)
+
+    def test_a_kernel_with_the_controller_keeps_the_cgroup_enforcement_and_asks_for_no_watchdog(self):
+        rig = self.rig(isolation="systemd", memory_controller=True)
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        status = rig.status()
+        self.assertEqual(status["memory_enforcement"], "cgroup")
+        self.assertIn("MemoryMax 367001600 bytes", status["conditions"]["browser.memory_limit_applied"]["detail"])
+        rig.stop(); rig.finish()
+        self.assertNotIn("browser.memory_within_cap", rig.status()["conditions"], "the kernel enforces it; there is no second opinion to record")
+
+    def test_with_a_memory_controller_the_validator_leaves_enforcement_to_the_kernel(self):
+        rig = self.rig(isolation="systemd", memory_controller=True, scenario={"pss_growth_kb_s": 100000}, limits={"hold_stall_s": 30})
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), "the cap is the kernel's job here; the validator does not stop a browser the kernel is trusted to bound")
+        time.sleep(1.5)
+        status = rig.status()
+        self.assertEqual(status["state"], "ready")
+        self.assertNotIn("browser.memory_within_cap", status["conditions"])
+        log = rig.pids / "systemctl.log"
+        self.assertNotIn("kill", log.read_text() if log.exists() else "")
+        rig.stop(); rig.finish()
+
+    def test_an_explicit_watchdog_is_honoured_even_where_the_kernel_could_do_it(self):
+        rig = self.rig(isolation="systemd", memory_controller=True)
+        rig.start(("--memory-enforcement", "watchdog"))
+        self.assertEqual(rig.wait_ready()[0], 0)
+        self.assertEqual(rig.status()["memory_enforcement"], "watchdog")
+        rig.stop(); rig.finish()
+
+
+class DiagnosticsTests(RigCase):
+    """What the next hardware run needs in order to say WHY a browser on the appliance was too slow: kept in the evidence, never able to fail a run."""
+
+    def test_the_evidence_keeps_where_the_cpu_the_memory_and_the_disk_went(self):
+        rig = self.rig(isolation="systemd", memory_controller=True, scenario={"page_busy": 0.5})
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        time.sleep(2.5)
+        rig.stop()
+        self.assertEqual(rig.finish(), 0)
+        diagnostics = rig.status()["diagnostics"]
+        summary = diagnostics["summary"]
+        self.assertGreaterEqual(summary["samples"], 4)
+        self.assertAlmostEqual(summary["browser_pss_mb"]["max"], 4 * 40000 / 1024, delta=2)
+        kinds = summary["pss_by_process_type_mb_max"]
+        self.assertEqual({k: v["processes"] for k, v in kinds.items()}, {"browser": 1, "renderer": 2, "gpu-process": 1})
+        self.assertAlmostEqual(kinds["renderer"]["pss_mb"], 2 * 40000 / 1024, delta=1)
+        self.assertGreater(summary["browser_cpu_pct"]["max"], 50)               # four processes, 25 ticks a second each, plus system time
+        self.assertLess(summary["browser_cpu_pct"]["max"], 200)
+        self.assertGreater(summary["host_iowait_pct"]["mean"], 10)              # the fake host spends a quarter of its time waiting for I/O
+        self.assertLess(summary["host_iowait_pct"]["mean"], 40)
+        self.assertEqual(summary["mem_available_mb_min"], round(500000 / 1024))
+        self.assertGreater(summary["swap_in_pages_total"], 0)
+        self.assertGreater(summary["page_main_thread_busy"], 0.3)
+        self.assertLess(summary["page_main_thread_busy"], 0.7)
+        self.assertEqual(summary["owner_counters"]["connections"]["last"], 2, "the owner's own counters are sampled with the browser's")
+        first = diagnostics["samples"][0]
+        self.assertIn("pss_mb", first)
+        self.assertEqual(diagnostics["watch"]["errors"], 0)
+        self.assertLess(diagnostics["watch"]["longest_gap_s"], 1.5)
+
+    def test_the_legacy_page_s_decoder_counters_are_in_the_snapshot_that_is_kept(self):
+        self.assertIn("decodedFrames: rxOpus.decodedFrames", V.LEGACY_SNAPSHOT)
+        self.assertIn("decoderFramesOutput: rxOpus.decoderFramesOutput", V.LEGACY_SNAPSHOT)
+
+    def test_a_page_that_cannot_answer_for_its_metrics_does_not_fail_the_run(self):
+        rig = self.rig(scenario={"legacy": True, "no_metrics": True})
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        time.sleep(1.5)
+        rig.stop(); self.assertEqual(rig.finish(), 0)
+        self.assertNotIn("page_main_thread_busy", rig.status()["diagnostics"]["summary"], "no figure is invented for a page that gave none")
+
+
+class MemoryHeadroomTests(RigCase):
+    """On a 905 MB appliance a browser is not started unless the host has the memory to give it; the radio's processes never pay for a validation."""
+
+    def test_a_host_with_the_memory_free_starts_the_browser(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)      # 350M cap + 32 MiB reserve = 382 MiB needed
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        detail = rig.condition("host.memory_headroom")
+        self.assertTrue(detail["ok"], detail)
+        self.assertIn("450 MiB available", detail["detail"])
+        rig.stop(); rig.finish()
+
+    def test_a_host_without_the_memory_is_refused_and_no_browser_is_started(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
+        status = self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available.*382 MiB needed\): no browser was started")
+        self.assertIsNone(rig.browser_pid(), "a browser was started although the host cannot spare the memory")
+        self.assertFalse((rig.world / "browser_argv.json").exists())
+
+    def test_the_reserve_is_part_of_the_requirement(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=360 * 1024)      # more than the cap, less than cap + reserve
+        self.run_to_failure(rig, "host.memory_headroom", detail="382 MiB needed")
+
+    def test_available_memory_that_cannot_be_read_is_not_assumed(self):
+        rig = self.rig(isolation="systemd")
+        (rig.world / "proc" / "meminfo").unlink()
+        self.run_to_failure(rig, "host.memory_headroom", detail="could not be read")
+        self.assertIsNone(rig.browser_pid())
+
+    def test_a_larger_measurement_cap_needs_the_larger_headroom(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)
+        rig.start(("--memory-max", "500M"))
+        rig.finish()
+        self.assertEqual(rig.status()["failed"]["id"], "host.memory_headroom")
+
+    def test_without_isolation_checks_there_is_nothing_to_protect(self):
+        rig = self.rig()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        self.assertNotIn("host.memory_headroom", rig.status()["conditions"])
+        rig.stop(); rig.finish()
+
+    def test_the_lean_browser_switches_are_in_the_flags(self):
+        flags = V.browser_flags("/tmp/profile", None, sandbox=True)
+        for needed in ("--enable-low-end-device-mode", "--disable-software-rasterizer", "--num-raster-threads=1", "--disable-audio-output"):
+            self.assertIn(needed, flags)
+        for forbidden in ("--no-sandbox", "--single-process", "--no-zygote", "--disable-gpu-sandbox", "--in-process-gpu"):
+            self.assertNotIn(forbidden, flags, "no switch that weakens the browser's sandbox may be added for the sake of memory")
+
+
+class LeanBrowserTests(RigCase):
+    """The browser on the appliance is a small Raspberry Pi: the page is validated in a background tab and the audio goes to Chrome's own fake
+    sink, which is what takes a software-rendering browser from several cores to a fraction of one. Both are verified, not assumed."""
+
+    def test_the_page_is_opened_in_a_background_tab_and_that_is_the_tab_that_is_validated(self):
+        rig = self.rig()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        self.assertEqual(rig.read_world("created_target.json"), {"url": "about:blank", "background": True})
+        self.assertEqual(rig.read_world("attached_target.json")["targetId"], "T2", "the validator must work on the background tab, not on the one in front")
+        self.assertEqual(rig.status()["page_visibility"], "hidden", "the evidence says whether the page really was hidden")
+        rig.stop(); self.assertEqual(rig.finish(), 0)
+
+    def test_a_browser_that_cannot_open_a_background_tab_is_validated_in_the_tab_it_has(self):
+        rig = self.rig(scenario={"no_background_tab": True})
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        self.assertEqual(rig.read_world("attached_target.json")["targetId"], "T1")
+        self.assertEqual(rig.status()["page_visibility"], "visible")
+        self.assertIn("background_tab_unavailable", [e["event"] for e in rig.log_events()])
+        rig.stop(); self.assertEqual(rig.finish(), 0)
+
+    def test_the_audio_sink_is_chromes_fake_one_and_the_sandbox_stays_on(self):
+        flags = V.browser_flags("/tmp/profile", "pin=", sandbox=True)
+        self.assertIn("--disable-audio-output", flags)
+        self.assertNotIn("--alsa-output-device=null", flags, "an ALSA null device is rendered against flat out; the fake output is paced by a timer")
+        self.assertNotIn("--no-sandbox", flags)
+        self.assertIn("--no-sandbox", V.browser_flags("/tmp/profile", None, sandbox=False))
+
+
 class PreconditionTests(RigCase):
     def no_browser(self, rig):
         self.assertIsNone(rig.browser_pid(), "a browser was started although the target is not running")
@@ -1255,6 +1616,101 @@ class UnitTests(unittest.TestCase):
         self.assertFalse(V.memory_verdict({k: v for k, v in props.items() if k != "MemoryMax"}, "350M")[0])
         self.assertFalse(V.memory_verdict(dict(props, MemorySwapMax="infinity"), "350M")[0])
         self.assertFalse(V.memory_verdict({k: v for k, v in props.items() if k != "MemorySwapMax"}, "350M")[0])
+
+    def test_the_unit_is_the_oom_killers_first_choice(self):
+        command = V.build_launch_command("systemd", "/usr/bin/chromium", ["--headless=new"], "saturn-remote-validator-1", 300, "350M")
+        self.assertIn("OOMScoreAdjust=1000", command)
+
+    def test_the_memory_enforcement_defaults_to_asking_the_kernel(self):
+        args = V.parser().parse_args(["run", "--control-dir", "/x", "--target-commit", "c"])
+        self.assertEqual(args.memory_enforcement, "auto")
+
+    def validator_for(self, cgroup_root, enforcement="auto"):
+        args = V.parser().parse_args(["run", "--control-dir", "/x", "--target-commit", "c", "--memory-enforcement", enforcement, "--cgroup-root", str(cgroup_root)])
+        with tempfile.TemporaryDirectory() as directory:
+            return V.Validator(args, V.Recorder(Path(directory), V.Redactor()), V.Redactor())
+
+    def test_the_memory_enforcement_follows_the_kernels_memory_controller(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(self.validator_for(root).memory_enforcement, "cgroup", "a kernel that cannot be asked is assumed to apply the cap")
+            (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
+            self.assertEqual(self.validator_for(root).memory_enforcement, "cgroup")
+            (root / "cgroup.controllers").write_text("cpuset cpu io pids\n")
+            self.assertEqual(self.validator_for(root).memory_enforcement, "watchdog", "the Raspberry Pi image: cgroup_disable=memory")
+            (root / "cgroup.controllers").write_text("cpuset cpu io memorypressure pids\n")
+            self.assertEqual(self.validator_for(root).memory_enforcement, "watchdog", "only the controller named exactly 'memory' counts")
+            self.assertEqual(self.validator_for(root, "cgroup").memory_enforcement, "cgroup", "an explicit choice is never second-guessed")
+            (root / "cgroup.controllers").write_text("cpuset cpu io memory pids\n")
+            self.assertEqual(self.validator_for(root, "watchdog").memory_enforcement, "watchdog")
+
+    def test_the_watchdog_verdict_needs_the_oom_setting_readings_and_a_browser_within_the_cap(self):
+        props = {"OOMScoreAdjust": "1000"}
+        watch = {"steps": 20, "peak": 200 * 1024 ** 2, "max_gap": 0.4, "age": 0.3, "exceeded": False, "detail": ""}
+        ok, detail = V.watchdog_memory_verdict(props, "350M", watch)
+        self.assertTrue(ok, detail)
+        self.assertIn("ENFORCED BY THE VALIDATOR'S WATCHDOG", detail)
+        self.assertIn("200 MiB", detail)
+        for name, bad_props, bad_watch, wanted in (
+                ("oom setting missing", {}, watch, "first choice"),
+                ("oom setting 0", {"OOMScoreAdjust": "0"}, watch, "first choice"),
+                ("exceeded", props, dict(watch, exceeded=True, detail="400 MiB"), "exceeded its memory cap"),
+                ("no readings", props, dict(watch, steps=0, peak=0), "could not be measured"),
+                ("one reading", props, dict(watch, steps=1), "could not be measured"),
+                ("nothing read", props, dict(watch, peak=0), "could not be measured"),
+                ("stopped reading", props, dict(watch, age=2.5), "stopped reading"),
+                ("gap", props, dict(watch, max_gap=3.5), "without a reading"),
+                ("over the cap but not tripped", props, dict(watch, peak=351 * 1024 ** 2), "against the 350M cap")):
+            ok, detail = V.watchdog_memory_verdict(bad_props, "350M", bad_watch)
+            self.assertFalse(ok, name)
+            self.assertIn(wanted, detail, name)
+        self.assertTrue(V.watchdog_memory_verdict(props, "350M", dict(watch, peak=350 * 1024 ** 2))[0], "exactly the cap is within it")
+
+    def test_process_usage_reads_memory_and_cpu_and_survives_a_missing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "7").mkdir()
+            (root / "7" / "stat").write_text("7 (chromium (renderer)) S 1 0 0 0 0 0 0 0 11 0 300 60 0 0\n")      # a name with spaces and a parenthesis
+            (root / "7" / "status").write_text("Name:\tx\nVmRSS:\t 2048 kB\n")
+            (root / "7" / "smaps_rollup").write_text("Rss: 2048 kB\nPss:               1024 kB\n")
+            self.assertEqual(V.process_usage(root, 7), {"majflt": 11, "ticks": 360, "rss": 2048 * 1024, "pss": 1024 * 1024})
+            (root / "7" / "smaps_rollup").unlink()
+            self.assertEqual(V.process_usage(root, 7)["pss"], 2048 * 1024, "without Pss the resident size is the (larger) stand-in")
+            (root / "7" / "status").unlink()
+            self.assertIsNone(V.process_usage(root, 7), "no memory figure at all means the process is gone")
+            self.assertIsNone(V.process_usage(root, 8))
+
+    def test_host_counters_read_what_the_kernel_provides_and_skip_the_rest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertEqual(V.host_counters(root), {}, "this Pi has no pressure-stall information and a tool must not need it")
+            (root / "stat").write_text("cpu  100 5 20 180 100 2 3 4 0 0\ncpu0 1 1 1 1 1 1 1 1 0 0\n")
+            (root / "vmstat").write_text("nr_free_pages 5\npswpin 7\npswpout 9\npgmajfault 11\n")
+            (root / "meminfo").write_text("MemTotal: 927000 kB\nMemAvailable: 500000 kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n")
+            (root / "loadavg").write_text("1.25 0.5 0.3 1/2 3\n")
+            self.assertEqual(V.host_counters(root), {"cpu_user": 105, "cpu_system": 25, "cpu_idle": 180, "cpu_iowait": 100, "cpu_steal": 4,
+                                                     "pswpin": 7, "pswpout": 9, "pgmajfault": 11, "MemAvailable": 500000 * 1024,
+                                                     "SwapTotal": 3000000 * 1024, "SwapFree": 2700000 * 1024, "load1_x100": 125})
+
+    def test_the_diagnostics_summary_says_where_the_resources_went(self):
+        samples = [{"by_type": {"renderer": [1, 60.0], "browser": [1, 40.0]}, "pss_mb": 100.0, "rss_mb": 150.0, "browser_cpu_pct": 80, "host_busy_pct": 30, "host_iowait_pct": 20, "load1": 1.0, "mem_avail_mb": 400,
+                    "swap_in_pages": 5, "swap_out_pages": 1, "browser_major_faults": 2, "owner": {"outbound_drops": 0, "iq_tci_drop_queue_overflow_total": 10, "connections": 0}},
+                   {"by_type": {"renderer": [3, 140.0], "browser": [1, 60.0]}, "pss_mb": 200.0, "rss_mb": 260.0, "browser_cpu_pct": 120, "host_busy_pct": 50, "host_iowait_pct": 40, "load1": 2.0, "mem_avail_mb": 300,
+                    "swap_in_pages": 7, "swap_out_pages": 2, "browser_major_faults": 3, "owner": {"outbound_drops": 0, "iq_tci_drop_queue_overflow_total": 40, "connections": 2}}]
+        page = [(100.0, {"TaskDuration": 1.0, "ScriptDuration": 0.5, "JSHeapUsedSize": 20e6}), (110.0, {"TaskDuration": 9.0, "ScriptDuration": 3.5, "JSHeapUsedSize": 60e6})]
+        s = V.summarize_diagnostics(samples, page)
+        self.assertEqual(s["browser_pss_mb"], {"max": 200.0, "mean": 150.0})
+        self.assertEqual(s["browser_cpu_pct"], {"max": 120.0, "mean": 100.0})
+        self.assertEqual(s["host_iowait_pct"], {"max": 40.0, "mean": 30.0})
+        self.assertEqual((s["mem_available_mb_min"], s["swap_in_pages_total"], s["swap_out_pages_total"], s["browser_major_faults_total"]), (300, 12, 3, 5))
+        self.assertEqual(s["owner_counters"]["iq_tci_drop_queue_overflow_total"], {"first": 10, "last": 40, "delta": 30})
+        self.assertEqual(s["owner_counters"]["connections"]["delta"], 2)
+        self.assertEqual(s["pss_by_process_type_mb_max"], {"browser": {"processes": 1, "pss_mb": 60.0}, "renderer": {"processes": 3, "pss_mb": 140.0}},
+                         "where the memory went: the most each kind of process held")
+        self.assertEqual(s["page_main_thread_busy"], 0.8)
+        self.assertEqual(s["page_script_busy"], 0.3)
+        self.assertEqual(s["page_js_heap_used_mb_max"], round(60e6 / 1048576, 1))
+        self.assertEqual(V.summarize_diagnostics([], []), {"samples": 0}, "a run that measured nothing says so and invents nothing")
 
     def test_descendants_follow_the_parent_pids(self):
         with tempfile.TemporaryDirectory() as directory:

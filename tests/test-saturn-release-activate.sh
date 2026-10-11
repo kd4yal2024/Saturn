@@ -718,6 +718,8 @@ assert target["final_state"] == "done" and target["exit_code"] == 0 and target["
 assert target["driver"] == "native" and target["ready_at"] and target["finished_at"]
 assert target["role"] == "viewer" and target["role_enforced_by_bridge"] is True
 assert target["viewer_role_policy"] == "required" and target["legacy_fallback_used"] is False
+assert target["memory_enforcement"] == "cgroup" and target["page_visibility"] == "hidden"
+assert target["diagnostics_summary"]["samples"] == 3 and target["diagnostics_summary"]["browser_pss_mb"]["max"] == 120.0
 assert "Seccomp: 2" in target["isolation_detail"]["browser.sandbox_intact"]
 assert "MemoryMax" in target["isolation_detail"]["browser.memory_limit_applied"]
 assert target["isolation"]["memory"]["peak_bytes"] and target["sandbox_requested"] is True
@@ -734,6 +736,7 @@ assert option("--target-commit") == commit and option("--backend") == "xdma"
 assert option("--expect-rxc1") == "unarmed" and option("--launcher") == "direct"
 assert option("--viewer-role") == "required"       # a release that is not named as predating viewer-role enforcement must give the viewer role
 assert option("--isolation") == "required"          # the browser's sandbox and memory cap are verified, not assumed
+assert option("--memory-max") == "350M"             # the configured cap, unless a diagnostic check was asked to measure with another
 assert option("--guard-script") == guard
 assert option("--ready-url").endswith("/readyz") and "?" not in option("--ready-url")
 assert option("--owner-unit") == "saturn-bridge.service" and option("--auth-unit") == "saturn-go.service"
@@ -1242,6 +1245,26 @@ assert len(runs) == 1 and runs[0][runs[0].index("--target-commit") + 1] == sys.a
 assert "--no-exe-check" not in runs[0]
 PY
 ls -d "$TMP_ROOT"/state/deployments/validation/*-check-"${NEW_COMMIT:0:12}".* >/dev/null
+grep -Fq 'browser memory cap enforced by: cgroup' "$TMP_ROOT/last-run.log"
+grep -Fq 'browser resources: page hidden, memory (Pss) at most 120.0 MiB' "$TMP_ROOT/last-run.log"
+
+# A diagnostic check may measure with another memory cap, for that one check only: nothing else accepts the option.
+: >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
+"$ACTIVATOR" --check-reception --memory-max 600M >"$TMP_ROOT/last-run.log"
+python3 - "$SATURN_TEST_VALIDATOR_ARGS_LOG" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    runs = [json.loads(line) for line in handle if line.strip()]
+assert len(runs) == 1 and runs[0][runs[0].index("--memory-max") + 1] == "600M", runs
+PY
+expect_failure nonzero "$ACTIVATOR" --check-reception --memory-max
+expect_failure nonzero "$ACTIVATOR" --check-reception --memory-max bogus
+expect_failure nonzero "$ACTIVATOR" --check-reception --memory-max 0M
+expect_failure nonzero "$ACTIVATOR" --check-reception --memory-max 600
+expect_failure nonzero "$ACTIVATOR" --memory-max 600M "$NEW_COMMIT"
+grep -Fq -- '--memory-max applies to --check-reception only' "$TMP_ROOT/last-run.log"
+expect_failure nonzero "$ACTIVATOR" --reconcile-rollback --memory-max 600M
 
 export SATURN_TEST_VALIDATOR_STALL_COMMITS="$NEW_COMMIT"
 expect_failure nonzero "$ACTIVATOR" --check-reception

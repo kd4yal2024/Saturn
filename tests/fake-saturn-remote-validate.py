@@ -126,8 +126,11 @@ def run(argv):
         conditions["session.connected_as_viewer"] = {"ok": True}
     write_status(directory, state="ready", driver="native", ready_at=time.time(), conditions=conditions,
                  role="operator" if operator else "viewer", role_enforced_by_bridge=not operator, legacy_fallback_used=operator,
+                 memory_enforcement="cgroup", page_visibility="hidden",
+                 diagnostics={"summary": {"samples": 3, "browser_pss_mb": {"max": 120.0, "mean": 110.0}, "browser_cpu_pct": {"max": 30.0, "mean": 20.0},
+                                          "host_iowait_pct": {"max": 5.0, "mean": 2.0}, "page_main_thread_busy": 0.03}},
                  isolation={"processes": [{"pid": 7, "type": "renderer", "seccomp": 2, "no_new_privs": "1"}],
-                            "memory": {"configured": "350M", "max_bytes": "367001600", "swap_max": "0", "current_bytes": "1", "peak_bytes": "2"}})
+                            "memory": {"configured": option(argv, "--memory-max"), "max_bytes": "367001600", "swap_max": "0", "current_bytes": "1", "peak_bytes": "2"}})
     note(f"validator-ready {commit}")
     while not os.path.exists(os.path.join(directory, "stop")):
         time.sleep(0.05)

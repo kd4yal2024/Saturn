@@ -29,6 +29,14 @@ The isolation is verified, not assumed (--isolation required, the default): the 
 on any of its processes, and a seccomp filter confining every renderer, read from /proc) and the unit must carry the configured memory cap
 and no swap (read from systemd). A sandbox that was silently switched off, or a cap that never applied, fails the validation.
 
+Sized for a small appliance. The page runs in a background tab and the audio goes to Chrome's own fake output, which is what keeps a
+software-rendering browser from using several cores (measured: about 350% of a core down to about 18%, the same frames received and played);
+a browser is started only if the host has MemAvailable for the memory cap plus a reserve (host.memory_headroom). Where the kernel has no memory
+controller (the Raspberry Pi image boots with cgroup_disable=memory) --memory-enforcement watchdog makes this process the cap: it reads the
+browser's proportional memory four times a second and stops the unit above the cap, recorded as memory_enforcement=watchdog and never silent.
+Every condition that does not depend on the audio and display counters is read even after one of those fails, and the evidence keeps where the
+resources went (diagnostics): memory by process type, CPU, I/O wait, swap, the page's main-thread load, the owner's drop counters.
+
 Viewer role: the Bridge must assign the viewer role (--viewer-role required, the default). The one exception is a named compatibility
 fallback (--viewer-role legacy-fallback), meant only for a release whose Bridge predates viewer-role enforcement (the release being rolled
 back TO, or a running release that was installed before the fix). It is recorded as legacy_fallback_used and in its own condition, never
@@ -68,6 +76,10 @@ ALLOWED_COMMANDS = frozenset([
 # because reception started, not because anything was changed.
 RADIO_METRICS = ("frequency_hz", "sample_rate_hz", "ddc", "adc", "tx_keyed", "tx_stream")
 RADIO_TOP = ("rf_safe", "backend")
+
+# The host must have this much memory available beyond the browser's cap before a browser is started: validating must never push the
+# radio's own processes into swap.
+HEADROOM_MARGIN_BYTES = 32 * 1024 ** 2
 
 DEFAULT_LIMITS = {
     "ready_url_wait_s": 30.0,     # the services were just restarted: how long the target may take to report itself ready
@@ -141,15 +153,17 @@ class Recorder:
             os.replace(temporary, self.status_path)
 
     def update(self, **fields: Any) -> None:
-        self.data.update(fields)
+        with self.lock:
+            self.data.update(fields)
         self.write_status()
 
     def condition(self, identifier: str, ok: bool, detail: str = "") -> bool:
         """Record one verified fact. The first failure is the one reported as the failed condition."""
-        self.data["conditions"][identifier] = {"ok": bool(ok), "detail": detail, "at": round(now() - self.started, 3)}
+        with self.lock:
+            self.data["conditions"][identifier] = {"ok": bool(ok), "detail": detail, "at": round(now() - self.started, 3)}
+            if not ok and self.data["failed"] is None:
+                self.data["failed"] = {"id": identifier, "detail": detail}
         self.log("condition", id=identifier, ok=bool(ok), detail=detail)
-        if not ok and self.data["failed"] is None:
-            self.data["failed"] = {"id": identifier, "detail": detail}
         self.write_status()
         return bool(ok)
 
@@ -291,6 +305,234 @@ def descendants(proc_root: Path, root_pid: int) -> list[int]:
     return found
 
 
+def host_counters(proc_root: Path) -> dict[str, int]:
+    """System-wide numbers from /proc: CPU ticks (busy and waiting for I/O), swap traffic, major faults, free memory and the load. Whatever
+    the kernel does not provide is left out (this Pi has no pressure-stall information)."""
+    counters: dict[str, int] = {}
+    try:
+        cpu = [int(value) for value in (proc_root / "stat").read_text().splitlines()[0].split()[1:9]]
+        cpu += [0] * (8 - len(cpu))
+        counters.update(cpu_user=cpu[0] + cpu[1], cpu_system=cpu[2] + cpu[5] + cpu[6], cpu_idle=cpu[3], cpu_iowait=cpu[4], cpu_steal=cpu[7])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        for line in (proc_root / "vmstat").read_text().splitlines():
+            key, _, value = line.partition(" ")
+            if key in ("pswpin", "pswpout", "pgmajfault"):
+                counters[key] = int(value)
+    except (OSError, ValueError):
+        pass
+    try:
+        for line in (proc_root / "meminfo").read_text().splitlines():
+            key, _, rest = line.partition(":")
+            if key in ("MemAvailable", "SwapFree", "SwapTotal"):
+                counters[key] = int(rest.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        counters["load1_x100"] = int(float((proc_root / "loadavg").read_text().split()[0]) * 100)
+    except (OSError, ValueError, IndexError):
+        pass
+    return counters
+
+
+def process_usage(proc_root: Path, pid: int) -> dict[str, int] | None:
+    """One browser process: proportional (Pss) and resident memory in bytes, CPU ticks and major page faults. None once it is gone."""
+    base = proc_root / str(pid)
+    usage: dict[str, int] = {}
+    try:
+        fields = (base / "stat").read_text().rsplit(")", 1)[1].split()
+        usage.update(majflt=int(fields[9]), ticks=int(fields[11]) + int(fields[12]))
+    except (OSError, ValueError, IndexError):
+        pass
+    resident = pss = None
+    try:
+        for line in (base / "status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                resident = int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        for line in (base / "smaps_rollup").read_text().splitlines():
+            if line.startswith("Pss:"):
+                pss = int(line.split()[1]) * 1024
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+    if resident is None and pss is None:
+        return None
+    usage["rss"] = resident if resident is not None else int(pss or 0)
+    usage["pss"] = pss if pss is not None else usage["rss"]
+    return usage
+
+
+# What the owner counts when it has to drop something for a client that cannot keep up; read each second while the session is held.
+OWNER_DROP_COUNTERS = ("iq_tci_drop_queue_overflow_total", "iq_tci_queue_dropped_deliveries_total", "outbound_drops", "audio_dropped_s",
+                       "display_dropped_s", "host_buffer_drops", "connections")
+# What the page itself says about its main thread (DevTools Performance.getMetrics; durations are cumulative seconds).
+PAGE_METRICS = ("TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration", "JSHeapUsedSize", "JSHeapTotalSize")
+
+
+def summarize_diagnostics(samples: list[dict[str, Any]], page: list[tuple[float, dict[str, float]]]) -> dict[str, Any]:
+    """Where the resources went while the browser ran: peaks, means and totals from the one-second samples and the page's own metrics."""
+    def column(key: str) -> list[float]:
+        return [float(s[key]) for s in samples if isinstance(s.get(key), (int, float))]
+
+    summary: dict[str, Any] = {"samples": len(samples)}
+    for key, name in (("pss_mb", "browser_pss_mb"), ("rss_mb", "browser_rss_mb"), ("browser_cpu_pct", "browser_cpu_pct"),
+                      ("host_busy_pct", "host_busy_pct"), ("host_iowait_pct", "host_iowait_pct"), ("load1", "load1")):
+        values = column(key)
+        if values:
+            summary[name] = {"max": round(max(values), 1), "mean": round(sum(values) / len(values), 1)}
+    for key, name in (("mem_avail_mb", "mem_available_mb_min"),):
+        values = column(key)
+        if values:
+            summary[name] = round(min(values))
+    for key in ("swap_in_pages", "swap_out_pages", "browser_major_faults"):
+        values = column(key)
+        if values:
+            summary[key + "_total"] = int(sum(values))
+    heaviest: dict[str, list[float]] = {}
+    for s in samples:
+        for kind, counted in (s.get("by_type") or {}).items():
+            if kind not in heaviest or counted[1] > heaviest[kind][1]:
+                heaviest[kind] = [counted[0], counted[1]]
+    if heaviest:
+        summary["pss_by_process_type_mb_max"] = {kind: {"processes": int(n), "pss_mb": mb} for kind, (n, mb) in sorted(heaviest.items())}
+    drops: dict[str, Any] = {}
+    firsts = next((s["owner"] for s in samples if isinstance(s.get("owner"), dict)), None)
+    lasts = next((s["owner"] for s in reversed(samples) if isinstance(s.get("owner"), dict)), None)
+    if firsts and lasts:
+        for key in OWNER_DROP_COUNTERS:
+            if isinstance(firsts.get(key), (int, float)) and isinstance(lasts.get(key), (int, float)):
+                drops[key] = {"first": firsts[key], "last": lasts[key], "delta": lasts[key] - firsts[key]}
+    if drops:
+        summary["owner_counters"] = drops
+    if len(page) >= 2:
+        (t0, m0), (t1, m1) = page[0], page[-1]
+        wall = t1 - t0
+        if wall > 0:
+            for key, name in (("TaskDuration", "page_main_thread_busy"), ("ScriptDuration", "page_script_busy")):
+                if key in m0 and key in m1:
+                    summary[name] = round((m1[key] - m0[key]) / wall, 2)
+        if "JSHeapUsedSize" in m1:
+            summary["page_js_heap_used_mb_max"] = round(max(m.get("JSHeapUsedSize", 0) for _, m in page) / 1048576, 1)
+    return summary
+
+
+class BrowserWatch(threading.Thread):
+    """Four times a second, reads what the browser's processes use. Where the kernel cannot apply a memory cap (the memory cgroup controller
+    is disabled on the Raspberry Pi image), this is the cap: the browser's proportional memory is compared with it and the unit is stopped
+    above it. Either way it keeps the diagnostics: where the CPU, the memory and the disk went while the session was held."""
+
+    def __init__(self, validator: "Validator", interval: float = 0.25) -> None:
+        super().__init__(daemon=True)
+        self.validator = validator
+        self.interval = interval
+        self.halt = threading.Event()
+        self.exceeded = threading.Event()
+        self.exceeded_detail = ""
+        self.cap = parse_size(validator.args.memory_max)
+        self.group: str | None = None
+        self.samples: list[dict[str, Any]] = []
+        self.peak_pss = 0
+        self.peak_rss = 0
+        self.steps = 0
+        self.errors = 0
+        self.first_at: float | None = None
+        self.last_at: float | None = None
+        self.max_gap = 0.0
+        self._previous: tuple[float, dict[str, int], int, int] | None = None
+
+    def run(self) -> None:
+        while not self.halt.wait(self.interval):
+            try:
+                self.step()
+            except Exception:  # noqa: BLE001  (watching must never take the validation down; the count is part of the evidence)
+                self.errors += 1
+
+    def pids(self) -> list[int]:
+        validator = self.validator
+        if validator.args.launcher != "systemd":
+            return validator.browser_pids({})
+        if self.group is None:
+            self.group = validator.unit_properties(("ControlGroup",)).get("ControlGroup") or None
+            if self.group is None:
+                return []
+        return validator.browser_pids({"ControlGroup": self.group})
+
+    def step(self) -> None:
+        validator = self.validator
+        moment = time.monotonic()
+        proc_root = Path(validator.args.proc_root)
+        pairs = [(pid, process_usage(proc_root, pid)) for pid in self.pids()]
+        pairs = [(pid, u) for pid, u in pairs if u]
+        usage = [u for _, u in pairs]
+        if not usage:
+            return
+        pss, rss = sum(u["pss"] for u in usage), sum(u["rss"] for u in usage)
+        self.peak_pss, self.peak_rss = max(self.peak_pss, pss), max(self.peak_rss, rss)
+        if self.first_at is None:
+            self.first_at = moment
+        if self.last_at is not None:
+            self.max_gap = max(self.max_gap, moment - self.last_at)
+        self.last_at = moment
+        self.steps += 1
+        if validator.memory_enforcement == "watchdog" and pss > self.cap and not self.exceeded.is_set():
+            self.exceeded_detail = f"the browser's processes use {pss / 1048576:.0f} MiB (proportional set size) against the {validator.args.memory_max} cap"
+            validator.recorder.condition("browser.memory_within_cap", False, "MEMORY CAP EXCEEDED, enforced by the watchdog: " + self.exceeded_detail)
+            self.exceeded.set()
+            validator.kill_browser()
+        if self.steps % max(1, round(1.0 / self.interval)) == 0:
+            self.sample(moment, pairs, pss, rss)
+
+    def sample(self, moment: float, pairs: list[tuple[int, dict[str, int]]], pss: int, rss: int) -> None:
+        validator = self.validator
+        proc_root = Path(validator.args.proc_root)
+        host = host_counters(proc_root)
+        usage = [u for _, u in pairs]
+        ticks, majflt = sum(u.get("ticks", 0) for u in usage), sum(u.get("majflt", 0) for u in usage)
+        kinds: dict[str, list[float]] = {}
+        for pid, u in pairs:
+            snapshot = proc_snapshot(proc_root, pid)
+            kind = snapshot["type"] if snapshot else "unknown"
+            counted = kinds.setdefault(kind, [0, 0.0])
+            counted[0] += 1
+            counted[1] += u["pss"] / 1048576
+        entry: dict[str, Any] = {"t": round(now() - validator.recorder.started, 1), "procs": len(usage),
+                                 "pss_mb": round(pss / 1048576, 1), "rss_mb": round(rss / 1048576, 1),
+                                 "by_type": {kind: [int(n), round(mb, 1)] for kind, (n, mb) in sorted(kinds.items())}}
+        if "MemAvailable" in host:
+            entry["mem_avail_mb"] = round(host["MemAvailable"] / 1048576)
+        if "SwapTotal" in host and "SwapFree" in host:
+            entry["swap_used_mb"] = round((host["SwapTotal"] - host["SwapFree"]) / 1048576)
+        if "load1_x100" in host:
+            entry["load1"] = host["load1_x100"] / 100
+        if self._previous is not None:
+            before_at, before, before_ticks, before_majflt = self._previous
+            seconds = moment - before_at
+            if seconds > 0 and ticks >= before_ticks:
+                entry["browser_cpu_pct"] = round(100 * (ticks - before_ticks) / os.sysconf("SC_CLK_TCK") / seconds)
+            names = ("cpu_user", "cpu_system", "cpu_idle", "cpu_iowait", "cpu_steal")
+            if all(name in host and name in before for name in names):
+                total = sum(host[name] - before[name] for name in names)
+                if total > 0:
+                    entry["host_busy_pct"] = round(100 * (total - (host["cpu_idle"] - before["cpu_idle"]) - (host["cpu_iowait"] - before["cpu_iowait"])) / total)
+                    entry["host_iowait_pct"] = round(100 * (host["cpu_iowait"] - before["cpu_iowait"]) / total)
+            for key, name in (("pswpin", "swap_in_pages"), ("pswpout", "swap_out_pages")):
+                if key in host and key in before:
+                    entry[name] = host[key] - before[key]
+            entry["browser_major_faults"] = max(0, majflt - before_majflt)
+        self._previous = (moment, host, ticks, majflt)
+        try:
+            metrics = validator.owner.perf().get("metrics", {})
+            entry["owner"] = {key: metrics[key] for key in OWNER_DROP_COUNTERS if isinstance(metrics.get(key), (int, float))}
+        except (OSError, ValueError):
+            pass
+        if len(self.samples) < 400:
+            self.samples.append(entry)
+
+
 def sandbox_verdict(processes: list[dict[str, Any]]) -> tuple[bool, str]:
     """The browser's sandbox is intact when no process was started without it and every renderer is confined by a seccomp filter
     (Seccomp: 2). With --no-sandbox the renderers show Seccomp: 0, which is what makes this evidence rather than a flag check."""
@@ -318,6 +560,27 @@ def memory_verdict(props: dict[str, str], configured: str) -> tuple[bool, str]:
     return True, f"MemoryMax {limit} bytes ({configured}) and MemorySwapMax 0 are applied to the browser's unit; {props.get('MemoryCurrent', 'unknown')} bytes in use"
 
 
+def watchdog_memory_verdict(props: dict[str, str], configured: str, watch: dict[str, Any]) -> tuple[bool, str]:
+    """Where the kernel has no memory controller the cap is enforced by this process. That counts as applied only while the unit is the OOM
+    killer's first choice and the browser's memory is really being read, without gaps, and has not exceeded the cap."""
+    wanted = parse_size(configured)
+    if props.get("OOMScoreAdjust") != "1000":
+        return False, f"the browser's unit is not the OOM killer's first choice (OOMScoreAdjust={props.get('OOMScoreAdjust', 'unreadable')!r}, wanted 1000)"
+    if watch["exceeded"]:
+        return False, "the browser exceeded its memory cap and was stopped: " + str(watch.get("detail", ""))
+    if watch["steps"] < 2 or watch["peak"] <= 0:
+        return False, f"the browser's memory could not be measured ({watch['steps']} reading(s)), so the cap was not being enforced"
+    if watch["age"] > 2.0:
+        return False, f"the memory watchdog stopped reading {watch['age']:.1f} s ago"
+    if watch["max_gap"] > 3.0:
+        return False, f"the memory watchdog went {watch['max_gap']:.1f} s without a reading"
+    if watch["peak"] > wanted:
+        return False, f"the browser used {watch['peak'] / 1048576:.0f} MiB against the {configured} cap"
+    return True, (f"MEMORY CAP ENFORCED BY THE VALIDATOR'S WATCHDOG, not by the kernel (the memory cgroup controller is not enabled here): the browser's "
+                  f"proportional memory is read {int(1 / 0.25)} times a second and its unit is stopped above {configured}; OOMScoreAdjust=1000 makes it the OOM "
+                  f"killer's first choice; peak so far {watch['peak'] / 1048576:.0f} MiB over {watch['steps']} readings")
+
+
 def spki_pin(certificate: Path) -> str:
     """base64(sha256(SubjectPublicKeyInfo)) of the proxy's own certificate: pin exactly it instead of ignoring every certificate error."""
     key = subprocess.run(["openssl", "x509", "-in", str(certificate), "-pubkey", "-noout"], capture_output=True, check=True, timeout=15).stdout
@@ -330,7 +593,9 @@ def browser_flags(user_data_dir: str, spki: str | None, sandbox: bool) -> list[s
         "--headless=new", "--remote-debugging-pipe", f"--user-data-dir={user_data_dir}", "--disable-gpu", "--no-first-run",
         "--no-default-browser-check", "--disable-extensions", "--disable-background-networking", "--disable-sync",
         "--disable-component-update", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required",
-        "--window-size=800,500", "--force-device-scale-factor=1", "--alsa-output-device=null", "--js-flags=--max-old-space-size=160",
+        "--window-size=800,500", "--force-device-scale-factor=1", "--disable-audio-output", "--js-flags=--max-old-space-size=160",
+        # a small appliance: fewer, lighter rendering threads and no software 3D rasteriser (measured: half the CPU and about 50 MiB less)
+        "--enable-low-end-device-mode", "--disable-software-rasterizer", "--num-raster-threads=1",
     ]
     if spki:
         flags.append(f"--ignore-certificate-errors-spki-list={spki}")
@@ -355,7 +620,7 @@ def build_launch_command(mode: str, browser: str, flags: list[str], unit: str, m
         "DynamicUser=yes", "PrivateTmp=yes", "PrivateDevices=yes", "ProtectSystem=strict", "ProtectHome=yes", "NoNewPrivileges=yes",
         "ProtectKernelTunables=yes", "ProtectControlGroups=yes", "RestrictSUIDSGID=yes", "LockPersonality=yes",
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK", "IPAddressDeny=any", "IPAddressAllow=localhost",
-        f"MemoryMax={memory_max}", "MemorySwapMax=0", "TasksMax=300", "CPUWeight=20", "Nice=10", "IOSchedulingClass=idle",
+        f"MemoryMax={memory_max}", "MemorySwapMax=0", "OOMScoreAdjust=1000", "TasksMax=300", "CPUWeight=20", "Nice=10", "IOSchedulingClass=idle",
         f"RuntimeMaxSec={int(max_seconds) + 30}", "Environment=HOME=/tmp", "Environment=PULSE_SERVER=none", "WorkingDirectory=/tmp",
     ]
     command = [systemd_run, "--quiet", "--collect", "--pipe", f"--unit={unit}"]
@@ -476,6 +741,7 @@ LEGACY_SNAPSHOT = """JSON.stringify((() => ({
   role: state.remoteClientRole, wsReadyState: state.ws ? state.ws.readyState : null,
   audioContextState: state.audioCtx ? state.audioCtx.state : null,
   codec: rxAudioCodecSession.accepted, opusFrames: rxOpus.opusFrames, pcmFrames: rxOpus.pcmFrames, decodeErrors: rxOpus.decodeErrors, lateDrops: rxOpus.lateDrops,
+  decodedFrames: rxOpus.decodedFrames, decoderFramesOutput: rxOpus.decoderFramesOutput, malformedFrames: rxOpus.malformedFrames, resyncs: rxOpus.resyncs,
   audioFramesPlayed: state.audioFramesPlayed, lastAudioSequence: state.lastAudioSequence, audioSeqGaps: state.audioSeqGapCount,
   underruns: state.rxWorkletUnderruns, overflows: state.rxWorkletOverflows, queuedMs: state.rxWorkletQueuedMs,
   renderSource: state.displayRenderSource, displayRows: state.displayServerRowsReceived, iqFrames: state.iqFrameVersion, rxIqFrames: state.rxIqFrameVersion,
@@ -521,6 +787,10 @@ class Validator:
         self.baseline_radio: dict[str, Any] = {}
         self.baseline_connections = 0
         self.first_failure_time: float | None = None
+        self.memory_enforcement = self.choose_memory_enforcement()
+        self.watch: BrowserWatch | None = None
+        self.page_metrics: list[tuple[float, dict[str, float]]] = []
+        self._page_metrics_at = 0.0
 
     # ---- small helpers
     def failed(self) -> bool:
@@ -548,6 +818,42 @@ class Validator:
         if self.check_deadline():
             return self.recorder.condition("validation.timeout", False, f"the {self.limits['max_seconds']:g} s limit for the whole validation was reached while {doing}")
         return self.recorder.condition(identifier, False, f"the validation was stopped while {doing}")
+
+    def choose_memory_enforcement(self) -> str:
+        """cgroup: the kernel applies MemoryMax. watchdog: it cannot (the memory controller is not enabled on this kernel), so this process
+        enforces the cap itself and says so. Explicit on the command line; 'auto' asks the kernel and assumes cgroup when it cannot tell."""
+        choice = getattr(self.args, "memory_enforcement", "auto")
+        if choice != "auto":
+            return choice
+        try:
+            controllers = (Path(self.args.cgroup_root) / "cgroup.controllers").read_text().split()
+        except OSError:
+            return "cgroup"
+        return "cgroup" if "memory" in controllers else "watchdog"
+
+    def kill_browser(self) -> None:
+        """Stop the browser's unit (or process group) at once. Used by the memory watchdog from its own thread."""
+        try:
+            if self.args.launcher == "systemd":
+                subprocess.run([self.args.systemctl, "kill", "--signal=SIGKILL", self.unit + ".service"], capture_output=True, timeout=10)
+            else:
+                self._kill_group(signal.SIGKILL)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        self.recorder.log("browser_killed_by_memory_watchdog")
+
+    def note_page_metrics(self) -> None:
+        """Once a second at most: the page's own account of its main thread. Diagnostic only; it can never fail a validation."""
+        if self.cdp is None or self.session is None or self.cdp.closed.is_set() or self.cdp.unresponsive or time.monotonic() - self._page_metrics_at < 1.0:
+            return
+        self._page_metrics_at = time.monotonic()
+        try:
+            reply = self.cdp.call("Performance.getMetrics", session=self.session, timeout=3)
+        except CdpError:
+            return
+        wanted = {m["name"]: float(m["value"]) for m in reply.get("metrics", []) if m.get("name") in PAGE_METRICS and isinstance(m.get("value"), (int, float))}
+        if wanted and len(self.page_metrics) < 400:
+            self.page_metrics.append((time.monotonic(), wanted))
 
     # ---- phase 1: the services
     def check_release(self) -> bool:
@@ -592,6 +898,20 @@ class Validator:
         pid = self.owner.main_pid(self.args.owner_unit)
         return {"perf": perf, "metrics": metrics, "age_s": age, "pid_matches": pid is not None and metrics.get("pid") == pid, "service_pid": pid}
 
+    def check_memory_headroom(self) -> bool:
+        """Before the browser is started: the host has the memory free that the cap lets the browser take, plus a margin. Where it has not, the
+        validation is refused rather than started, so the radio's processes are never the ones that pay for it."""
+        if self.args.isolation != "required":
+            return True
+        wanted = parse_size(self.args.memory_max) + HEADROOM_MARGIN_BYTES
+        available = host_counters(Path(self.args.proc_root)).get("MemAvailable")
+        if available is None:
+            return self.recorder.condition("host.memory_headroom", False, "the host's available memory could not be read, so it cannot be shown that the browser fits")
+        return self.recorder.condition(
+            "host.memory_headroom", available >= wanted,
+            f"{available / 1048576:.0f} MiB available; the browser may take up to {self.args.memory_max} and {HEADROOM_MARGIN_BYTES // 1048576} MiB are kept in reserve"
+            + ("" if available >= wanted else f" ({wanted / 1048576:.0f} MiB needed): no browser was started"))
+
     def baseline(self) -> bool:
         view = self.read_owner()
         if view is None:
@@ -635,6 +955,9 @@ class Validator:
         cdp.on("Fetch.authRequired", self._on_auth)
         cdp.on("Fetch.requestPaused", self._on_paused)
         cdp.on("Page.javascriptDialogOpening", self._on_dialog)
+        self.recorder.update(memory_enforcement=self.memory_enforcement)
+        self.watch = BrowserWatch(self)
+        self.watch.start()
         return True
 
     def _drain_stderr(self) -> None:
@@ -699,9 +1022,21 @@ class Validator:
         page = next((t for t in targets if t.get("type") == "page"), None)
         if page is None:
             return self.recorder.condition("browser.started", False, "the browser has no page target")
-        self.session = cdp.call("Target.attachToTarget", {"targetId": page["targetId"], "flatten": True})["sessionId"]
+        target_id = page["targetId"]
+        # The page being validated runs in a background tab; the tab the browser opened stays in front. A tab nobody can see is not painted or
+        # composited, which is where a software-rendering browser spends its CPU (and the Pi has little). The page's data, its decoder and its
+        # audio are the page's own and run as before; the page_visibility recorded below shows it really was hidden.
+        try:
+            target_id = cdp.call("Target.createTarget", {"url": "about:blank", "background": True})["targetId"]
+        except (CdpError, KeyError) as error:
+            self.recorder.log("background_tab_unavailable", error=str(error))
+        self.session = cdp.call("Target.attachToTarget", {"targetId": target_id, "flatten": True})["sessionId"]
         for domain in ("Page", "Runtime", "Network", "Log"):
             cdp.call(f"{domain}.enable", session=self.session)
+        try:
+            cdp.call("Performance.enable", session=self.session)
+        except CdpError:
+            pass  # diagnostics only
         cdp.call("Fetch.enable", {"handleAuthRequests": True}, session=self.session)
         guard = Path(self.args.guard_script).read_text(encoding="utf-8")
         cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": guard}, session=self.session)
@@ -721,7 +1056,11 @@ class Validator:
             # own response proves the page being validated has replaced it.
             if present in ("object", "undefined") and self.document_status is not None:
                 self.driver = "native" if present == "object" else "legacy"
-                self.recorder.update(driver=self.driver)
+                try:
+                    visibility = self.evaluate("document.visibilityState", timeout=5)
+                except CdpError:
+                    visibility = None
+                self.recorder.update(driver=self.driver, page_visibility=visibility)
                 ok = self.document_status == 200 and not self.exceptions
                 detail = f"main document HTTP {self.document_status}; page driver {self.driver}; {len(self.exceptions)} uncaught exception(s)"
                 if self.exceptions:
@@ -795,39 +1134,77 @@ class Validator:
         props: dict[str, str] = {}
         if self.args.launcher == "systemd":
             try:
-                props = self.unit_properties(("ControlGroup", "MemoryMax", "MemorySwapMax", "MemoryCurrent", "ActiveState"))
+                props = self.unit_properties(("ControlGroup", "MemoryMax", "MemorySwapMax", "MemoryCurrent", "ActiveState", "OOMScoreAdjust"))
             except (OSError, subprocess.SubprocessError) as error:
                 self.recorder.log("unit_properties_failed", error=str(error))
         pids = self.browser_pids(props)
         processes = [p for p in (proc_snapshot(Path(self.args.proc_root), pid) for pid in pids) if p]
         sandbox_ok, sandbox_detail = sandbox_verdict(processes)
-        if self.args.launcher == "systemd":
+        if self.args.launcher == "systemd" and self.memory_enforcement == "watchdog":
+            memory_ok, memory_detail = watchdog_memory_verdict(props, self.args.memory_max, self.watch_state())
+        elif self.args.launcher == "systemd":
             memory_ok, memory_detail = memory_verdict(props, self.args.memory_max)
         else:
             memory_ok, memory_detail = False, "the browser was not started in a systemd unit, so no memory cap is applied to it"
         self.recorder.update(isolation={
             "processes": [{k: p[k] for k in ("pid", "type", "seccomp", "no_new_privs")} for p in processes],
-            "memory": {"configured": self.args.memory_max, "max_bytes": props.get("MemoryMax"), "swap_max": props.get("MemorySwapMax"),
-                       "current_bytes": props.get("MemoryCurrent")},
+            "memory": {"configured": self.args.memory_max, "cap_bytes": parse_size(self.args.memory_max), "enforcement": self.memory_enforcement,
+                       "max_bytes": props.get("MemoryMax"), "swap_max": props.get("MemorySwapMax"), "current_bytes": props.get("MemoryCurrent"),
+                       "oom_score_adjust": props.get("OOMScoreAdjust")},
         })
         ok = self.recorder.condition("browser.sandbox_intact", sandbox_ok, sandbox_detail)
         if self.args.isolation == "required":
             ok &= self.recorder.condition("browser.memory_limit_applied", memory_ok, memory_detail)
         return bool(ok)
 
+    def watch_state(self) -> dict[str, Any]:
+        watch = self.watch
+        if watch is None or watch.last_at is None:
+            return {"steps": 0, "max_gap": 0.0, "age": float("inf"), "peak": 0, "exceeded": False, "errors": 0}
+        return {"steps": watch.steps, "max_gap": watch.max_gap, "age": time.monotonic() - watch.last_at, "peak": watch.peak_pss,
+                "exceeded": watch.exceeded.is_set(), "detail": watch.exceeded_detail, "errors": watch.errors}
+
     def record_memory_peak(self) -> None:
-        """How close the browser came to its cap (informational: a browser that hit the cap would already have failed the run)."""
-        if self.args.launcher != "systemd" or self.args.isolation == "off":
+        """How close the browser came to its cap. The kernel's figure when it keeps one (systemd 255 and a memory controller); otherwise what
+        this process measured (proportional set size), and which of the two it is."""
+        if self.args.isolation == "off":
             return
-        try:
-            props = self.unit_properties(("MemoryPeak", "MemoryCurrent"))
-        except (OSError, subprocess.SubprocessError):
-            return
+        props: dict[str, str] = {}
+        if self.args.launcher == "systemd":
+            try:
+                props = self.unit_properties(("MemoryPeak", "MemoryCurrent"))
+            except (OSError, subprocess.SubprocessError):
+                pass
         isolation = dict(self.recorder.data.get("isolation") or {})
         memory = dict(isolation.get("memory") or {})
-        memory.update(peak_bytes=props.get("MemoryPeak"), current_bytes_at_end=props.get("MemoryCurrent"))
+        peak = props.get("MemoryPeak", "")
+        if peak.isdigit():
+            memory.update(peak_bytes=peak, peak_source="systemd MemoryPeak")
+        elif self.watch is not None and self.watch.peak_pss:
+            memory.update(peak_bytes=str(self.watch.peak_pss), peak_source="validator sampling (proportional set size)")
+        else:
+            memory.update(peak_bytes=peak or None)
+        memory["current_bytes_at_end"] = props.get("MemoryCurrent")
         isolation["memory"] = memory
         self.recorder.update(isolation=isolation)
+
+    def finish_watch(self) -> None:
+        """Stop reading, keep what was read, and (where the validator is the memory cap) say whether the browser stayed within it."""
+        watch = self.watch
+        if watch is None:
+            return
+        watch.halt.set()
+        watch.join(timeout=3)
+        self.recorder.update(diagnostics={
+            "summary": summarize_diagnostics(watch.samples, self.page_metrics), "samples": watch.samples,
+            "watch": {"readings": watch.steps, "errors": watch.errors, "longest_gap_s": round(watch.max_gap, 2),
+                      "peak_pss_bytes": watch.peak_pss, "peak_rss_bytes": watch.peak_rss}})
+        if self.memory_enforcement == "watchdog" and self.args.launcher == "systemd" and self.args.isolation == "required":
+            within = not watch.exceeded.is_set() and watch.peak_pss <= watch.cap and watch.steps >= 2
+            self.recorder.condition(
+                "browser.memory_within_cap", within,
+                f"the browser's peak was {watch.peak_pss / 1048576:.0f} MiB (proportional) against the {self.args.memory_max} cap, over {watch.steps} readings"
+                if within else (watch.exceeded_detail or f"not enough readings ({watch.steps}) to show the browser stayed within {self.args.memory_max}"))
 
     def measure(self) -> bool:
         self.recorder.update(phase="measuring")
@@ -840,6 +1217,7 @@ class Validator:
             if self.alarm():
                 return False
             last = self.snapshot()
+            self.note_page_metrics()
             elapsed = now() - base_t
             if elapsed >= self.limits["window_s"]:
                 checks = self.data_checks(base, last)
@@ -915,6 +1293,8 @@ class Validator:
 
     def alarm(self) -> bool:
         """True (after recording the exact offending frames as the failed condition) once a frame left the browser that may not have."""
+        if self.watch is not None and self.watch.exceeded.is_set():
+            return True
         if self.wire_alarm.is_set():
             self.check_wire()
             return True
@@ -959,6 +1339,7 @@ class Validator:
                 self.recorder.condition("hold.session_alive", False, str(error))
                 return
             self.last_snapshot = snap
+            self.note_page_metrics()
             if not snap.get("connected"):
                 self.recorder.condition("hold.session_alive", False, "the held session lost its connection")
                 return
@@ -1002,6 +1383,7 @@ class Validator:
         if self.profile_dir:
             import shutil
             shutil.rmtree(self.profile_dir, ignore_errors=True)
+        self.finish_watch()
         self.recorder.condition("cleanup.browser_gone", self.process is None or self.process.poll() is not None, "the temporary browser and its profile are gone")
         deadline = now() + self.limits["cleanup_s"]
         released, last = False, ""
@@ -1033,6 +1415,11 @@ class Validator:
         except (ProcessLookupError, PermissionError):
             pass
 
+    def browser_still_running(self) -> bool:
+        return (self.process is not None and self.process.poll() is None and self.cdp is not None and not self.cdp.closed.is_set()
+                and not self.stop_requested.is_set() and not self.timed_out.is_set()
+                and not (self.watch is not None and self.watch.exceeded.is_set()))        # a browser stopped for its memory is not read further
+
     # ---- the whole run
     def run(self) -> int:
         recorder = self.recorder
@@ -1045,20 +1432,24 @@ class Validator:
                 recorder.condition("proxy.credential", False, str(error))
                 raise _Abort
             recorder.log("credential", configured=bool(self.credential))
-            if not self.check_release() or not self.baseline():
+            if not self.check_release() or not self.baseline() or not self.check_memory_headroom():
                 raise _Abort
             self.launch()
-            if not self.attach_and_navigate() or not self.check_guard() or not self.start_session() or not self.measure():
+            data_ok = self.attach_and_navigate() and self.check_guard() and self.start_session() and self.measure()
+            if not data_ok and not self.browser_still_running():
                 raise _Abort
-            if not self.check_isolation():
-                raise _Abort
-            if not self.check_owner_and_wire():
+            # The sandbox, the memory cap, the owner's view, the wire and the radio do not depend on the audio and display counters: read them
+            # even when one of those failed, so one run says everything it can. The first failure is still the one reported as the failed condition.
+            isolated = self.check_isolation()
+            owned = self.check_owner_and_wire()
+            if not (data_ok and isolated and owned):
                 raise _Abort
             self.hold()
         except _Abort:
             pass
         except CdpError as error:
-            recorder.condition("browser.responsive", False, str(error))
+            if not self.alarm():
+                recorder.condition("browser.responsive", False, str(error))
         except Exception as error:  # report the exact failure, then clean up
             recorder.condition("validator.internal", False, repr(error))
         finally:
@@ -1214,6 +1605,10 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--browser", default="/usr/bin/chromium")
     run.add_argument("--launcher", choices=("systemd", "direct"), default="systemd")
     run.add_argument("--memory-max", default="350M")
+    run.add_argument("--memory-enforcement", choices=("auto", "cgroup", "watchdog"), default="auto",
+                     help="cgroup: the kernel applies MemoryMax. watchdog: the kernel cannot (no memory controller, e.g. cgroup_disable=memory on the "
+                          "Raspberry Pi image), so this process reads the browser's proportional memory and stops its unit above the cap; recorded as "
+                          "such. auto: cgroup when the kernel offers a memory controller, watchdog when it plainly does not")
     run.add_argument("--no-sandbox", action="store_true", help="test rigs only: under --isolation required it fails browser.sandbox_intact")
     run.add_argument("--isolation", choices=("required", "sandbox", "off"), default="required",
                      help="required: verify from the host that the browser's sandbox is in force and its unit carries the memory cap (the update "
