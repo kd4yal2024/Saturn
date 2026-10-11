@@ -65,6 +65,8 @@ original record. The message says the activation did not succeed. It still refus
 **4. Nothing depends on scratch.** Report, procedure, their test and the CI steps that run them are in the source. The procedure cannot name the commit it is stored in, so
 the commit is given once (`PIN=<full sha> bash g2_headless_steps.sh build`), checked against what the branch resolves to, remembered in `~/.g2_headless_pin`, and every later
 stage refuses a different one. The three hashes it pins (helper, validator, guard) are those of the committed blobs, and `tests/test-g2-headless-steps.sh` fails if they drift.
+The release manifest is held to the same commit: the `validate` stage (staged bundle) and the `install` stage (installed copy) both require `release-manifest.json` to name exactly
+the pinned commit as a clean tree, with every component built from it, and `status` prints the same finding. So the script, the build and the release manifest are demonstrably one commit.
 
 ## Evidence (all run on this machine; the G2 has run none of it)
 
@@ -73,7 +75,7 @@ stage refuses a different one. The three hashes it pins (helper, validator, guar
 | validator tests (fake DevTools browser + fake owner + fake unit/cgroup/proc) | 110 pass; 27 mutations of the new rules (sandbox, memory, role policy, cmdline reading, peak, defaults): all killed after closing two gaps (an unreachable guard re-check was deleted; the fake systemctl now records which unit was queried) |
 | activation helper tests (incident control; success with nobody connected; stalled audio; rollback with and without verified reception; policy by release; isolation failure; interrupted helper; reconcile) | pass; 28 mutations of the new logic: all killed after adding a near-miss-commit case and a reconcile-summary assertion |
 | installer for the helper/validator/guard | pass |
-| staged procedure (`tests/test-g2-headless-steps.sh`): pins, commit lock, verdict on about 50 variants of evidence, the whole `check` stage with stubbed host commands | pass; 24 mutations: all killed |
+| staged procedure (`tests/test-g2-headless-steps.sh`): pins, commit lock, manifest-names-the-pin on 10 manifests through the `validate` and `install` stages, verdict on about 50 variants of evidence, the whole `check` stage with stubbed host commands | pass; 24 + 9 mutations: all killed |
 | real components on loopback: replay Bridge + saturn-go proxy (TLS, basic auth, pinned certificate) + the real page + **real Chrome 153 with its sandbox ON** | **59/59 checks.** New page + fixed Bridge; old page + fixed Bridge; display data stopped mid-measurement (the exact failed condition is kept, the browser and connection are gone); a real Chrome started with `--no-sandbox` is refused; old page + **old Bridge** (the rollback target's situation): the operator role was seen once and refused under `required`, and seen once and accepted as a recorded fallback with the guard proven active, 107 frames all on the allowlist and the radio unchanged. In every sandboxed run the real Chrome showed 5 renderers, all `Seccomp: 2`. |
 | shellcheck on every shell file CI checks | clean (see "Found in my own earlier push") |
 | Bridge (unchanged since `dfb0b19`): 462 tests; web: 761 tests, typecheck, seam check | pass at the earlier head; no Bridge or web file changed since |
@@ -82,9 +84,11 @@ stage refuses a different one. The three hashes it pins (helper, validator, guar
 
 * `tests/test-saturn-release-activate.sh` as pushed would have failed the repository's shellcheck gate (SC2012/SC2034/SC2123/SC2030/SC2031). Fixed; the new files are in the
   CI lists and the validator, installer-guard and procedure tests now run in CI.
-* `cargo fmt --check` fails on the Stage-A Bridge sources (`client.rs`, `command_queue.rs`, `tci/tests.rs`, `tx_thread.rs`, `xdma_backend.rs`, `tests/*.rs`) at `f10a087` already;
-  `main` is clean. I have **not** touched them (a formatting-only commit would change Bridge source on the way to the appliance). It would fail the CI format step if this branch
-  were opened as a pull request; say so if you want that commit.
+* `cargo fmt -- --check` failed on the Stage-A sources already at `f10a087` (it passes at `main` `861f0fb`), which would fail the CI format step for this branch: nine files of the
+  Bridge crate (`src/tci/{client,command_queue,tests}.rs`, `src/tx_thread.rs`, `src/xdma_backend.rs`, `tests/{common/mod,replay_e2e,replay_harness,replay_transport_screen}.rs`)
+  and one assertion in `rust-server/src/main.rs` (from `a8fcad2`; my earlier note that `main` was clean covered only the Bridge crate). Two formatting-only commits fix them, with the
+  toolchain CI pins (1.98.1): re-wrapping, re-indentation, and the braces rustfmt puts around closure bodies it wraps. Every changed file was compared with its previous text: the same
+  characters once whitespace and commas are ignored, except those closure braces. No other file was touched; `cargo fmt -- --check` is clean in both crates.
 
 ## Sequence on the G2 (you run the sudo stages; I read the evidence; ~nothing is restarted before `activate`)
 

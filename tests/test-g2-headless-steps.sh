@@ -39,6 +39,67 @@ out="$(PIN=$B run check)"; [[ "$out" == *"PIN=$B but the build stage pinned $A"*
 out="$(PIN=$B run build)"; [[ "$out" == *"says $A"* ]] || fail "build re-pinned silently: $out"
 [[ "$(cat "$HOME/.g2_headless_pin")" == "$A" ]] || fail "the pin changed"
 
+# --- the release manifest must name the pinned commit, as a clean tree, for the release and every component
+python3 - "$TMP" "$A" "$B" <<'PY'
+import json
+import os
+import sys
+
+directory, pin, other = sys.argv[1:4]
+good = {"source": {"commit": pin, "dirty": False},
+        "components": [{"name": "saturn-bridge", "source_commit": pin}, {"name": "saturn-go", "source_commit": pin}]}
+variants = {"good": good}
+for name, mutate in {
+    "other-commit": lambda m: m["source"].update(commit=other),
+    "dirty": lambda m: m["source"].update(dirty=True),
+    "dirty-missing": lambda m: m["source"].pop("dirty"),
+    "component-other-commit": lambda m: m["components"][1].update(source_commit=other),
+    "component-no-commit": lambda m: m["components"][0].pop("source_commit"),
+    "no-components": lambda m: m.update(components=[]),
+    "no-source": lambda m: m.pop("source"),
+}.items():
+    broken = json.loads(json.dumps(good))
+    mutate(broken)
+    variants[name] = broken
+for name, value in variants.items():
+    os.makedirs(os.path.join(directory, "manifest-" + name))
+    with open(os.path.join(directory, "manifest-" + name, "release-manifest.json"), "w", encoding="utf-8") as handle:
+        json.dump(value, handle)
+os.makedirs(os.path.join(directory, "manifest-garbled"))
+with open(os.path.join(directory, "manifest-garbled", "release-manifest.json"), "w", encoding="utf-8") as handle:
+    handle.write("{not json")
+os.makedirs(os.path.join(directory, "manifest-absent"))
+PY
+export SCRIPT
+manifest_verdict() { bash -c 'd="$1"; shift; source "$SCRIPT"; C="$PIN_UNDER_TEST"; manifest_names_pin "$d"' _ "$TMP/manifest-$1" >"$TMP/manifest.out" 2>&1; }
+export PIN_UNDER_TEST="$A"
+manifest_verdict good || fail "a manifest that names the pinned commit was refused: $(cat "$TMP/manifest.out")"
+grep -Fq "source commit $A, clean tree, 2 components" "$TMP/manifest.out" || fail "the manifest check did not say what it proved: $(cat "$TMP/manifest.out")"
+for name in other-commit dirty dirty-missing component-other-commit component-no-commit no-components no-source garbled absent; do
+  if manifest_verdict "$name"; then fail "the manifest '$name' was accepted as the pinned commit's"; fi
+done
+PIN_UNDER_TEST="$B" manifest_verdict good && fail "a manifest of commit $A was accepted for the pin $B"
+grep -Fq "does not describe the pinned commit $B" "$TMP/manifest.out" || fail "a wrong-commit manifest was refused without saying why: $(cat "$TMP/manifest.out")"
+
+# ... and the validate and install stages refuse a bundle, or an installed copy, that names another commit
+mkdir -p "$TMP/tools" && printf 'import sys\nsys.exit(0)\n' >"$TMP/tools/saturn-release-manifest.py"
+stage_manifest() {  # $1 = stage, $2 = the staged bundle's manifest, $3 = the manifest the (stubbed) installer leaves in the installed release
+  rm -rf "$TMP/releases" && mkdir -p "$TMP/releases"
+  bash -c '
+    source "$SCRIPT"
+    C="$PIN_UNDER_TEST"; B="$TMP/manifest-$STAGED"; H="$TMP/tools"; RELEASES="$TMP/releases"
+    sudo() { case "$1 $2" in *install-root.sh\ --validate) ;; *install-root.sh\ *) mkdir -p "$RELEASES/$C/webroot"; cp "$TMP/manifest-$INSTALLED/release-manifest.json" "$RELEASES/$C/" ;; esac; return 0; }
+    "stage_$STAGE"
+  ' _ >"$TMP/stage-manifest.out" 2>&1
+}
+export TMP
+STAGE=validate STAGED=good stage_manifest || fail "the validate stage refused a bundle of the pinned commit: $(cat "$TMP/stage-manifest.out")"
+STAGE=validate STAGED=other-commit stage_manifest && fail "the validate stage accepted a bundle of another commit"
+grep -Fq 'the bundle' "$TMP/stage-manifest.out" || fail "validate refused without saying why: $(cat "$TMP/stage-manifest.out")"
+STAGE=install STAGED=good INSTALLED=good stage_manifest || fail "the install stage refused an installed release of the pinned commit: $(cat "$TMP/stage-manifest.out")"
+STAGE=install STAGED=good INSTALLED=other-commit stage_manifest && fail "the install stage accepted an installed release of another commit"
+grep -Fq "the installed release's manifest" "$TMP/stage-manifest.out" || fail "install refused without saying why: $(cat "$TMP/stage-manifest.out")"
+
 # --- the verdict on the evidence
 python3 - "$TMP" <<'PY'
 import copy

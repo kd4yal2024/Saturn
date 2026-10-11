@@ -31,6 +31,7 @@ PREV=329f3109b17428ee04e3f14031da6cf25cb04810
 REPO_URL=https://github.com/kd4yal2024/Saturn.git
 PIN_FILE=$HOME/.g2_headless_pin
 H=/usr/local/lib/saturn-go/scripts
+RELEASES=/opt/saturn/releases
 ARM_DIR=/var/lib/saturn-rxc1-bridge
 PERF=/run/saturn-bridge/perf.json
 ACT_CFG=/etc/default/saturn-release-activate
@@ -101,6 +102,35 @@ PYEOF
 }
 latest_evidence() { find "$EVIDENCE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p/\n' 2>/dev/null | sort -n | tail -1 | cut -d' ' -f2-; }
 
+# The release manifest in directory $1 must name the pinned commit, as a clean tree, for the release and for every component in it:
+# the script, the build and the manifest are then provably the one commit.
+manifest_names_pin() {
+  python3 - "$1/release-manifest.json" "$C" <<'PYEOF'
+import json, sys
+path, pin = sys.argv[1], sys.argv[2]
+try:
+    with open(path, encoding="utf-8") as handle:
+        manifest = json.load(handle)
+except (OSError, ValueError) as error:
+    print(f"  cannot read {path}: {error}"); sys.exit(1)
+source = manifest.get("source") if isinstance(manifest.get("source"), dict) else {}
+components = manifest.get("components") if isinstance(manifest.get("components"), list) else []
+problems = []
+if source.get("commit") != pin:
+    problems.append(f"source.commit is {source.get('commit')!r}")
+if source.get("dirty") is not False:
+    problems.append(f"source.dirty is {source.get('dirty')!r}")
+if not components:
+    problems.append("no components are listed")
+for component in components:
+    if not isinstance(component, dict) or component.get("source_commit") != pin:
+        problems.append(f"component {component.get('name') if isinstance(component, dict) else component!r} names another commit")
+if problems:
+    print(f"  {path} does not describe the pinned commit {pin}: " + "; ".join(problems)); sys.exit(1)
+print(f"  {path}: source commit {pin}, clean tree, {len(components)} components all from it")
+PYEOF
+}
+
 stage_status() {
   say "commit under test: ${C:-<none pinned yet>}"
   say "release and binaries"
@@ -114,7 +144,7 @@ stage_status() {
   say "RXC1 state directory"; ls -la "$ARM_DIR"
   say "connected clients on the Bridge / TLS / P2 ports: $(clients)"
   say "readiness"; curl -fsS -m 5 http://127.0.0.1:8080/readyz 2>&1 | python3 -c "import json,sys; d=json.load(sys.stdin); print(' ', d.get('status'), 'build', d.get('build_commit'))" 2>&1
-  say "build"; if [ -n "$C" ] && [ -d "$B" ]; then echo "bundle present: $B"; else echo "bundle NOT present yet; tail ~/release-build-headless.log"; fi
+  say "build"; if [ -n "$C" ] && [ -d "$B" ]; then echo "bundle present: $B"; manifest_names_pin "$B"; else echo "bundle NOT present yet; tail ~/release-build-headless.log"; fi
 }
 
 stage_build() {
@@ -130,16 +160,18 @@ stage_build() {
 stage_validate() {
   [ -d "$B" ] || die "the build has not produced $B yet (tail ~/release-build-headless.log)"
   say "manifest check (no root)"; python3 "$H/saturn-release-manifest.py" validate --release-root "$B" --components /usr/local/lib/saturn-go/release/components-v1.json || die "manifest validation failed"
+  manifest_names_pin "$B" || die "the bundle's manifest is not the pinned commit's"
   say "installer --validate (sudo)"; sudo "$H/saturn-release-install-root.sh" --validate "$B" || die "installer validation failed"
   echo "OK: the bundle is valid. Next:  bash ~/g2_headless_steps.sh install"
 }
 
 stage_install() {
   [ -d "$B" ] || die "no bundle at $B"
-  if [ -d "/opt/saturn/releases/$C" ]; then say "already installed: /opt/saturn/releases/$C"
+  if [ -d "$RELEASES/$C" ]; then say "already installed: $RELEASES/$C"
   else say "installing INACTIVE (sudo)"; sudo "$H/saturn-release-install-root.sh" "$B" || die "install failed"; fi
+  manifest_names_pin "$RELEASES/$C" || die "the installed release's manifest is not the pinned commit's"
   say "validating the installed release (sudo; read-only)"; sudo "$H/saturn-release-activate-root.sh" --validate "$C" || die "installed-release validation failed"
-  bad=$(find "/opt/saturn/releases/$C/webroot" -type f ! -perm -o=r | wc -l); echo "unreadable web files: $bad"; [ "$bad" = 0 ] || die "web assets are not world-readable"
+  bad=$(find "$RELEASES/$C/webroot" -type f ! -perm -o=r | wc -l); echo "unreadable web files: $bad"; [ "$bad" = 0 ] || die "web assets are not world-readable"
   echo "OK: installed inactive; /opt/saturn/current still -> $(readlink -f /opt/saturn/current). Next:  bash ~/g2_headless_steps.sh helper"
 }
 
