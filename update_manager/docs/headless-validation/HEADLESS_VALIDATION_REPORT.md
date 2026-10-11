@@ -269,6 +269,34 @@ in `exit71_attempt_20261011/`.
    Per the instruction, 3 happens only after the source review and a successful `check`. Each of the three switches the root-owned `ACTIVATION_ENABLED` policy on for its one helper run only,
    says so, and restores the configuration byte-identical (or says loudly that it could not). A stage exits 0 only when the outcome is the expected one.
 
+## Completion test of the managed updates on the G2 (not yet run; you run the sudo steps)
+
+State read from the G2 when this was written: it runs `cc09c61` (committed); `ACTIVATION_ENABLED="0"`, `VALIDATION_MEMORY_MAX="500M"`; the working checkout `/home/pi/github/Saturn` is at `d29c5d88` (old, with modified tracked build
+outputs; it is only a place the builder fetches into, and is not touched); the Update page's policy resolves `stable` to `main` of `kd4yal2024/Saturn`, and **`main` must not move**, so the test selects a custom ref; the Bridge
+unit names only `saturn-rxc1-bridge` as a state directory; RXC1 reads `valid` (left from the bootstrap activation's arm); `saturn-go` runs with `~/.cargo/bin` on its `PATH`.
+
+1. **Refresh what the installer owns** (application and radio untouched; no radio service restarts). From a clean worktree of the commit under test, created beside the checkout, never inside it:
+   `git -C ~/github/Saturn fetch https://github.com/kd4yal2024/Saturn.git goldmarsh/headless-validation`, then `git -C ~/github/Saturn worktree add --detach ~/saturn-installer-<sha12> <sha>`.
+   Look first (no root, changes nothing): `SATURN_INSTALL_PLAN=1 SATURN_MANAGED_UPDATES=enable bash ~/saturn-installer-<sha12>/update_manager/install_saturn_go_nginx.sh`. It must say: layout *release*
+   (active release `cc09c61f…`), application payload NOT deployed, `ACTIVATION_ENABLED` 0 -> 1, `VALIDATION_MEMORY_MAX=500M` kept. Then, as you:
+   `cd ~/saturn-installer-<sha12> && sudo env HOME=/home/pi SUDO_USER=pi SATURN_SERVICE_USER=pi SATURN_SERVICE_GROUP=pi SATURN_REPO_ROOT=/home/pi/github/Saturn SATURN_INSTALL_PACKAGES=0 SATURN_INSTALL_LEGACY_XDMA_HOOK=0 SATURN_MANAGED_UPDATES=enable bash update_manager/install_saturn_go_nginx.sh`.
+   (Those variables are what the whole-appliance provisioner gives this installer: no apt, no legacy XDMA hook. `SATURN_P2APP_PANEL_ENABLED` defaults to 0, which is this G2's value.) I then check, read-only: the same PIDs for
+   `saturn-go` and `saturn-bridge`, the configuration (`ACTIVATION_ENABLED="1"`, `500M`), the broker's sudoers rule, `/opt/saturn-go/scripts/update-saturn-go.sh` and the builder beside it, and the Bridge unit's state directory.
+2. **Update 1, through the page.** Close every Saturn Remote tab. In the Saturn Go page choose the custom ref `goldmarsh/headless-validation`, press Update. The build runs on the G2 (about 1.5 hours; the radio keeps running). Expected:
+   the ref resolved once to the branch tip, that commit built, the broker's unit installs, switches and restarts, the headless check runs as the viewer, the browser and profile are gone, the record is `committed` for that commit,
+   and the page shows success. RXC1 is recorded, and not required (`VALIDATION_EXPECT_RXC1` is `any`); it is not expected to read `valid` again without an arm. **The tuning resets once here**: the running `cc09c61` Bridge has no
+   persistence, so it saved nothing to restore.
+3. **Set a recognisable tuning** in Saturn Remote and wait 25 seconds. I check `/var/lib/saturn-bridge/rx-state-v1.txt` (private, `version=1`, receive fields only, no transmit field).
+4. **One controlled failure.** I push a later commit to the branch (the first update already built the commit it resolved, so this also shows the pin). You add `VALIDATION_EXPECT_RXC1="valid"` to `/etc/default/saturn-release-activate` with `sudoedit`
+   (after a backup; only if step 2 left RXC1 reading something else) and press Update. Expected: that commit is built, installed and started, the target validation fails at `rxc1.intended_state`, the previous release is restored
+   automatically and validated, the record is `rolled_back` with `release_restored` and `receive_verified` both true, the page shows the rollback and its reason, and the Bridge comes back **with the tuning from step 3**. Then you remove the line
+   (the installer keeps administrator keys, so a forgotten test line would stay) and I compare the file with the backup.
+5. **Update 2.** Press Update again with the override gone: the bundle from step 4 is reused (no build), the update succeeds, and the tuning is still the one from step 3.
+6. **Rerun the installer** with the default choice (`SATURN_MANAGED_UPDATES` unset, so `keep`): the policy, the 500M allowance and the broker's rule are as they were, and no radio service restarts. Then, optionally, with `SATURN_MANAGED_UPDATES=disable`: the broker's rule is gone
+   and the Update action refuses at once (phase `managed_updates_disabled`, nothing built or changed); `enable` restores it.
+
+Only after this, and a review of the evidence, is the branch merged to `main`. The matched audio comparison is separate and still to come.
+
 ## Not verified / residual risk
 
 * **The restart-timing waits are bounded, not removed.** If the host's memory never climbs back to cap + 32 MiB within 30 s, or the owner never writes telemetry, the validation still fails (and an activation rolls back);
