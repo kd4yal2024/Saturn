@@ -17,6 +17,7 @@ shellcheck "$SCRIPT" 2>/dev/null || [[ -z "$(command -v shellcheck)" ]] || fail 
 
 # --- it pins the exact helper, validator and guard that are in this tree
 for pair in \
+  INSTALLER_SHA:update_manager/scripts/saturn-release-install-activator-root.sh \
   ACT_SHA:update_manager/scripts/saturn-release-activate-root.sh \
   VAL_SHA:update_manager/scripts/saturn-remote-validate.py \
   GUARD_SHA:update_manager/scripts/saturn-remote-receive-guard.js
@@ -99,6 +100,39 @@ grep -Fq 'the bundle' "$TMP/stage-manifest.out" || fail "validate refused withou
 STAGE=install STAGED=good INSTALLED=good stage_manifest || fail "the install stage refused an installed release of the pinned commit: $(cat "$TMP/stage-manifest.out")"
 STAGE=install STAGED=good INSTALLED=other-commit stage_manifest && fail "the install stage accepted an installed release of another commit"
 grep -Fq "the installed release's manifest" "$TMP/stage-manifest.out" || fail "install refused without saying why: $(cat "$TMP/stage-manifest.out")"
+
+# --- the helper stage runs the installer that is IN the installed release (it is not among the installed helpers), only if all four pinned files match
+mkdir -p "$TMP/cfg" && printf 'ACTIVATION_ENABLED="0"\n' >"$TMP/cfg/activate-disabled" && printf 'ACTIVATION_ENABLED="1"\n' >"$TMP/cfg/activate-enabled"
+helper_stage() {  # $1 = config file; $2 = a file name in the release to corrupt (or none); $3 = "absent" to leave the installer out
+  rm -rf "$TMP/releases" "$TMP/sudo.args"; mkdir -p "$TMP/releases/$A/scripts"
+  for f in saturn-release-install-activator-root.sh saturn-release-activate-root.sh saturn-remote-validate.py saturn-remote-receive-guard.js; do
+    cp "$ROOT/update_manager/scripts/$f" "$TMP/releases/$A/scripts/$f"
+  done
+  [[ "$2" == none ]] || printf '# tampered\n' >>"$TMP/releases/$A/scripts/$2"
+  [[ "${3:-}" != absent ]] || rm "$TMP/releases/$A/scripts/saturn-release-install-activator-root.sh"
+  CFG="$1" PIN_UNDER_TEST="$A" bash -c '
+    source "$SCRIPT"
+    C="$PIN_UNDER_TEST"; RELEASES="$TMP/releases"; ACT_CFG="$CFG"; BROWSER=true; SYSTEMD_RUN=true
+    confirm() { :; }
+    # like the real sudo: a command that is not there is not found
+    sudo() { [ -x "$1" ] || { echo "sudo: $1: command not found" >&2; return 1; }; printf "%s\n" "$*" >"$TMP/sudo.args"; return "${SUDO_RC:-0}"; }
+    stage_helper
+  ' _ >"$TMP/stage-helper.out" 2>&1
+}
+helper_stage "$TMP/cfg/activate-disabled" none || fail "the helper stage failed on a release whose files are the pinned ones: $(cat "$TMP/stage-helper.out")"
+want="$TMP/releases/$A/scripts/saturn-release-install-activator-root.sh $A $(sha256sum "$ROOT/update_manager/scripts/saturn-release-activate-root.sh" | cut -d' ' -f1) $(sha256sum "$ROOT/update_manager/scripts/saturn-remote-validate.py" | cut -d' ' -f1) $(sha256sum "$ROOT/update_manager/scripts/saturn-remote-receive-guard.js" | cut -d' ' -f1)"
+[[ "$(cat "$TMP/sudo.args")" == "$want" ]] || fail "the installer was not run from the release with the pinned hashes: $(cat "$TMP/sudo.args" 2>&1)"
+for corrupt in saturn-release-install-activator-root.sh saturn-release-activate-root.sh saturn-remote-validate.py saturn-remote-receive-guard.js; do
+  if helper_stage "$TMP/cfg/activate-disabled" "$corrupt"; then fail "the helper stage accepted a release whose $corrupt differs from the pinned hash"; fi
+  [[ ! -e "$TMP/sudo.args" ]] || fail "root was invoked although $corrupt differs from the pinned hash"
+  grep -Fq "$corrupt differs from the pinned hash" "$TMP/stage-helper.out" || fail "a corrupted $corrupt was refused without saying so: $(cat "$TMP/stage-helper.out")"
+done
+if SUDO_RC=1 helper_stage "$TMP/cfg/activate-disabled" none; then fail "the helper stage reported success although the installer failed"; fi
+grep -Fq 'helper installation failed' "$TMP/stage-helper.out" || fail "a failed installer was not reported: $(cat "$TMP/stage-helper.out")"
+if grep -Fq 'OK. Next' "$TMP/stage-helper.out"; then fail "a failed installer was followed by the success message"; fi
+if helper_stage "$TMP/cfg/activate-enabled" none; then fail "the helper stage ran with activation enabled"; fi
+[[ ! -e "$TMP/sudo.args" ]] || fail "root was invoked with activation enabled"
+if helper_stage "$TMP/cfg/activate-disabled" none absent; then fail "the helper stage went ahead without the installer"; fi
 
 # --- the build stage: a non-interactive shell gets the Rust toolchain on its PATH, and only the builder's own resolve-only report counts
 path_of() { bash -c 'source "$SCRIPT"; printf "%s" "$PATH"' _ ; }

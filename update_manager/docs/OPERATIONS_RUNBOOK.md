@@ -209,10 +209,11 @@ used), what was verified about the browser's sandbox and memory cap, and the
 evidence directory. The staged sequence used on the first appliance, with the
 report that explains it, is in `update_manager/docs/headless-validation/`.
 
-Install the validator with the activator (each file is pinned by its own hash):
+Install the validator with the activator (each file is pinned by its own hash). The installer is not one of the installed helpers: run it from the validated,
+immutable release it installs from.
 
 ```bash
-sudo /usr/local/lib/saturn-go/scripts/saturn-release-install-activator-root.sh \
+sudo /opt/saturn/releases/<full-commit>/scripts/saturn-release-install-activator-root.sh \
   <full-commit> <activator-sha256> <validator-sha256> <guard-sha256>
 ```
 

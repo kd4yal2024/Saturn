@@ -20,8 +20,8 @@
 # CLOSE EVERY BROWSER TAB OF THE G2 (remote page, telemetry, anything) before check, reconcile, failure and activate: that is the condition under test.
 #
 # This script is part of the pushed source (update_manager/docs/headless-validation/g2_headless_steps.sh). PIN is the full commit the branch
-# must resolve to, as published in the hand-off message; the script cannot name the commit it is stored in. The three hashes below are those of
-# the committed blobs of the helper, the validator and the guard.
+# must resolve to, as published in the hand-off message; the script cannot name the commit it is stored in. The four hashes below are those of
+# the committed blobs of the helper's installer, the helper, the validator and the guard.
 set -u
 # A non-interactive shell (ssh pi@g2 'command') has no Rust toolchain on its PATH; the builder needs cargo.
 case ":$PATH:" in *":$HOME/.cargo/bin:"*) ;; *) PATH="$HOME/.cargo/bin:$PATH" ;; esac
@@ -29,11 +29,14 @@ BRANCH=goldmarsh/headless-validation
 ACT_SHA=2e3b8a98733eb82cc1ce4190a9550feb6cdc09be9e5419980da71341150bea9b
 VAL_SHA=03c7228a2c4ce4f9561dad092261a65337309504d8065861ad9b552580a6c21f
 GUARD_SHA=ff9200109db6dc01c524719fde03aa637eb536114322beea91475e6eedd1f2b7
+INSTALLER_SHA=6a094523d810f2058bcc22fa7c5d80a401d78e5760b145bef98451a7459f2b67
 PREV=329f3109b17428ee04e3f14031da6cf25cb04810
 REPO_URL=https://github.com/kd4yal2024/Saturn.git
 PIN_FILE=$HOME/.g2_headless_pin
 H=/usr/local/lib/saturn-go/scripts
 RELEASES=/opt/saturn/releases
+BROWSER=/usr/bin/chromium
+SYSTEMD_RUN=systemd-run
 ARM_DIR=/var/lib/saturn-rxc1-bridge
 PERF=/run/saturn-bridge/perf.json
 ACT_CFG=/etc/default/saturn-release-activate
@@ -178,17 +181,17 @@ stage_install() {
 }
 
 stage_helper() {
-  R=/opt/saturn/releases/$C/scripts
-  [ -d "/opt/saturn/releases/$C" ] || die "install the release first"
+  R=$RELEASES/$C/scripts
+  [ -d "$RELEASES/$C" ] || die "install the release first"
   grep -Fxq 'ACTIVATION_ENABLED="0"' "$ACT_CFG" || die "$ACT_CFG does not say ACTIVATION_ENABLED=\"0\" exactly once; the installer refuses to replace the helper otherwise. Tell me."
   say "the release's files against the hashes pinned in this script (made from the committed blobs)"
-  for pair in "$ACT_SHA:saturn-release-activate-root.sh" "$VAL_SHA:saturn-remote-validate.py" "$GUARD_SHA:saturn-remote-receive-guard.js"; do
+  for pair in "$INSTALLER_SHA:saturn-release-install-activator-root.sh" "$ACT_SHA:saturn-release-activate-root.sh" "$VAL_SHA:saturn-remote-validate.py" "$GUARD_SHA:saturn-remote-receive-guard.js"; do
     got=$(sha256sum "$R/${pair#*:}" | cut -d' ' -f1)
     if [ "$got" = "${pair%%:*}" ]; then echo "  match  ${pair#*:}"; else die "${pair#*:} differs from the pinned hash ($got)"; fi
   done
-  say "Chromium and systemd-run (the production launcher needs both)"; /usr/bin/chromium --version 2>&1 | head -1; command -v systemd-run || die "systemd-run missing"
+  say "Chromium and systemd-run (the production launcher needs both)"; "$BROWSER" --version 2>&1 | head -1; command -v "$SYSTEMD_RUN" || die "systemd-run missing"
   confirm "About to install the new activation helper, receive validator and guard (root; previous copies are backed up; activation stays DISABLED; no service is touched)."
-  sudo "$H/saturn-release-install-activator-root.sh" "$C" "$ACT_SHA" "$VAL_SHA" "$GUARD_SHA" || die "helper installation failed; send me the output"
+  sudo "$R/saturn-release-install-activator-root.sh" "$C" "$ACT_SHA" "$VAL_SHA" "$GUARD_SHA" || die "helper installation failed; send me the output"
   echo "OK. Next:  bash ~/g2_headless_steps.sh check"
 }
 

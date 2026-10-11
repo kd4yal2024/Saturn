@@ -64,7 +64,7 @@ original record. The message says the activation did not succeed. It still refus
 
 **4. Nothing depends on scratch.** Report, procedure, their test and the CI steps that run them are in the source. The procedure cannot name the commit it is stored in, so
 the commit is given once (`PIN=<full sha> bash g2_headless_steps.sh build`), checked against what the branch resolves to, remembered in `~/.g2_headless_pin`, and every later
-stage refuses a different one. The three hashes it pins (helper, validator, guard) are those of the committed blobs, and `tests/test-g2-headless-steps.sh` fails if they drift.
+stage refuses a different one. The four hashes it pins (the helper's installer, the helper, the validator, the guard) are those of the committed blobs, and `tests/test-g2-headless-steps.sh` fails if they drift.
 The release manifest is held to the same commit: the `validate` stage (staged bundle) and the `install` stage (installed copy) both require `release-manifest.json` to name exactly
 the pinned commit as a clean tree, with every component built from it, and `status` prints the same finding. So the script, the build and the release manifest are demonstrably one commit.
 
@@ -95,6 +95,11 @@ the pinned commit as a clean tree, with every component built from it, and `stat
   it now requires the exact line `resolved_commit=<pinned commit>` and shows the builder's own message when it cannot run. The test drives the stage with a builder that reports each case
   (the pinned commit, another commit, a longer string, a look-alike line, a builder that fails) and checks the real builder's source still prints that line. Nothing was built and nothing
   on the G2 changed in the failed run beyond `~/g2_headless_steps.sh` and `~/.g2_headless_pin`.
+* **The `helper` stage ran the installer from a path where it does not exist.** The first run on the G2 stopped at `sudo: /usr/local/lib/saturn-go/scripts/saturn-release-install-activator-root.sh:
+  command not found` before changing anything: only the *helper* is installed under `/usr/local/lib/saturn-go/scripts`; its installer is run from the validated, immutable release
+  (`/opt/saturn/releases/<commit>/scripts/`, as `update_manager/release/rxc1/README.md` already says). My runbook had the same wrong path. Both now use the release's copy, the
+  procedure pins the installer's SHA-256 with the other three before running it as root, and the test runs the stage with `sudo` behaving like the real one (a missing command is
+  not found), corrupts each of the four files in turn, and makes the installer fail.
 
 ## Sequence on the G2 (you run the sudo stages; I read the evidence; ~nothing is restarted before `activate`)
 
