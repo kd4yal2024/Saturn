@@ -8,7 +8,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   `scripts/saturn-release-config.py` refreshes the installer's own paths and keeps the administrator's
   settings: the activation (managed-updates) policy, including an explicit `0`, and `VALIDATION_MEMORY_MAX`,
   `VALIDATION_TIMEOUT_SECONDS`, `VALIDATION_LEGACY_BRIDGE_RELEASES`, `VALIDATION_EXPECT_RXC1`,
-  `VALIDATION_ENABLED` and `READY_TIMEOUT_SECONDS`. A value the activator would refuse is reported and
+  `VALIDATION_ENABLED`, `READY_TIMEOUT_SECONDS` and how the validation reaches its browser
+  (`VALIDATION_URL`, `VALIDATION_TLS_CERT`, `VALIDATION_BROWSER`, `VALIDATION_LAUNCHER`,
+  `VALIDATION_PERF_JSON`, `VALIDATION_LOG_ROOT`; a custom HTTPS port or certificate no longer
+  disappears). A value the activator would refuse is reported and
   dropped; the file is written atomically. Changing the policy is an explicit installer choice,
   `SATURN_MANAGED_UPDATES=enable|disable` (default `keep`).
 - The receive validator no longer fails at its first look at a host whose services have just been restarted

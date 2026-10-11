@@ -120,6 +120,44 @@ class MergeTests(Rig):
                           ("VALIDATION_LEGACY_BRIDGE_RELEASES", COMMIT), ("VALIDATION_EXPECT_RXC1", "valid"), ("READY_TIMEOUT_SECONDS", "45")):
             self.assertEqual(got[key], want, key)
 
+    def test_how_the_validation_reaches_its_browser_survives_the_installer(self):
+        existing = ('VALIDATION_URL="https://127.0.0.1:9443/remote-next?validation=receive&transport=split"\nVALIDATION_TLS_CERT="/etc/saturn/remote.crt"\n'
+                    'VALIDATION_BROWSER="/usr/bin/chromium-browser"\nVALIDATION_LAUNCHER="systemd"\nVALIDATION_PERF_JSON="/run/other/perf.json"\n'
+                    'VALIDATION_LOG_ROOT="/var/log/saturn-validation"\n')
+        got, notes = self.merge(existing=existing)
+        for key, want in (("VALIDATION_URL", "https://127.0.0.1:9443/remote-next?validation=receive&transport=split"), ("VALIDATION_TLS_CERT", "/etc/saturn/remote.crt"),
+                          ("VALIDATION_BROWSER", "/usr/bin/chromium-browser"), ("VALIDATION_LAUNCHER", "systemd"), ("VALIDATION_PERF_JSON", "/run/other/perf.json"),
+                          ("VALIDATION_LOG_ROOT", "/var/log/saturn-validation")):
+            self.assertEqual(got.get(key), want, f"{key} was lost by the installer")
+        self.assertEqual([n for n in notes if "invalid" in n or "dropped" in n], [])
+
+    def test_the_direct_launcher_is_only_kept_for_a_caller_that_is_not_root(self):
+        original = C.os.geteuid
+        try:
+            C.os.geteuid = lambda: 0
+            got, notes = self.merge(existing='VALIDATION_LAUNCHER="direct"\n')
+            self.assertNotIn("VALIDATION_LAUNCHER", got, "the activator refuses the direct launcher as root, so it must not be written")
+            self.assertTrue(any("invalid existing VALIDATION_LAUNCHER" in n for n in notes), notes)
+            C.os.geteuid = lambda: 1000
+            self.assertEqual(self.values(existing='VALIDATION_LAUNCHER="direct"\n')["VALIDATION_LAUNCHER"], "direct")
+        finally:
+            C.os.geteuid = original
+
+    def test_an_invalid_override_of_those_is_reported_and_dropped(self):
+        for key, bad in (("VALIDATION_URL", "http://127.0.0.1:8443/x"), ("VALIDATION_URL", "https://example.com:8443/x"), ("VALIDATION_URL", "https://127.0.0.1:8443/x y"),
+                         ("VALIDATION_LAUNCHER", "docker"), ("VALIDATION_BROWSER", "chromium"), ("VALIDATION_TLS_CERT", "/etc/with space/c.crt"),
+                         ("VALIDATION_PERF_JSON", "run/perf.json"), ("VALIDATION_LOG_ROOT", "")):
+            got, notes = self.merge(existing=f'{key}="{bad}"\n')
+            self.assertNotIn(key, got, f"{key}={bad!r} was kept")
+            self.assertTrue(any(f"invalid existing {key}" in n for n in notes), (key, bad, notes))
+
+    def test_every_key_the_activator_accepts_is_the_installers_or_the_administrators(self):
+        block = INSTALLER.read_text()
+        block = block[block.index('cat >"$release_activate_defaults" <<EOF'):]
+        block = block[:block.index("\nEOF\n")]
+        installer_keys = {line.split("=", 1)[0] for line in block.splitlines()[1:] if "=" in line and not line.startswith("#")}
+        self.assertEqual(C.KNOWN_KEYS - installer_keys - set(C.ADMIN_KEYS), set(), "a known key would be lost silently on every installer run")
+
     def test_an_invalid_setting_is_dropped_not_copied(self):
         for key, bad in (("VALIDATION_MEMORY_MAX", "lots"), ("VALIDATION_MEMORY_MAX", "0M"), ("VALIDATION_MEMORY_MAX", "500"), ("ACTIVATION_ENABLED", "2"),
                          ("VALIDATION_TIMEOUT_SECONDS", "601"), ("VALIDATION_EXPECT_RXC1", "sometimes"), ("READY_TIMEOUT_SECONDS", "301"),

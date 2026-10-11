@@ -85,8 +85,11 @@ managed-updates policy. Running the installer again never changes it: an
 existing value, including an explicit `0`, is kept, together with the
 administrator's other settings in that file (`VALIDATION_MEMORY_MAX`,
 `VALIDATION_TIMEOUT_SECONDS`, `VALIDATION_LEGACY_BRIDGE_RELEASES`,
-`VALIDATION_EXPECT_RXC1`, `VALIDATION_ENABLED`, `READY_TIMEOUT_SECONDS`); the
-installer's own paths and service names are refreshed. A value that would make
+`VALIDATION_EXPECT_RXC1`, `VALIDATION_ENABLED`, `READY_TIMEOUT_SECONDS`, and
+how the validation reaches its browser: `VALIDATION_URL`, `VALIDATION_TLS_CERT`,
+`VALIDATION_BROWSER`, `VALIDATION_LAUNCHER`, `VALIDATION_PERF_JSON`,
+`VALIDATION_LOG_ROOT`); the installer's own paths and service names are
+refreshed. A value that would make
 the activator refuse the file is reported and dropped. Changing the policy is an
 explicit choice of whoever runs the installer:
 

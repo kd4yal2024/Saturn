@@ -7,8 +7,10 @@ from the installer:
 
   * Installer-owned keys (paths, service names, URLs): always the installer's current values.
   * Administrator-owned keys (ACTIVATION_ENABLED, VALIDATION_ENABLED, VALIDATION_MEMORY_MAX, VALIDATION_TIMEOUT_SECONDS,
-    VALIDATION_LEGACY_BRIDGE_RELEASES, VALIDATION_EXPECT_RXC1, READY_TIMEOUT_SECONDS): the existing value when it is valid, otherwise
-    the installer's default (or none, for a key the defaults do not set). An invalid existing value is reported and dropped, never
+    VALIDATION_LEGACY_BRIDGE_RELEASES, VALIDATION_EXPECT_RXC1, READY_TIMEOUT_SECONDS, VALIDATION_LAUNCHER, VALIDATION_URL,
+    VALIDATION_BROWSER, VALIDATION_TLS_CERT, VALIDATION_PERF_JSON, VALIDATION_LOG_ROOT): the existing value when it is valid,
+    otherwise the installer's default (or none, for a key the defaults do not set). Every key the activator accepts is either one of
+    these or one the installer sets; none can be lost without a report. An invalid existing value is reported and dropped, never
     copied: the root activator refuses a malformed configuration, and refusing to activate is worse than using the default.
   * Anything else in the existing file (a key the activator does not know) is dropped and reported; the activator rejects it.
 
@@ -27,6 +29,11 @@ import re
 import sys
 import tempfile
 
+def _safe_path(v: str) -> bool:
+    """The activator's rule for every configured path: absolute, and no space, tab or line break."""
+    return v.startswith("/") and re.search(r"[\t\r\n ]", v) is None
+
+
 ADMIN_KEYS = {
     "ACTIVATION_ENABLED": lambda v: v in ("0", "1"),
     "VALIDATION_ENABLED": lambda v: v in ("0", "1"),
@@ -35,6 +42,15 @@ ADMIN_KEYS = {
     "VALIDATION_LEGACY_BRIDGE_RELEASES": lambda v: all(re.fullmatch(r"[0-9a-f]{40}", item) for item in v.split()),
     "VALIDATION_EXPECT_RXC1": lambda v: v in ("any", "valid", "unarmed", "disabled", "unsupported", "unavailable", "partial"),
     "READY_TIMEOUT_SECONDS": lambda v: re.fullmatch(r"[1-9][0-9]*", v) is not None and int(v) <= 300,
+    # How the validation reaches and runs the browser; the installer does not set them, an administrator may (a custom HTTPS port or
+    # certificate, another browser or perf file). The rules are the activator's (validate_configuration).
+    # "direct" runs the browser as the caller; the activator refuses it as root, and this runs as root, so it is only valid for a caller that is not.
+    "VALIDATION_LAUNCHER": lambda v: v == "systemd" or (v == "direct" and os.geteuid() != 0),
+    "VALIDATION_URL": lambda v: re.fullmatch(r"https://127\.0\.0\.1:[0-9]+/[A-Za-z0-9_./-]+(\?[A-Za-z0-9_=&.-]*)?", v) is not None,
+    "VALIDATION_BROWSER": _safe_path,
+    "VALIDATION_TLS_CERT": _safe_path,
+    "VALIDATION_PERF_JSON": _safe_path,
+    "VALIDATION_LOG_ROOT": _safe_path,
 }
 
 # Every key the root activator's loader accepts (load_config in saturn-release-activate-root.sh). A key outside this set makes the
