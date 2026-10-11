@@ -278,7 +278,10 @@ mod tests {
 
         assert_eq!(rx.snapshot().arm_cancelled, 1);
         assert!(matches!(rx.try_recv(), Ok(TciCommand::SetTxEnabled(false))));
-        assert!(rx.try_recv().is_err(), "the older arm must not be delivered");
+        assert!(
+            rx.try_recv().is_err(),
+            "the older arm must not be delivered"
+        );
     }
 
     #[test]
@@ -289,7 +292,10 @@ mod tests {
 
         assert_eq!(rx.snapshot().arm_cancelled, 1);
         assert!(matches!(rx.try_recv(), Ok(TciCommand::ClientDisconnected)));
-        assert!(rx.try_recv().is_err(), "the older arm must not be delivered");
+        assert!(
+            rx.try_recv().is_err(),
+            "the older arm must not be delivered"
+        );
     }
 
     #[test]

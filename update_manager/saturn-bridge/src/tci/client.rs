@@ -279,7 +279,8 @@ pub(crate) fn parse_nodelay_setting(value: Option<&str>) -> (bool, Option<String
 pub(crate) fn tci_nodelay_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        let (enabled, warning) = parse_nodelay_setting(std::env::var(TCI_NODELAY_ENV).ok().as_deref());
+        let (enabled, warning) =
+            parse_nodelay_setting(std::env::var(TCI_NODELAY_ENV).ok().as_deref());
         if let Some(warning) = warning {
             eprintln!("saturn-bridge: {warning}");
         }
@@ -319,7 +320,10 @@ pub(crate) struct NodelayStats {
 
 impl NodelayStats {
     pub(crate) const fn new() -> Self {
-        Self { confirmed: AtomicU64::new(0), failed: AtomicU64::new(0) }
+        Self {
+            confirmed: AtomicU64::new(0),
+            failed: AtomicU64::new(0),
+        }
     }
 
     pub(crate) fn confirmed(&self) -> u64 {
@@ -398,7 +402,9 @@ pub(crate) fn handle_client(
     // Without nonblocking mode the handshake could block with no deadline, so
     // a socket that cannot be switched is dropped rather than served.
     if let Err(error) = stream.set_nonblocking(true) {
-        eprintln!("saturn-bridge: TCI websocket from {addr} dropped: cannot set nonblocking: {error}");
+        eprintln!(
+            "saturn-bridge: TCI websocket from {addr} dropped: cannot set nonblocking: {error}"
+        );
         return;
     }
     let mut connect_lane_hint = None;

@@ -2269,7 +2269,9 @@ mod arm_cancellation_tests {
     }
 
     fn full_batch_ending_in_arm() -> Vec<TxCommand> {
-        let mut queued: Vec<TxCommand> = (0..MAX_TX_COMMANDS_PER_LOOP - 1).map(|_| filler()).collect();
+        let mut queued: Vec<TxCommand> = (0..MAX_TX_COMMANDS_PER_LOOP - 1)
+            .map(|_| filler())
+            .collect();
         queued.push(arm());
         queued
     }
@@ -2308,7 +2310,11 @@ mod arm_cancellation_tests {
         queued.push(TxCommand::Disarm);
         let worker = start(true, queued, no_hook);
         assert!(worker.wait_unkeyed());
-        assert_eq!(worker.key_calls(), 0, "a cancelled arm reached try_key_with_iq");
+        assert_eq!(
+            worker.key_calls(),
+            0,
+            "a cancelled arm reached try_key_with_iq"
+        );
     }
 
     #[test]
@@ -2320,7 +2326,11 @@ mod arm_cancellation_tests {
             }))
         });
         assert!(worker.wait_unkeyed());
-        assert_eq!(worker.key_calls(), 0, "a cancelled arm reached try_key_with_iq");
+        assert_eq!(
+            worker.key_calls(),
+            0,
+            "a cancelled arm reached try_key_with_iq"
+        );
     }
 
     #[test]
@@ -2342,7 +2352,10 @@ mod arm_cancellation_tests {
         queued.push(TxCommand::Disarm);
         queued.push(arm());
         let worker = start(true, queued, no_hook);
-        assert!(worker.wait_unkeyed(), "the cancelled arm must be released first");
+        assert!(
+            worker.wait_unkeyed(),
+            "the cancelled arm must be released first"
+        );
         assert!(worker.wait_keyed(), "the new press never keyed");
         assert_eq!(worker.key_calls(), 1);
     }
@@ -2410,7 +2423,11 @@ mod arm_cancellation_tests {
             Box::new(|commands| release_then_pause(commands, || TxCommand::Disarm));
         let worker = start_with(options);
         assert!(worker.wait_unkeyed(), "the release was never processed");
-        assert_eq!(worker.key_calls(), 0, "keyed after a release had been queued");
+        assert_eq!(
+            worker.key_calls(),
+            0,
+            "keyed after a release had been queued"
+        );
     }
 
     #[test]
@@ -2468,7 +2485,10 @@ mod arm_cancellation_tests {
             }))
         });
         let worker = start_with(options);
-        assert!(worker.wait_unkeyed(), "the cancelled arm must be released first");
+        assert!(
+            worker.wait_unkeyed(),
+            "the cancelled arm must be released first"
+        );
         assert!(worker.wait_keyed(), "the new press never keyed");
         assert_eq!(worker.key_calls(), 1, "only the new press may key");
     }
@@ -2481,7 +2501,11 @@ mod arm_cancellation_tests {
         queued.push(TxCommand::Disarm);
         let worker = start_with(Options::new(queued));
         assert!(worker.wait_unkeyed());
-        assert_eq!(worker.key_calls(), 0, "a release hidden behind the backlog was missed");
+        assert_eq!(
+            worker.key_calls(),
+            0,
+            "a release hidden behind the backlog was missed"
+        );
     }
 
     #[test]
@@ -2519,7 +2543,10 @@ mod arm_cancellation_tests {
     fn a_check_stops_at_the_first_release_and_reads_no_further() {
         let (_commands, rx) = filler_channel(10, Some(TxCommand::Disarm), 10_000);
         let mut pending = VecDeque::new();
-        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Cancelled);
+        assert_eq!(
+            cancellation_check(&mut pending, &rx),
+            CancellationCheck::Cancelled
+        );
         assert_eq!(pending.len(), 11, "it must stop at the release");
         assert_eq!(left_in(&rx), 10_000, "it must not read past the release");
     }
@@ -2528,7 +2555,10 @@ mod arm_cancellation_tests {
     fn a_check_moves_at_most_the_cap_and_reports_an_undetermined_backlog() {
         let (_commands, rx) = filler_channel(0, None, 10_000);
         let mut pending = VecDeque::new();
-        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Undetermined);
+        assert_eq!(
+            cancellation_check(&mut pending, &rx),
+            CancellationCheck::Undetermined
+        );
         assert_eq!(pending.len(), MAX_TX_PENDING_COMMANDS);
         assert_eq!(left_in(&rx), 10_000 - MAX_TX_PENDING_COMMANDS);
     }
@@ -2538,7 +2568,10 @@ mod arm_cancellation_tests {
         let (_commands, rx) = filler_channel(0, None, 10_000);
         let mut pending = VecDeque::new();
         cancellation_check(&mut pending, &rx);
-        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Undetermined);
+        assert_eq!(
+            cancellation_check(&mut pending, &rx),
+            CancellationCheck::Undetermined
+        );
         assert_eq!(pending.len(), MAX_TX_PENDING_COMMANDS);
         assert_eq!(left_in(&rx), 10_000 - MAX_TX_PENDING_COMMANDS);
     }
@@ -2548,11 +2581,21 @@ mod arm_cancellation_tests {
         let (commands, rx) = filler_channel(5, None, 0);
         commands.send(TxCommand::ModelChanged).unwrap();
         let mut pending = VecDeque::new();
-        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Clear);
+        assert_eq!(
+            cancellation_check(&mut pending, &rx),
+            CancellationCheck::Clear
+        );
         assert_eq!(pending.len(), 6);
         assert!(matches!(pending.back(), Some(TxCommand::ModelChanged)));
-        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Clear);
-        assert_eq!(pending.len(), 6, "a second check must not duplicate commands");
+        assert_eq!(
+            cancellation_check(&mut pending, &rx),
+            CancellationCheck::Clear
+        );
+        assert_eq!(
+            pending.len(),
+            6,
+            "a second check must not duplicate commands"
+        );
         // The next batch reads them back, oldest first, then the channel.
         for _ in 0..5 {
             assert!(matches!(
@@ -2560,7 +2603,10 @@ mod arm_cancellation_tests {
                 Ok(TxCommand::PureSignalReset)
             ));
         }
-        assert!(matches!(next_tx_command(&mut pending, &rx), Ok(TxCommand::ModelChanged)));
+        assert!(matches!(
+            next_tx_command(&mut pending, &rx),
+            Ok(TxCommand::ModelChanged)
+        ));
         assert!(matches!(
             next_tx_command(&mut pending, &rx),
             Err(TryRecvError::Empty)
@@ -2571,7 +2617,10 @@ mod arm_cancellation_tests {
     fn a_release_already_set_aside_is_found_without_touching_the_channel() {
         let (_commands, rx) = filler_channel(0, None, 10_000);
         let mut pending = VecDeque::from([filler(), TxCommand::Disarm]);
-        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Cancelled);
+        assert_eq!(
+            cancellation_check(&mut pending, &rx),
+            CancellationCheck::Cancelled
+        );
         assert_eq!(left_in(&rx), 10_000);
     }
 
@@ -2585,7 +2634,10 @@ mod arm_cancellation_tests {
         let (commands, rx) = filler_channel(3, None, 0);
         drop(commands);
         let mut pending = VecDeque::new();
-        assert_eq!(cancellation_check(&mut pending, &rx), CancellationCheck::Cancelled);
+        assert_eq!(
+            cancellation_check(&mut pending, &rx),
+            CancellationCheck::Cancelled
+        );
         assert_eq!(pending.len(), 3, "commands sent before the close are kept");
     }
 }

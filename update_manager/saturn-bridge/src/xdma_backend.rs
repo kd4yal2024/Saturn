@@ -2483,8 +2483,17 @@ mod tests {
     use super::*;
 
     fn tuning_model() -> RadioModel {
-        let mut model =
-            RadioModel::new(DIRECT_DDC_INDEX as u8, 7_100_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut model = RadioModel::new(
+            DIRECT_DDC_INDEX as u8,
+            7_100_000,
+            0,
+            384,
+            24,
+            2048,
+            true,
+            4096,
+            true,
+        );
         model.desired.vfo_a_hz = 7_100_000;
         model.desired.vfo_b_hz = 14_200_000;
         model.desired.active_vfo = 0;
@@ -2813,8 +2822,17 @@ mod command_handler_tests {
 
     impl Fixture {
         fn new() -> Self {
-            let mut initial =
-                RadioModel::new(DIRECT_DDC_INDEX as u8, 7_100_000, 0, 384, 24, 2048, true, 4096, true);
+            let mut initial = RadioModel::new(
+                DIRECT_DDC_INDEX as u8,
+                7_100_000,
+                0,
+                384,
+                24,
+                2048,
+                true,
+                4096,
+                true,
+            );
             initial.desired.vfo_a_hz = 7_100_000;
             initial.desired.vfo_b_hz = 14_200_000;
             initial.desired.active_vfo = 0;
@@ -2857,7 +2875,10 @@ mod command_handler_tests {
             // The greeting ends with "ready;"; read it so later reads see only
             // what the commands publish.
             let greeting = fixture.read_messages(Duration::from_secs(3), Some("ready;"));
-            assert!(greeting.iter().any(|m| m == "ready;"), "no greeting: {greeting:?}");
+            assert!(
+                greeting.iter().any(|m| m == "ready;"),
+                "no greeting: {greeting:?}"
+            );
             fixture
         }
 
@@ -2946,8 +2967,14 @@ mod command_handler_tests {
 
             // The unchanged state is republished; the rejected value is not.
             let published = fixture.read_messages(Duration::from_secs(3), None);
-            assert!(published.contains(&"vfo:0,0,7100000;".to_string()), "{label}: {published:?}");
-            assert!(published.contains(&"dds:0,7100000;".to_string()), "{label}: {published:?}");
+            assert!(
+                published.contains(&"vfo:0,0,7100000;".to_string()),
+                "{label}: {published:?}"
+            );
+            assert!(
+                published.contains(&"dds:0,7100000;".to_string()),
+                "{label}: {published:?}"
+            );
             assert!(
                 !published.iter().any(|m| m.contains("100000000")),
                 "{label}: the rejected frequency reached a client: {published:?}"
@@ -2959,8 +2986,14 @@ mod command_handler_tests {
             assert_eq!(fixture.rx.tuned, [7_150_000], "{label}");
             assert_eq!(fixture.tuning().0, 7_150_000, "{label}");
             let published = fixture.read_messages(Duration::from_secs(3), None);
-            assert!(published.contains(&"vfo:0,0,7150000;".to_string()), "{label}: {published:?}");
-            assert!(published.contains(&"dds:0,7150000;".to_string()), "{label}: {published:?}");
+            assert!(
+                published.contains(&"vfo:0,0,7150000;".to_string()),
+                "{label}: {published:?}"
+            );
+            assert!(
+                published.contains(&"dds:0,7150000;".to_string()),
+                "{label}: {published:?}"
+            );
         }
     }
 
@@ -2978,8 +3011,14 @@ mod command_handler_tests {
         assert_eq!(fixture.tuning(), before);
         assert_eq!(fixture.rx.tuned, tuned_before, "no further hardware write");
         let published = fixture.read_messages(Duration::from_secs(3), None);
-        assert!(published.contains(&"vfo_active:0,A;".to_string()), "{published:?}");
-        assert!(published.contains(&"dds:0,7100000;".to_string()), "{published:?}");
+        assert!(
+            published.contains(&"vfo_active:0,A;".to_string()),
+            "{published:?}"
+        );
+        assert!(
+            published.contains(&"dds:0,7100000;".to_string()),
+            "{published:?}"
+        );
     }
 
     #[test]

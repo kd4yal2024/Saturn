@@ -85,7 +85,10 @@ fn client_disconnect_cancels_a_queued_arm() {
     tx.send(TciCommand::SetTxEnabled(true)).unwrap();
     tx.send(TciCommand::ClientDisconnected).unwrap();
     assert!(matches!(rx.try_recv(), Ok(TciCommand::ClientDisconnected)));
-    assert!(rx.try_recv().is_err(), "a stale arm survived the disconnect");
+    assert!(
+        rx.try_recv().is_err(),
+        "a stale arm survived the disconnect"
+    );
 }
 
 const HANDSHAKE_REQUEST: &[u8] = b"GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
@@ -138,7 +141,8 @@ fn handshake_probe(pieces: &[(&[u8], u64)], close_after_writing: bool) -> Handsh
     if close_after_writing {
         let _ = peer.shutdown(Shutdown::Write);
     }
-    peer.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
     let mut response = Vec::new();
     let mut buffer = [0u8; 4096];
     loop {
@@ -172,7 +176,10 @@ fn upgrade_request_split_at_any_position_is_accepted() {
     for split in [1, 32, len / 2, len - 4, len - 2, len - 1] {
         let (first, rest) = HANDSHAKE_REQUEST.split_at(split);
         let probe = handshake_probe(&[(first, 0), (rest, 40)], false);
-        assert!(probe.upgraded, "request split after {split} of {len} bytes was dropped");
+        assert!(
+            probe.upgraded,
+            "request split after {split} of {len} bytes was dropped"
+        );
     }
 }
 
@@ -261,8 +268,14 @@ fn handshake_resumption_stops_at_the_timeout_it_is_given() {
     );
     let elapsed = started.elapsed();
     assert!(matches!(result, Err(super::client::AcceptError::TimedOut)));
-    assert!(elapsed >= Duration::from_millis(150), "returned after {elapsed:?}");
-    assert!(elapsed < Duration::from_millis(1000), "returned after {elapsed:?}");
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "returned after {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(1000),
+        "returned after {elapsed:?}"
+    );
 }
 
 /// Bytes held in every queue, to compare with the running total.
@@ -347,7 +360,10 @@ fn media_backlog_does_not_delete_fresh_control_state() {
         };
 
         let dropped = outbound.enqueue(OutboundMessage::Text("vfo:0,0,7215000;".into()));
-        assert_eq!(dropped, 0, "{classes:?}: the new control message was dropped");
+        assert_eq!(
+            dropped, 0,
+            "{classes:?}: the new control message was dropped"
+        );
         {
             let queues = outbound.queues.lock_unpoisoned();
             assert_eq!(queues.control.len(), 1, "{classes:?}");
@@ -374,14 +390,19 @@ fn the_control_budget_still_applies_to_control_bytes() {
     let outbound = ClientOutbound::new();
     fill_media_class(&outbound, OutboundClass::FullRateIq);
     // Three 100,000-byte messages are 300,000 bytes: over the 262,144 budget.
-    let messages: Vec<String> = (0..3).map(|n| format!("{n}{}", "x".repeat(99_999))).collect();
+    let messages: Vec<String> = (0..3)
+        .map(|n| format!("{n}{}", "x".repeat(99_999)))
+        .collect();
     let mut dropped = 0;
     for message in &messages {
         dropped += outbound.enqueue(OutboundMessage::Text(message.clone()));
     }
     let queues = outbound.queues.lock_unpoisoned();
     let control_bytes: usize = queues.control.iter().map(|item| item.estimated_bytes).sum();
-    assert!(control_bytes <= MAX_CONTROL_QUEUE_BYTES, "control holds {control_bytes}");
+    assert!(
+        control_bytes <= MAX_CONTROL_QUEUE_BYTES,
+        "control holds {control_bytes}"
+    );
     assert_eq!(dropped, 1, "exactly the oldest control message is dropped");
     assert!(matches!(
         &queues.control.back().unwrap().message,
@@ -411,7 +432,10 @@ fn requeued_control_state_survives_a_media_backlog() {
         assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
     }
     assert_eq!(outbound.drain_stats().control_dropped, 0);
-    assert_eq!(outbound.next_message(true).unwrap().class, OutboundClass::Control);
+    assert_eq!(
+        outbound.next_message(true).unwrap().class,
+        OutboundClass::Control
+    );
 }
 
 #[test]
@@ -430,7 +454,10 @@ fn requeue_keeps_control_within_its_own_budget() {
 
     let queues = outbound.queues.lock_unpoisoned();
     let control_bytes: usize = queues.control.iter().map(|item| item.estimated_bytes).sum();
-    assert!(control_bytes <= MAX_CONTROL_QUEUE_BYTES, "control holds {control_bytes}");
+    assert!(
+        control_bytes <= MAX_CONTROL_QUEUE_BYTES,
+        "control holds {control_bytes}"
+    );
     assert_eq!(queues.queued_bytes, outbound_byte_total(&queues));
 }
 
@@ -482,14 +509,21 @@ fn non_finite_control_count(clients: &ClientRegistry, client_id: u64) -> u64 {
 #[test]
 fn non_finite_numeric_controls_are_rejected_and_counted() {
     for prefix in FLOAT_CONTROLS {
-        for bad in ["NaN", "nan", "-nan", "inf", "-inf", "Infinity", "-infinity", "1e999", "-1e999"] {
+        for bad in [
+            "NaN",
+            "nan",
+            "-nan",
+            "inf",
+            "-inf",
+            "Infinity",
+            "-infinity",
+            "1e999",
+            "-1e999",
+        ] {
             let clients = test_client_registry(7);
             let (tx, rx) = tci_command_mailbox();
             parse_tci_command(&format!("{prefix}{bad}"), &tx, &clients, 7, true);
-            assert!(
-                rx.try_recv().is_err(),
-                "{prefix}{bad} produced a command"
-            );
+            assert!(rx.try_recv().is_err(), "{prefix}{bad} produced a command");
             assert_eq!(
                 non_finite_control_count(&clients, 7),
                 1,
@@ -506,11 +540,11 @@ fn finite_numeric_controls_are_still_accepted() {
             let clients = test_client_registry(7);
             let (tx, rx) = tci_command_mailbox();
             parse_tci_command(&format!("{prefix}{good}"), &tx, &clients, 7, true);
+            assert!(rx.try_recv().is_ok(), "{prefix}{good} was not accepted");
             assert!(
-                rx.try_recv().is_ok(),
-                "{prefix}{good} was not accepted"
+                rx.try_recv().is_err(),
+                "{prefix}{good} produced two commands"
             );
-            assert!(rx.try_recv().is_err(), "{prefix}{good} produced two commands");
             assert_eq!(non_finite_control_count(&clients, 7), 0, "{prefix}{good}");
         }
     }
@@ -522,7 +556,13 @@ fn extreme_finite_controls_are_not_mistaken_for_non_finite() {
     // control that owns it. Only NaN and infinities are refused here.
     let clients = test_client_registry(7);
     let (tx, rx) = tci_command_mailbox();
-    parse_tci_command("rx_ssql_threshold:0,1.7976931348623157e308", &tx, &clients, 7, true);
+    parse_tci_command(
+        "rx_ssql_threshold:0,1.7976931348623157e308",
+        &tx,
+        &clients,
+        7,
+        true,
+    );
     assert!(matches!(
         rx.try_recv(),
         Ok(TciCommand::SetRxSsqlThreshold(value)) if value == 100.0
@@ -606,7 +646,17 @@ fn rejected_float_mic_frames_count_toward_the_existing_decode_fault_escalation()
 
 #[test]
 fn finite_float_mic_frames_are_unchanged_including_extremes() {
-    let samples = [0.0, -0.0, 0.25, -1.0, 1.0, 4.0, f32::MIN_POSITIVE, f32::MAX, f32::MIN];
+    let samples = [
+        0.0,
+        -0.0,
+        0.25,
+        -1.0,
+        1.0,
+        4.0,
+        f32::MIN_POSITIVE,
+        f32::MAX,
+        f32::MIN,
+    ];
     let parsed = parse_tci_mic_frame(&float_mic_frame(&samples)).unwrap();
     assert_eq!(parsed.samples.len(), samples.len());
     for (decoded, sent) in parsed.samples.iter().zip(samples) {
@@ -619,7 +669,10 @@ fn a_bad_float_mic_frame_does_not_poison_the_next_good_one() {
     let bad = float_mic_frame(&[f32::NAN, 0.5]);
     let good = float_mic_frame(&[0.25, -0.5]);
     assert!(parse_tci_mic_frame_result(&bad).is_err());
-    assert_eq!(parse_tci_mic_frame(&good).unwrap().samples, vec![0.25, -0.5]);
+    assert_eq!(
+        parse_tci_mic_frame(&good).unwrap().samples,
+        vec![0.25, -0.5]
+    );
 }
 
 fn free_loopback_port() -> u16 {
@@ -713,14 +766,20 @@ fn outbound_byte_total_stays_exact_through_every_queue_operation() {
     for step in 0..30_000u32 {
         match random() % 9 {
             0 => {
-                outbound.enqueue(OutboundMessage::Text(format!("vfo:0,0,{};", random() % 50_000_000)));
+                outbound.enqueue(OutboundMessage::Text(format!(
+                    "vfo:0,0,{};",
+                    random() % 50_000_000
+                )));
             }
             1 => {
                 let size = 1 + (random() % 140_000) as usize;
                 outbound.enqueue(OutboundMessage::Text("x".repeat(size)));
             }
             2 => {
-                outbound.enqueue(OutboundMessage::SafetyText(format!("trx:0,{};", random() % 2 == 0)));
+                outbound.enqueue(OutboundMessage::SafetyText(format!(
+                    "trx:0,{};",
+                    random() % 2 == 0
+                )));
             }
             3 => {
                 outbound.enqueue(OutboundMessage::OpusAudioFrame {
@@ -760,7 +819,10 @@ fn outbound_byte_total_stays_exact_through_every_queue_operation() {
             "byte total drifted at step {step}"
         );
         let control: usize = queues.control.iter().map(|item| item.estimated_bytes).sum();
-        assert!(control <= MAX_CONTROL_QUEUE_BYTES, "control holds {control} at step {step}");
+        assert!(
+            control <= MAX_CONTROL_QUEUE_BYTES,
+            "control holds {control} at step {step}"
+        );
         assert!(queues.control.len() <= MAX_CONTROL_QUEUE_MESSAGES);
         assert!(queues.full_rate_iq.len() <= MAX_FULL_RATE_IQ_QUEUE_MESSAGES);
     }
@@ -850,7 +912,9 @@ fn command_guard_totals_reach_the_client_snapshot_for_telemetry() {
     client.send(Message::text("trx:0,true;")).unwrap();
     client.send(Message::text("trx:0,false;")).unwrap();
     // A non-finite control is refused.
-    client.send(Message::text("rx_ssql_threshold:0,NaN;")).unwrap();
+    client
+        .send(Message::text("rx_ssql_threshold:0,NaN;"))
+        .unwrap();
 
     let settled = wait_until(Duration::from_secs(3), || {
         let now = tci.client_snapshot();
@@ -871,8 +935,14 @@ fn command_guard_totals_reach_the_client_snapshot_for_telemetry() {
     );
     // This frontend's own queue is exact; the refusal total is process-wide, so
     // other tests may add to it.
-    assert_eq!(after.command_arm_cancelled, before.command_arm_cancelled + 1);
-    assert_eq!(after.command_mic_cancelled, before.command_mic_cancelled + 1);
+    assert_eq!(
+        after.command_arm_cancelled,
+        before.command_arm_cancelled + 1
+    );
+    assert_eq!(
+        after.command_mic_cancelled,
+        before.command_mic_cancelled + 1
+    );
     let _ = client.close(None);
 }
 
@@ -4921,7 +4991,10 @@ fn an_unrecognized_nodelay_value_stays_on_and_warns() {
         let (enabled, warning) = parse_nodelay_setting(Some(typo));
         assert!(enabled, "{typo:?} switched TCP_NODELAY off");
         let warning = warning.unwrap_or_else(|| panic!("{typo:?} gave no warning"));
-        assert!(warning.contains(TCI_NODELAY_ENV) && warning.contains(typo), "{warning}");
+        assert!(
+            warning.contains(TCI_NODELAY_ENV) && warning.contains(typo),
+            "{warning}"
+        );
     }
 }
 
@@ -4941,7 +5014,11 @@ struct FakeSocket {
 
 impl FakeSocket {
     fn new(refuse: bool, readback: ReadBack) -> Self {
-        Self { refuse, readback, calls: std::cell::Cell::new(0) }
+        Self {
+            refuse,
+            readback,
+            calls: std::cell::Cell::new(0),
+        }
     }
 }
 
@@ -4950,7 +5027,10 @@ impl NoDelaySocket for FakeSocket {
         assert!(enabled, "the Bridge only ever turns TCP_NODELAY on");
         self.calls.set(self.calls.get() + 1);
         if self.refuse {
-            Err(io::Error::new(io::ErrorKind::Unsupported, "refused by the test"))
+            Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "refused by the test",
+            ))
         } else {
             Ok(())
         }
@@ -4960,7 +5040,10 @@ impl NoDelaySocket for FakeSocket {
         match self.readback {
             ReadBack::On => Ok(true),
             ReadBack::Off => Ok(false),
-            ReadBack::Error => Err(io::Error::new(io::ErrorKind::Other, "getsockopt failed in the test")),
+            ReadBack::Error => Err(io::Error::new(
+                io::ErrorKind::Other,
+                "getsockopt failed in the test",
+            )),
         }
     }
 }
@@ -4970,7 +5053,10 @@ fn a_socket_that_refuses_nodelay_is_reported_not_fatal() {
     let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
     let stats = NodelayStats::new();
     let refusing = FakeSocket::new(true, ReadBack::On);
-    assert!(!apply_nodelay(&refusing, addr, true, &stats), "a refused option was reported as set");
+    assert!(
+        !apply_nodelay(&refusing, addr, true, &stats),
+        "a refused option was reported as set"
+    );
     assert_eq!(refusing.calls.get(), 1);
     assert_eq!((stats.confirmed(), stats.failed()), (0, 1));
     let accepting = FakeSocket::new(false, ReadBack::On);
@@ -4985,7 +5071,11 @@ fn a_disabled_nodelay_setting_never_touches_the_socket() {
     let socket = FakeSocket::new(false, ReadBack::On);
     assert!(!apply_nodelay(&socket, addr, false, &stats));
     assert_eq!(socket.calls.get(), 0);
-    assert_eq!((stats.confirmed(), stats.failed()), (0, 0), "nothing is counted when the setting is off");
+    assert_eq!(
+        (stats.confirmed(), stats.failed()),
+        (0, 0),
+        "nothing is counted when the setting is off"
+    );
 }
 
 /// The production `handle_client` on a real accepted loopback socket: the same
@@ -5060,7 +5150,12 @@ fn each_confirmed_socket_is_counted_once() {
     let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
     let stats = NodelayStats::new();
     for _ in 0..3 {
-        assert!(apply_nodelay(&FakeSocket::new(false, ReadBack::On), addr, true, &stats));
+        assert!(apply_nodelay(
+            &FakeSocket::new(false, ReadBack::On),
+            addr,
+            true,
+            &stats
+        ));
     }
     assert_eq!((stats.confirmed(), stats.failed()), (3, 0));
 }
@@ -5079,11 +5174,22 @@ fn the_production_accept_path_counts_a_confirmed_socket() {
         let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
         let (commands, _rx) = mpsc::channel();
         handle_client(
-            socket, addr, 1, &commands, &clients,
-            &Arc::new(AtomicU64::new(0)), &Arc::new(Mutex::new(None)),
-            &Arc::new(Mutex::new(RadioModel::new(6, 7_215_000, 0, 384, 24, 2048, true, 4096, true))),
-            &Arc::new(AtomicU64::new(0)), &Arc::new(FullRateIqTransportStats::default()),
-            false, TxCodecRuntimeFlags::default(), (false, 50100), &DisplayTransport::default(),
+            socket,
+            addr,
+            1,
+            &commands,
+            &clients,
+            &Arc::new(AtomicU64::new(0)),
+            &Arc::new(Mutex::new(None)),
+            &Arc::new(Mutex::new(RadioModel::new(
+                6, 7_215_000, 0, 384, 24, 2048, true, 4096, true,
+            ))),
+            &Arc::new(AtomicU64::new(0)),
+            &Arc::new(FullRateIqTransportStats::default()),
+            false,
+            TxCodecRuntimeFlags::default(),
+            (false, 50100),
+            &DisplayTransport::default(),
         );
     });
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -5092,7 +5198,11 @@ fn the_production_accept_path_counts_a_confirmed_socket() {
     }
     assert_eq!(probe.nodelay().unwrap(), expected);
     // Other tests also accept sockets, so the total can only be said to have risen by at least one.
-    assert_eq!(NODELAY_STATS.confirmed() > before, expected, "confirmed total did not follow the setting");
+    assert_eq!(
+        NODELAY_STATS.confirmed() > before,
+        expected,
+        "confirmed total did not follow the setting"
+    );
     drop(peer);
     worker.join().unwrap();
 }

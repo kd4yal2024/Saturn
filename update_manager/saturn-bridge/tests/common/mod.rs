@@ -88,7 +88,8 @@ impl Replay {
             .port();
         let root = Self::new_root();
         let work = root.join("work");
-        let runner = Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/replay/run_replay_bridge.sh");
+        let runner =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/replay/run_replay_bridge.sh");
         let mut command = Command::new(runner);
         command
             .arg("--bridge")
@@ -112,7 +113,10 @@ impl Replay {
     }
 
     fn new_root() -> PathBuf {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!(
             "saturn-replay-{}-{}-{nanos}",
             std::process::id(),
@@ -132,7 +136,13 @@ impl Replay {
             .stderr(Stdio::from(open("stderr.log")));
         let child = command.spawn().expect("start the child process");
         let keep = std::env::var("SATURN_REPLAY_KEEP").is_ok_and(|value| value == "1");
-        Self { child, work: root.join("work"), port, root, keep }
+        Self {
+            child,
+            work: root.join("work"),
+            port,
+            root,
+            keep,
+        }
     }
 
     /// Keep the run directory (logs, perf.json, measurement records) after the
@@ -233,7 +243,10 @@ impl Replay {
             }
             if Instant::now() >= deadline {
                 self.keep = true;
-                panic!("the Bridge ignored SIGTERM; evidence kept in {}", self.root.display());
+                panic!(
+                    "the Bridge ignored SIGTERM; evidence kept in {}",
+                    self.root.display()
+                );
             }
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -272,11 +285,15 @@ impl Drop for Replay {
 /// an empty file has a hash, but it is not an executable anyone ran.
 pub fn sha256_hex(path: &Path) -> Result<String, String> {
     use sha2::{Digest, Sha256};
-    let bytes = fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    let bytes =
+        fs::read(path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
     if bytes.is_empty() {
         return Err(format!("{} is empty", path.display()));
     }
-    Ok(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
 /// The records a published comparison rests on. Every one is required: if any
@@ -297,38 +314,63 @@ pub fn save_required_records(
     table: &str,
     intervals: &[(&str, &[f64])],
 ) -> Result<(), String> {
-    fs::create_dir_all(results).map_err(|error| format!("cannot create {}: {error}", results.display()))?;
+    fs::create_dir_all(results)
+        .map_err(|error| format!("cannot create {}: {error}", results.display()))?;
     let write = |name: &str, bytes: &[u8]| -> Result<(), String> {
         if bytes.is_empty() {
             return Err(format!("required record {name} is empty"));
         }
         let path = results.join(name);
-        fs::write(&path, bytes).map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-        let back = fs::read(&path).map_err(|error| format!("cannot read back {}: {error}", path.display()))?;
+        fs::write(&path, bytes)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+        let back = fs::read(&path)
+            .map_err(|error| format!("cannot read back {}: {error}", path.display()))?;
         if back != bytes {
-            return Err(format!("required record {name} did not read back as written"));
+            return Err(format!(
+                "required record {name} did not read back as written"
+            ));
         }
         Ok(())
     };
 
-    let hash = sha256_hex(bridge).map_err(|why| format!("the Bridge executable hash is required: {why}"))?;
-    write("run-info.txt", format!("bridge: {}\nbridge sha256: {hash}\n{info}", bridge.display()).as_bytes())?;
+    let hash = sha256_hex(bridge)
+        .map_err(|why| format!("the Bridge executable hash is required: {why}"))?;
+    write(
+        "run-info.txt",
+        format!(
+            "bridge: {}\nbridge sha256: {hash}\n{info}",
+            bridge.display()
+        )
+        .as_bytes(),
+    )?;
 
-    let perf = fs::read(perf_json)
-        .map_err(|error| format!("the Bridge's final perf.json is required: cannot read {}: {error}", perf_json.display()))?;
+    let perf = fs::read(perf_json).map_err(|error| {
+        format!(
+            "the Bridge's final perf.json is required: cannot read {}: {error}",
+            perf_json.display()
+        )
+    })?;
     let text = String::from_utf8_lossy(&perf);
     if serde_like::Perf::parse(&text).is_none() {
-        return Err(format!("the Bridge's final perf.json is required: {} is not a perf document", perf_json.display()));
+        return Err(format!(
+            "the Bridge's final perf.json is required: {} is not a perf document",
+            perf_json.display()
+        ));
     }
     write("perf-final.json", &perf)?;
 
     write("transport-screen.txt", table.as_bytes())?;
     for (name, values) in intervals {
         if values.is_empty() {
-            return Err(format!("arm {name}: no audio intervals were measured, so there is nothing to record"));
+            return Err(format!(
+                "arm {name}: no audio intervals were measured, so there is nothing to record"
+            ));
         }
         let rows: Vec<String> = values.iter().map(|v| format!("{v:.3}")).collect();
-        write(&format!("arm-{name}-audio-intervals-ms.txt"), (rows.join("\n") + "\n").as_bytes())?;
+        write(
+            &format!("arm-{name}-audio-intervals-ms.txt"),
+            (rows.join("\n") + "\n").as_bytes(),
+        )?;
     }
     Ok(())
 }
@@ -366,7 +408,9 @@ pub fn connect(port: u16) -> Socket {
 }
 
 pub fn send(socket: &mut Socket, text: &str) {
-    socket.send(Message::text(text)).expect("send a TCI command");
+    socket
+        .send(Message::text(text))
+        .expect("send a TCI command");
 }
 
 pub enum Item {
@@ -374,7 +418,11 @@ pub enum Item {
     Binary(Vec<u8>),
 }
 
-pub fn collect(socket: &mut Socket, duration: Duration, mut on_item: impl FnMut(&mut Socket, Item)) {
+pub fn collect(
+    socket: &mut Socket,
+    duration: Duration,
+    mut on_item: impl FnMut(&mut Socket, Item),
+) {
     let deadline = Instant::now() + duration;
     while Instant::now() < deadline {
         match socket.read() {
@@ -416,5 +464,7 @@ pub fn real_tone_db(samples: &[f32], sample_rate: f64, frequency_hz: f64) -> f64
         re += f64::from(*value) * cos;
         im += f64::from(*value) * sin;
     }
-    20.0 * ((re * re + im * im).sqrt() * 2.0 / samples.len() as f64).max(1e-12).log10()
+    20.0 * ((re * re + im * im).sqrt() * 2.0 / samples.len() as f64)
+        .max(1e-12)
+        .log10()
 }

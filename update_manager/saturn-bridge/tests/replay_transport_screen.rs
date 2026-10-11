@@ -67,7 +67,13 @@ fn percentile(sorted: &[f64], fraction: f64) -> f64 {
     sorted[((sorted.len() as f64 * fraction).ceil() as usize).clamp(1, sorted.len()) - 1]
 }
 
-fn run_arm(replay: &Replay, name: &'static str, display: Display, with_audio: bool, window: Duration) -> Arm {
+fn run_arm(
+    replay: &Replay,
+    name: &'static str,
+    display: Display,
+    with_audio: bool,
+    window: Duration,
+) -> Arm {
     let mut socket = connect(replay.port);
     let mut sink = |_: &mut Socket, _: Item| {};
     collect(&mut socket, Duration::from_secs(1), &mut sink);
@@ -87,13 +93,19 @@ fn run_arm(replay: &Replay, name: &'static str, display: Display, with_audio: bo
     let ack = |socket: &mut Socket, item: Item| {
         if let Item::Binary(bytes) = item {
             if bytes.len() >= 64 && u32_at(&bytes, 24) == STREAM_SPECTRUM_ROW {
-                send(socket, &format!("saturn_display_ack:{};", u32_at(&bytes, 32)));
+                send(
+                    socket,
+                    &format!("saturn_display_ack:{};", u32_at(&bytes, 32)),
+                );
             }
         }
     };
     collect(&mut socket, Duration::from_secs(5), ack);
 
-    let mut arm = Arm { name, ..Arm::default() };
+    let mut arm = Arm {
+        name,
+        ..Arm::default()
+    };
     let pid = replay.child.id();
     let (cpu_before, started) = (cpu_seconds(pid), Instant::now());
     let mut last_audio_at: Option<Instant> = None;
@@ -113,7 +125,8 @@ fn run_arm(replay: &Replay, name: &'static str, display: Display, with_audio: bo
                 arm.audio_bytes += bytes.len() as u64;
                 arm.audio_frames += 1;
                 if let Some(previous) = last_audio_at {
-                    arm.audio_intervals_ms.push(now.duration_since(previous).as_secs_f64() * 1000.0);
+                    arm.audio_intervals_ms
+                        .push(now.duration_since(previous).as_secs_f64() * 1000.0);
                 }
                 last_audio_at = Some(now);
                 let sequence = u32_at(&bytes, 32);
@@ -125,7 +138,10 @@ fn run_arm(replay: &Replay, name: &'static str, display: Display, with_audio: bo
             STREAM_SPECTRUM_ROW => {
                 arm.row_bytes += bytes.len() as u64;
                 arm.row_frames += 1;
-                send(socket, &format!("saturn_display_ack:{};", u32_at(&bytes, 32)));
+                send(
+                    socket,
+                    &format!("saturn_display_ack:{};", u32_at(&bytes, 32)),
+                );
             }
             _ => {}
         }
@@ -133,10 +149,16 @@ fn run_arm(replay: &Replay, name: &'static str, display: Display, with_audio: bo
     arm.seconds = started.elapsed().as_secs_f64();
     arm.bridge_cpu_percent = (cpu_seconds(pid) - cpu_before) / arm.seconds * 100.0;
     let perf = replay.perf().expect("perf.json");
-    arm.perf = ["outbound_drops", "out_hwm_bytes", "tcp_outq_hwm_bytes", "audio_dropped_s", "send_blocked_ms"]
-        .into_iter()
-        .map(|key| (key, perf.number(key)))
-        .collect();
+    arm.perf = [
+        "outbound_drops",
+        "out_hwm_bytes",
+        "tcp_outq_hwm_bytes",
+        "audio_dropped_s",
+        "send_blocked_ms",
+    ]
+    .into_iter()
+    .map(|key| (key, perf.number(key)))
+    .collect();
     arm
 }
 
@@ -147,7 +169,10 @@ fn report(arms: &[Arm]) -> String {
         let mbit = |bytes: u64| bytes as f64 * 8.0 / arm.seconds / 1e6;
         let mut intervals = arm.audio_intervals_ms.clone();
         intervals.sort_by(f64::total_cmp);
-        let late = intervals.iter().filter(|&&v| v > 2.0 * NOMINAL_AUDIO_PERIOD_MS).count();
+        let late = intervals
+            .iter()
+            .filter(|&&v| v > 2.0 * NOMINAL_AUDIO_PERIOD_MS)
+            .count();
         writeln!(
             out,
             "{:<4} {:>4.0}  {:>9.2}  {:>11.2}  {:>12.2}  {:>6.1}  {:>7.1}  {:>9.1}  {:>4}  {:>7.1}/{:.1}/{:.1}/{:.1}  {:>9}  {:>10.1}",
@@ -159,12 +184,21 @@ fn report(arms: &[Arm]) -> String {
         )
         .unwrap();
     }
-    writeln!(out, "\nBridge counters after each arm (session values; audio_dropped_s is per second):").unwrap();
+    writeln!(
+        out,
+        "\nBridge counters after each arm (session values; audio_dropped_s is per second):"
+    )
+    .unwrap();
     for arm in arms {
         let values: Vec<String> = arm
             .perf
             .iter()
-            .map(|(key, value)| format!("{key}={}", value.map_or("n/a".into(), |v| format!("{v:.0}"))))
+            .map(|(key, value)| {
+                format!(
+                    "{key}={}",
+                    value.map_or("n/a".into(), |v| format!("{v:.0}"))
+                )
+            })
             .collect();
         writeln!(out, "  {:<4} {}", arm.name, values.join("  ")).unwrap();
     }
@@ -180,17 +214,26 @@ fn report(arms: &[Arm]) -> String {
 /// is not what its label says.
 fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), String>) {
     let shim_requested = std::env::var("SATURN_REPLAY_TCP_NODELAY").is_ok_and(|value| value == "1");
-    let bridge_off = std::env::var("SATURN_BRIDGE_TCI_NODELAY")
-        .is_ok_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off" | "no"));
+    let bridge_off = std::env::var("SATURN_BRIDGE_TCI_NODELAY").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        )
+    });
     let log = replay.log_text("stderr.log");
     let shim_set = log.matches("TCP_NODELAY enabled on accepted fd").count();
     let bridge_set = log
         .lines()
-        .filter(|line| line.contains("Bridge setsockopt(TCP_NODELAY=1) on fd") && line.ends_with("-> ok"))
+        .filter(|line| {
+            line.contains("Bridge setsockopt(TCP_NODELAY=1) on fd") && line.ends_with("-> ok")
+        })
         .count();
     let failed = log
         .lines()
-        .filter(|line| line.contains("TCP_NODELAY FAILED") || (line.contains("Bridge setsockopt(TCP_NODELAY") && line.contains("-> FAILED")))
+        .filter(|line| {
+            line.contains("TCP_NODELAY FAILED")
+                || (line.contains("Bridge setsockopt(TCP_NODELAY") && line.contains("-> FAILED"))
+        })
         .count();
     // The Bridge's own account, from the same perf.json that carries its PID: the setting and the sockets the kernel
     // read back as on. This is what a production run can retain; the shim's lines above are replay-only.
@@ -200,12 +243,20 @@ fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), S
     let own_confirmed = own_number("tci_nodelay_confirmed_total");
     let own_failed = own_number("tci_nodelay_failed_total");
     let own_problem = if own_enabled != Some(if bridge_off { 0.0 } else { 1.0 }) {
-        Some(format!("the Bridge reports TCP_NODELAY enabled = {own_enabled:?}, expected {}", if bridge_off { 0 } else { 1 }))
+        Some(format!(
+            "the Bridge reports TCP_NODELAY enabled = {own_enabled:?}, expected {}",
+            if bridge_off { 0 } else { 1 }
+        ))
     } else if own_failed != Some(0.0) {
-        Some(format!("the Bridge reports {own_failed:?} failed TCP_NODELAY calls"))
+        Some(format!(
+            "the Bridge reports {own_failed:?} failed TCP_NODELAY calls"
+        ))
     } else if bridge_off && own_confirmed != Some(0.0) {
-        Some(format!("the Bridge reports {own_confirmed:?} confirmed sockets with the setting off"))
-    } else if !bridge_off && own_confirmed.map_or(true, |confirmed| confirmed < connections as f64) {
+        Some(format!(
+            "the Bridge reports {own_confirmed:?} confirmed sockets with the setting off"
+        ))
+    } else if !bridge_off && own_confirmed.map_or(true, |confirmed| confirmed < connections as f64)
+    {
         Some(format!("the Bridge reports {own_confirmed:?} confirmed sockets, expected at least {connections}"))
     } else {
         None
@@ -221,7 +272,9 @@ fn nodelay_summary(replay: &Replay, connections: usize) -> (String, Result<(), S
     } else if bridge_off && bridge_set != 0 {
         Err(format!("SATURN_BRIDGE_TCI_NODELAY is off but the Bridge set TCP_NODELAY on {bridge_set} sockets"))
     } else if !bridge_off && bridge_set < connections {
-        Err(format!("the Bridge set TCP_NODELAY on {bridge_set} of {connections} accepted sockets"))
+        Err(format!(
+            "the Bridge set TCP_NODELAY on {bridge_set} of {connections} accepted sockets"
+        ))
     } else {
         Ok(())
     };
@@ -242,7 +295,10 @@ fn save_records(replay: &Replay, arms: &[Arm], table: &str, nodelay: &str, windo
         "measured window per arm: {} s\n{nodelay}\ntones: {TONE_OFFSET_HZ} Hz at -30 dBFS, {SAMPLE_RATE} S/s\n",
         window.as_secs()
     );
-    let intervals: Vec<(&str, &[f64])> = arms.iter().map(|arm| (arm.name, arm.audio_intervals_ms.as_slice())).collect();
+    let intervals: Vec<(&str, &[f64])> = arms
+        .iter()
+        .map(|arm| (arm.name, arm.audio_intervals_ms.as_slice()))
+        .collect();
     // Every record is required; a missing one fails the run (the directory is kept).
     if let Err(why) = save_required_records(
         &replay.root().join("results"),
@@ -259,7 +315,10 @@ fn save_records(replay: &Replay, arms: &[Arm], table: &str, nodelay: &str, windo
 #[test]
 #[ignore = "needs the real native WDSP and about two minutes; see the module docs"]
 fn transport_screen_of_raw_iq_against_spectrum_rows() {
-    let seconds: u64 = std::env::var("SATURN_SCREEN_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let seconds: u64 = std::env::var("SATURN_SCREEN_SECONDS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
     let window = Duration::from_secs(seconds);
     let mut replay = Replay::start();
     // This is a measurement: its records are the point, so they are kept.
@@ -277,7 +336,10 @@ fn transport_screen_of_raw_iq_against_spectrum_rows() {
     let (nodelay, nodelay_verdict) = nodelay_summary(&replay, arms.len());
     println!("\n{nodelay}");
     save_records(&replay, &arms, &table, &nodelay, window);
-    println!("records kept in {}", replay.root().join("results").display());
+    println!(
+        "records kept in {}",
+        replay.root().join("results").display()
+    );
     // Judged after the records are saved, so a failure still leaves them.
     if let Err(why) = nodelay_verdict {
         panic!("{why}");
@@ -288,9 +350,18 @@ fn transport_screen_of_raw_iq_against_spectrum_rows() {
         assert_eq!(arm.audio_gaps, 0, "{}: audio sequence gaps", arm.name);
     }
     let (a1, b, c) = (&arms[0], &arms[1], &arms[3]);
-    assert!(a1.iq_frames > 0 && a1.row_frames == 0, "A1 must carry only raw IQ");
-    assert!(b.row_frames > 0 && b.iq_frames == 0, "B must carry only rows");
-    assert!(c.iq_frames == 0 && c.row_frames == 0, "C must carry audio only");
+    assert!(
+        a1.iq_frames > 0 && a1.row_frames == 0,
+        "A1 must carry only raw IQ"
+    );
+    assert!(
+        b.row_frames > 0 && b.iq_frames == 0,
+        "B must carry only rows"
+    );
+    assert!(
+        c.iq_frames == 0 && c.row_frames == 0,
+        "C must carry audio only"
+    );
     assert!(
         a1.iq_bytes as f64 / b.row_bytes as f64 > 10.0,
         "rows should cost far less than raw IQ"
