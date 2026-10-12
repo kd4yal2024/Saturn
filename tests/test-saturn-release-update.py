@@ -42,6 +42,16 @@ record_path, current, releases, perf = os.environ["FAKE_RECORD"], os.environ["FA
 # What the real activation does to the services: it restarts them, and saturn-go's own startup (restore recovery, rust-server restore.rs) takes the repository
 # and radio maintenance locks with the real lock tool and EXITS when either is busy. A held radio lock therefore means no server, a failed readiness
 # check and a failed rollback: the first page-driven update on the G2 failed exactly like that.
+if os.environ.get("FAKE_ACTIVATOR_LOG"):
+    # what the host looks like from inside the activation: is the release lock still held (by the inherited descriptor), and is any Python process
+    # of the broker still resident (each one is memory the headless browser's headroom check counts against it)?
+    held = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "probe", "--operation", "x", "--resources", "release"], capture_output=True)
+    listing = subprocess.run(["ps", "-eo", "comm=,args="], capture_output=True, text=True).stdout.splitlines()
+    # anything that names the broker, except the small shell that hands over to --finish (whose arguments carry the broker's path): by process name, not by
+    # "python", because an interpreter may run under a loader of another name
+    resident = [line for line in listing if os.environ["FAKE_BROKER"] in line and line.split(None, 1)[0] != "bash"]
+    open(os.environ["FAKE_ACTIVATOR_LOG"], "a").write(f"release-lock-probe-rc={held.returncode}\nbroker-python-processes={len(resident)}\n")
+
 if outcome != "refused":
     started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:recover",
                               "--resources", "repository,radio", "--timeout-seconds", "10", "--", "true"], capture_output=True)
@@ -149,7 +159,7 @@ class Rig(unittest.TestCase):
                    SATURN_RELEASE_UPDATE_LOG_DIR=str(self.root / "logs"), SATURN_RELEASE_UPDATE_PERF_JSON=str(self.perf),
                    SATURN_RELEASE_UPDATE_LOCK_DIR=str(self.root / "locks"), SATURN_RELEASE_UPDATE_SYSTEMD_RUN=str(self.fake_systemd_run),
                    SATURN_RELEASE_UPDATE_LOCK_WAIT="1", SATURN_RELEASE_UPDATE_SELF=str(BROKER),
-                   FAKE_CALLS=str(self.calls), FAKE_LOCK_TOOL=str(LOCK_TOOL), FAKE_LOCK_DIR=str(self.root / "locks"), FAKE_SERVER_LOG=str(self.root / "server.log"), FAKE_RELEASES=str(self.releases), FAKE_RECORD=str(self.record), FAKE_CURRENT=str(self.current), FAKE_PERF=str(self.perf))
+                   FAKE_CALLS=str(self.calls), FAKE_LOCK_TOOL=str(LOCK_TOOL), FAKE_LOCK_DIR=str(self.root / "locks"), FAKE_SERVER_LOG=str(self.root / "server.log"), FAKE_ACTIVATOR_LOG=str(self.root / "activator.log"), FAKE_BROKER=str(BROKER), FAKE_RELEASES=str(self.releases), FAKE_RECORD=str(self.record), FAKE_CURRENT=str(self.current), FAKE_PERF=str(self.perf))
         env.update(extra)
         return env
 
@@ -220,7 +230,7 @@ class DispatchTests(Rig):
         result = self.broker("--dispatch", str(bundle))
         self.assertEqual(result.returncode, 0, result.stderr)
         line = next(l for l in self.calls_text().splitlines() if l.startswith("systemd-run"))
-        self.assertRegex(line, rf"--unit saturn-release-update-[0-9]{{14}} --collect --no-block {BROKER} --run {bundle}$")
+        self.assertRegex(line, rf"--unit saturn-release-update-[0-9]{{14}} --collect --no-block --property=RuntimeMaxSec=7200 {BROKER} --run {bundle}$")
         status = self.status()
         self.assertEqual((status["status"], status["phase"]), ("dispatched", "dispatch"))
         self.assertRegex(status["unit_name"], r"^saturn-release-update-[0-9]{14}$")
@@ -503,27 +513,53 @@ class RunTests(Rig):
         time.sleep(0)
 
     def test_a_failed_lock_check_refuses_instead_of_going_ahead(self):
-        real = self.tools / "saturn-maintenance-lock.py"
-        moved = self.tools / "saturn-maintenance-lock-real.py"
-        real.rename(moved)
-        real.write_text(f'#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = probe ] && {{ echo "tool broken" >&2; exit 3; }}; done\nexec "{moved}" "$@"\n')
-        real.chmod(0o755)
+        lock = self.root / "locks" / "radio.lock"
+        lock.unlink()
+        lock.mkdir()          # cannot be opened as a lock file
         result = self.run_update()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         status = self.status()
         self.assertEqual((status["status"], status["phase"]), ("error", "lock"))
-        self.assertIn("could not check", status["message"])
+        self.assertIn("cannot open the maintenance lock file", status["message"])
         self.assertEqual(self.calls_text(), "")
         self.assertEqual(self.active(), OLD)
+
+    def test_no_python_process_of_the_broker_stays_resident_while_the_activator_runs(self):
+        self.assertEqual(self.run_update().returncode, 0)
+        lines = (self.root / "activator.log").read_text().split()
+        self.assertIn("broker-python-processes=0", lines, "a resident Python process is memory the browser's headroom check counts against it")
+
+    def test_the_release_lock_stays_held_through_the_hand_over_to_the_activator(self):
+        self.assertEqual(self.run_update().returncode, 0)
+        self.assertIn("release-lock-probe-rc=75", (self.root / "activator.log").read_text().split())
+
+    def test_nothing_is_left_behind_when_the_run_ends(self):
+        self.assertEqual(self.run_update().returncode, 0)
+        probe = subprocess.run([str(LOCK_TOOL), "--lock-dir", str(self.root / "locks"), "probe", "--operation", "x", "--resources", "release,radio,repository"], capture_output=True)
+        self.assertEqual(probe.returncode, 0, "the release lock is still held after the run")
+        self.assertEqual(list((self.root / "logs").glob("*.context.json")), [], "the hand-over file was not removed")
+        self.assertEqual(len(list((self.root / "logs").glob("*.log"))), 1)
+
+    def test_finish_with_a_missing_context_says_so_and_changes_nothing(self):
+        result = self.broker("--finish", str(self.root / "no-such-context.json"), "--activator-rc", "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unreadable", result.stderr)
+        self.assertFalse(self.status_file.exists())
+
+    def test_finish_needs_the_activator_status_and_nothing_else(self):
+        bundle = str(self.bundle())
+        for arguments, message in (((("--finish", str(self.root / "x"))), "takes a context file and --activator-rc"),
+                                   (("--finish", str(self.root / "x"), "--activator-rc", "0", bundle), "takes a context file and --activator-rc"),
+                                   (("--run", "--activator-rc", "0", bundle), "--activator-rc belongs to --finish")):
+            result = self.broker(*arguments)
+            self.assertEqual(result.returncode, 2, arguments)
+            self.assertIn(message, result.stderr, arguments)
 
     def test_every_step_is_in_the_log(self):
         self.run_update(FAKE_OUTCOME="rolled-back")
         log = Path(self.status()["log"]).read_text()
         for expected in ("saturn-release-install-root.sh --validate", f"saturn-release-install-root.sh {self.staging / NEW}", f"saturn-release-activate-root.sh {NEW}", "[exit 1]"):
             self.assertIn(expected, log)
-
-    def test_locked_belongs_to_run(self):
-        self.assertNotEqual(self.broker("--dispatch", "--locked", str(self.bundle())).returncode, 0)
 
     def test_one_mode_at_a_time(self):
         self.assertNotEqual(self.broker("--preflight", "--run").returncode, 0)

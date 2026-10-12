@@ -15,7 +15,11 @@ Modes (the service user may run only the first two, through sudo; --run is for t
   --dispatch [--allow-legacy-migration] BUNDLE
                               Checks the bundle and everything --preflight checks, then starts --run in a detached transient unit and returns.
   --run [--allow-legacy-migration] BUNDLE
-                              Does the update (as root, inside the unit).
+                              Does the update (as root, inside the unit): takes the release lock, installs, then replaces itself with a small shell
+                              that runs the activator, so that no Python process stays resident while the headless browser's memory headroom is
+                              checked.
+  --finish CONTEXT --activator-rc N
+                              The last step, started by that shell (not for people): classifies the outcome and tells the page.
 
 The privileged helpers (activator, validator, guard) are never taken from a bundle: they are installed by the installer, which is the trust
 anchor. A release that declares a newer helper contract than the installed helpers is refused before anything is changed, with
@@ -29,9 +33,11 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import fcntl
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -48,19 +54,20 @@ DEFAULT_LOCK_DIR = "/run/lock/saturn-maintenance"
 
 INSTALLER = "saturn-release-install-root.sh"
 ACTIVATOR = "saturn-release-activate-root.sh"
-LOCK_TOOL = "saturn-maintenance-lock.py"
 STATE_WRITER = "saturn-state-write.py"
 HELPERS = (ACTIVATOR, "saturn-remote-validate.py", "saturn-remote-receive-guard.js")
 CONTRACT_MARK = re.compile(r"saturn-helper-contract:\s*([0-9]+)")
 
-# The maintenance locks. `release` is HELD for the whole run: a second deployment cannot start while this one does. `radio` and `repository` are only CHECKED
+# The maintenance locks are taken here, in this process, with flock on the same lock files the lock tool and saturn-go use: no lock-tool wrapper and no
+# second copy of this program stay resident (each Python process costs memory that the headless browser's headroom check counts: the lock tool and the
+# re-executed broker were two of the five Python processes that held it ~55 MiB below the 532 MiB the check needs). `release` is HELD for the whole run: a second deployment cannot start while this one does. `radio` and `repository` are only CHECKED
 # (never held), because the activation restarts saturn-go, and saturn-go's own startup runs its restore recovery under exactly those two locks and exits when
 # either is busy: held here, the target's server could not start (readiness failed) and neither could the previous release's (the rollback failed). The first
 # page-driven update on the G2 failed that way. Whoever else wants them is the page, and the page is down while the services restart.
 LOCK_RESOURCES = "release"
 CHECKED_RESOURCES = "radio,repository"
 LOCK_WAIT_SECONDS = 90
-RUN_TIMEOUT_SECONDS = 2 * 3600
+RUN_TIMEOUT_SECONDS = 2 * 3600          # enforced by the transient unit (RuntimeMaxSec)
 EXIT_REFUSED, EXIT_NOT_RESTORED, EXIT_UNVERIFIED, EXIT_CONFLICT = 2, 70, 71, 75
 
 COMMIT = re.compile(r"[0-9a-f]{40}")
@@ -198,7 +205,7 @@ def check_policy_and_layout(env: Environment, allow_migration: bool) -> tuple[st
     if layout == "legacy" and not allow_migration:
         raise Refused("migration_required", "this installation uses the legacy layout (no release is active). Moving to managed releases is a one-way "
                                             "change and is never done by an ordinary update: run the update with --migrate-to-releases to do it deliberately")
-    for name in (INSTALLER, ACTIVATOR, "saturn-remote-validate.py", "saturn-remote-receive-guard.js", LOCK_TOOL):
+    for name in (INSTALLER, ACTIVATOR, "saturn-remote-validate.py", "saturn-remote-receive-guard.js"):
         if not os.path.exists(tool(env, name)):
             raise Refused("installer_update_required", f"the privileged helper {name} is not installed; run the installer")
     return layout, commit
@@ -324,7 +331,72 @@ def unit_name_from_cgroup() -> str | None:
     return None
 
 
-def do_run(env: Environment, bundle_arg: str, allow_migration: bool, locked: bool) -> int:
+# ---- the locks ----------------------------------------------------------------------------------------------------------------------------
+def open_lock(env: Environment, name: str) -> int:
+    path = os.path.join(env.lock_dir, f"{name}.lock")
+    try:
+        descriptor = os.open(path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as error:
+        raise Refused("lock", f"cannot open the maintenance lock file {path}: {error.strerror}") from error
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise Refused("lock", f"the maintenance lock path is not a regular file: {path}")
+    return descriptor
+
+
+def hold_release_lock(env: Environment, status: Status, release: dict) -> int | None:
+    """Take the release lock (a second deployment cannot start while this one runs), retrying briefly while the page's own script, which holds the
+    application-deployment locks until it exits, finishes. The descriptor is inheritable: it stays held across the hand-over to the activator."""
+    descriptor = open_lock(env, LOCK_RESOURCES)
+    deadline = time.monotonic() + env.lock_wait
+    announced = False
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.set_inheritable(descriptor, True)
+            return descriptor
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(descriptor)
+                return None
+            if not announced:
+                status.write("running", "lock", "Waiting for the other maintenance operations to finish", release=release)
+                announced = True
+            time.sleep(min(2.0, max(0.05, env.lock_wait / 20)))
+
+
+def others_are_idle(env: Environment) -> bool:
+    """True when nothing else holds the radio or repository lock. Checked, not held (see CHECKED_RESOURCES); fails closed if the check itself fails."""
+    taken: list[int] = []
+    try:
+        for name in CHECKED_RESOURCES.split(","):
+            descriptor = open_lock(env, name)
+            taken.append(descriptor)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return False
+        return True
+    finally:
+        for descriptor in taken:
+            os.close(descriptor)       # closing releases what was just taken
+
+
+# ---- the run ----------------------------------------------------------------------------------------------------------------------------
+# While the activator runs (the services restart and the headless browser is validated) nothing of this program may stay resident: the validation
+# refuses to start a browser unless the host has the memory for it, and a resident Python process is memory it does not have. So after the
+# preparation this process REPLACES ITSELF with a small shell that runs the activator, appends its output to the log, and then starts this program
+# again in --finish mode to classify the outcome. The release lock's descriptor is inherited through all of it.
+SUPERVISOR = r"""log="$3"
+printf '$ %s %s\n' "$1" "$2" >>"$log"
+"$1" "$2" >>"$log" 2>&1
+rc=$?
+printf '[exit %s]\n' "$rc" >>"$log"
+exec "$4" "$5" --finish "$6" --activator-rc "$rc"
+"""
+
+
+def do_run(env: Environment, bundle_arg: str, allow_migration: bool) -> int:
     unit = unit_name_from_cgroup() or os.environ.get("SATURN_RELEASE_UPDATE_UNIT")
     status = Status(env, unit)
     log = None
@@ -338,8 +410,10 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool, locked: boo
         if previous == commit:
             status.write("success", "done", f"Release {commit[:12]} is already the active release; nothing to do", 0, True, release=release)
             return 0
-        if not locked:
-            return run_under_locks(env, bundle, allow_migration, status, release)
+        lock = hold_release_lock(env, status, release)
+        if lock is None:
+            status.write("error", "busy", "Another deployment holds the release lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
+            return EXIT_REFUSED
         if not others_are_idle(env):
             status.write("error", "busy", "Another maintenance operation holds the radio or repository lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
             return EXIT_REFUSED
@@ -365,17 +439,13 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool, locked: boo
                          EXIT_REFUSED, True, release=release)
             return EXIT_REFUSED
         status.write("running", "activate", "Activating: the services restart, reception is verified by a headless session, and the previous release is restored if that fails", release=release)
-        rc = run_logged([tool(env, ACTIVATOR), commit], log)
-        after = radio_state(env)
-        release["radio_after"] = after
-        release["settings_preserved"] = settings_preserved(before, after)
-        release["rxc1_after"] = (after or {}).get("rxc1")
-        release["active_commit"] = current_layout(env)[1]
-        outcome, phase, message = classify(env, commit, rc)
-        release["result"] = validation_summary(read_record(env), commit)
-        exit_status = 0 if outcome == "success" else (rc or 1)       # never report a failure with exit status 0
-        status.write(outcome, phase, message, exit_status, True, release=release)
-        return exit_status
+        context_path = log_path + ".context.json"
+        descriptor = os.open(context_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump({"commit": commit, "unit": unit, "started_at": status.started_at, "extra": status.extra, "before": before}, handle)
+        log.close()
+        log = None
+        os.execv("/bin/bash", ["bash", "-c", SUPERVISOR, "saturn-release-update", tool(env, ACTIVATOR), commit, log_path, sys.executable, env.self_path, context_path])
     except Refused as refusal:
         status.write("error", refusal.phase, refusal.message, EXIT_REFUSED, True)
         print(f"[saturn-release-update] {refusal.message}", file=sys.stderr)
@@ -391,36 +461,39 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool, locked: boo
             log.close()
 
 
-def others_are_idle(env: Environment) -> bool:
-    """True when nothing else holds the radio or repository lock. Checked, not held (see CHECKED_RESOURCES); fails closed if the check itself fails."""
-    process = subprocess.run([tool(env, LOCK_TOOL), "--lock-dir", env.lock_dir, "probe", "--operation", "release-update", "--resources", CHECKED_RESOURCES],
-                             capture_output=True, text=True, timeout=30)
-    if process.returncode == 0:
-        return True
-    if process.returncode == EXIT_CONFLICT:
-        return False
-    raise Refused("lock", f"the maintenance lock tool could not check the {CHECKED_RESOURCES} locks (exit {process.returncode}): {process.stderr.strip()[:200]}")
-
-
-def run_under_locks(env: Environment, bundle: str, allow_migration: bool, status: Status, release: dict) -> int:
-    """Run the rest of the update under the host maintenance locks (the same ones the other maintenance operations take), retrying briefly while
-    the page's own script, which holds them until it exits, finishes."""
-    command = [tool(env, LOCK_TOOL), "--lock-dir", env.lock_dir, "run", "--operation", "release-update", "--resources", LOCK_RESOURCES,
-               "--timeout-seconds", str(RUN_TIMEOUT_SECONDS), "--", sys.executable, env.self_path, "--run", "--locked"]
-    if allow_migration:
-        command.append("--allow-legacy-migration")
-    command.append(bundle)
-    deadline = time.monotonic() + env.lock_wait
-    status.write("running", "lock", "Waiting for the other maintenance operations to finish", release=release)
-    while True:
-        process = subprocess.run(command, env=dict(os.environ, SATURN_RELEASE_UPDATE_UNIT=status.unit or ""))
-        if process.returncode != EXIT_CONFLICT or time.monotonic() >= deadline:
-            break
-        time.sleep(2)
-    if process.returncode == EXIT_CONFLICT:
-        status.write("error", "busy", "Another deployment holds the release lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
+def do_finish(env: Environment, context_path: str, rc: int) -> int:
+    """The last step of a run, started by the shell that ran the activator: read what the run knew, compare the radio before and after, classify the
+    outcome from the activator's exit status and the deployment record, and tell the page."""
+    try:
+        with open(context_path, encoding="utf-8") as handle:
+            context = json.load(handle)
+        commit, before = context["commit"], context.get("before")
+        status = Status(env, unit_name_from_cgroup() or context.get("unit"))
+        status.started_at = context["started_at"]
+        status.extra.update(context["extra"])
+        release = status.extra["release"]
+    except (OSError, ValueError, KeyError) as error:
+        print(f"[saturn-release-update] cannot finish: the run's context {context_path} is unreadable: {error!r}", file=sys.stderr)
         return EXIT_REFUSED
-    return process.returncode
+    try:
+        after = radio_state(env)
+        release["radio_after"] = after
+        release["settings_preserved"] = settings_preserved(before, after)
+        release["rxc1_after"] = (after or {}).get("rxc1")
+        release["active_commit"] = current_layout(env)[1]
+        outcome, phase, message = classify(env, commit, rc)
+        release["result"] = validation_summary(read_record(env), commit)
+        exit_status = 0 if outcome == "success" else (rc or 1)       # never report a failure with exit status 0
+        status.write(outcome, phase, message, exit_status, True, release=release)
+        return exit_status
+    except Exception as error:  # noqa: BLE001  (the page must hear about it)
+        status.write("error", "failed", f"The update failed unexpectedly: {error!r}", 1, True)
+        raise
+    finally:
+        try:
+            os.unlink(context_path)
+        except OSError:
+            pass
 
 
 def do_dispatch(env: Environment, bundle_arg: str, allow_migration: bool) -> int:
@@ -434,7 +507,7 @@ def do_dispatch(env: Environment, bundle_arg: str, allow_migration: bool) -> int
         print(f"[saturn-release-update] REFUSED ({refusal.phase}): {refusal.message}", file=sys.stderr)
         return EXIT_REFUSED
     unit = f"saturn-release-update-{time.strftime('%Y%m%d%H%M%S')}"
-    command = [env.systemd_run, "--unit", unit, "--collect", "--no-block", env.self_path, "--run"]
+    command = [env.systemd_run, "--unit", unit, "--collect", "--no-block", f"--property=RuntimeMaxSec={RUN_TIMEOUT_SECONDS}", env.self_path, "--run"]
     if allow_migration:
         command.append("--allow-legacy-migration")
     command.append(bundle)
@@ -466,25 +539,33 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument("--preflight", action="store_true")
     group.add_argument("--dispatch", action="store_true")
     group.add_argument("--run", action="store_true")
-    parser.add_argument("--locked", action="store_true", help=argparse.SUPPRESS)
+    group.add_argument("--finish", metavar="CONTEXT", help=argparse.SUPPRESS)
+    parser.add_argument("--activator-rc", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--allow-legacy-migration", action="store_true")
     parser.add_argument("bundle", nargs="?")
     args = parser.parse_args(argv)
     env = Environment()
+    if args.finish is not None:
+        if args.bundle or args.activator_rc is None:
+            parser.error("--finish takes a context file and --activator-rc, nothing else")
+        if env.root and not os.environ.get("INVOCATION_ID"):
+            print("[saturn-release-update] --finish belongs to the transient update unit", file=sys.stderr)
+            return EXIT_REFUSED
+        return do_finish(env, args.finish, args.activator_rc)
+    if args.activator_rc is not None:
+        parser.error("--activator-rc belongs to --finish")
     if args.preflight:
-        if args.bundle or args.locked:
+        if args.bundle:
             parser.error("--preflight takes no bundle")
         return do_preflight(env, args.allow_legacy_migration)
     if not args.bundle:
         parser.error("a bundle directory is required")
-    if args.locked and not args.run:
-        parser.error("--locked belongs to --run")
     if args.dispatch:
         return do_dispatch(env, args.bundle, args.allow_legacy_migration)
     if env.root and not os.environ.get("INVOCATION_ID"):
         print("[saturn-release-update] --run is for the transient update unit (a terminal session would end with the connection); use --dispatch", file=sys.stderr)
         return EXIT_REFUSED
-    return do_run(env, args.bundle, args.allow_legacy_migration, args.locked)
+    return do_run(env, args.bundle, args.allow_legacy_migration)
 
 
 if __name__ == "__main__":

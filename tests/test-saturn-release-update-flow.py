@@ -55,7 +55,7 @@ for h in saturn-release-activate-root.sh saturn-remote-validate.py saturn-remote
 RUN_THROUGH = r'''#!/usr/bin/env bash
 # stands in for systemd-run: runs the unit's command at once, in the foreground, like the transient unit would
 echo "systemd-run $*" >>"$FAKE_CALLS"
-while [ $# -gt 0 ]; do case "$1" in --unit) shift 2;; --collect|--no-block) shift;; *) break;; esac; done
+while [ $# -gt 0 ]; do case "$1" in --unit) shift 2;; --collect|--no-block|--property=*) shift;; *) break;; esac; done
 INVOCATION_ID=test "$@"
 exit 0      # --no-block: the unit's own exit status is not systemd-run's
 '''
