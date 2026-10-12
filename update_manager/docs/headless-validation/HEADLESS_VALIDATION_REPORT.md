@@ -319,6 +319,19 @@ could have read that credential. The flow now starts the builder with `env -i` a
 `GIT_TERMINAL_PROMPT=0` from the flow), so a release is built in the environment the earlier successful builds had, not in the service's. The Rust server's tests are still sensitive to that variable when run by hand in a shell that has it; that is
 noted, not changed here (it is in the release payload).
 
+### What the third page-driven attempt found (2026-10-11 23:12 EDT): the activation itself, and a rollback_failed record
+
+The build passed every gate this time (the server's 155 tests, 761 web tests, the Bridge's 492 including the `rx_state` ones) and the bundle was installed inactive. The activation then failed at *readiness* and the rollback was recorded as
+failed (exit 70, `rollback_failed`, `receive_verified: not_attempted`), yet the radio was running `cc09c61` healthy afterwards. **Cause (mine):** the broker held the `radio` maintenance lock for the whole run. `saturn-go`'s own startup runs its
+restore recovery under the `repository` and `radio` locks and exits with status 1 when either is busy, so the target's `saturn-go` could not start (journal: `failed to recover incomplete restore transaction: ... resource is busy: radio`, then a restart
+loop) and neither could the previous release's during the rollback; both started within a second of the broker exiting (23:13:28), which is why the radio is fine now. The target's Bridge itself started cleanly (`no saved receive settings ... starting at the defaults`).
+The staged procedure never held that lock, so the bootstrap never met it. Fixed: the broker holds `release` only, and checks `radio` and `repository` are free at the start and just before the activation. The test activator now does what `saturn-go`'s startup does
+(takes `repository` and `radio` with the real lock tool and exits 70 if busy), so every broker test guards this. What it leaves unchecked: another maintenance job that starts between the last check and the restart; the page is the only
+client of those locks and is down while the services restart.
+
+State left on the G2: release `42ff0919…` installed inactive (its bundle is staged), `cc09c61` active and ready, and the transaction record `rollback_failed`. A record in that state blocks further activations until it is reconciled
+(`saturn-release-activate-root.sh --reconcile-rollback`, which verifies the previous release is running and receiving and preserves the original record beside the new one).
+
 ## Not verified / residual risk
 
 * **The restart-timing waits are bounded, not removed.** If the host's memory never climbs back to cap + 32 MiB within 30 s, or the owner never writes telemetry, the validation still fails (and an activation rolls back);

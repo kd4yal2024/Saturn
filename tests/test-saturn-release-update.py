@@ -32,12 +32,25 @@ mkdir -p "$FAKE_RELEASES/$(basename "$1")"
 '''
 
 FAKE_ACTIVATOR = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, subprocess, sys
 calls = os.environ["FAKE_CALLS"]
 open(calls, "a").write("activator " + " ".join(sys.argv[1:]) + "\n")
 commit = sys.argv[-1]
 outcome = os.environ.get("FAKE_OUTCOME", "success")
 record_path, current, releases, perf = os.environ["FAKE_RECORD"], os.environ["FAKE_CURRENT"], os.environ["FAKE_RELEASES"], os.environ["FAKE_PERF"]
+
+# What the real activation does to the services: it restarts them, and saturn-go's own startup (restore recovery, rust-server restore.rs) takes the repository
+# and radio maintenance locks with the real lock tool and EXITS when either is busy. A held radio lock therefore means no server, a failed readiness
+# check and a failed rollback: the first page-driven update on the G2 failed exactly like that.
+if outcome != "refused":
+    started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:recover",
+                              "--resources", "repository,radio", "--timeout-seconds", "10", "--", "true"], capture_output=True)
+    open(os.environ["FAKE_SERVER_LOG"], "a").write(f"server-start rc={started.returncode}\n")
+    if started.returncode != 0:
+        json.dump({"status": "rollback_failed", "phase": "rollback-failed", "target_commit": commit, "validation": {},
+                   "activation_failure": {"phase": "readiness", "exit_status": 1, "command": "false"},
+                   "rollback": {"status": "failed", "release_restored": False, "receive_verified": "not_attempted"}}, open(record_path, "w"))
+        sys.exit(70)
 
 def record(status, phase, **more):
     d = {"status": status, "phase": phase, "target_commit": commit, "validation": {}}
@@ -136,7 +149,7 @@ class Rig(unittest.TestCase):
                    SATURN_RELEASE_UPDATE_LOG_DIR=str(self.root / "logs"), SATURN_RELEASE_UPDATE_PERF_JSON=str(self.perf),
                    SATURN_RELEASE_UPDATE_LOCK_DIR=str(self.root / "locks"), SATURN_RELEASE_UPDATE_SYSTEMD_RUN=str(self.fake_systemd_run),
                    SATURN_RELEASE_UPDATE_LOCK_WAIT="1", SATURN_RELEASE_UPDATE_SELF=str(BROKER),
-                   FAKE_CALLS=str(self.calls), FAKE_RELEASES=str(self.releases), FAKE_RECORD=str(self.record), FAKE_CURRENT=str(self.current), FAKE_PERF=str(self.perf))
+                   FAKE_CALLS=str(self.calls), FAKE_LOCK_TOOL=str(LOCK_TOOL), FAKE_LOCK_DIR=str(self.root / "locks"), FAKE_SERVER_LOG=str(self.root / "server.log"), FAKE_RELEASES=str(self.releases), FAKE_RECORD=str(self.record), FAKE_CURRENT=str(self.current), FAKE_PERF=str(self.perf))
         env.update(extra)
         return env
 
@@ -437,6 +450,15 @@ class RunTests(Rig):
         self.assertEqual(result.returncode, 2)
         self.assertEqual(self.calls_text(), "")
 
+    def test_a_busy_repository_lock_means_nothing_is_changed(self):
+        with open(self.root / "locks" / "repository.lock", "r+") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            result = self.run_update()
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual((self.status()["status"], self.status()["phase"]), ("error", "busy"))
+        self.assertEqual(self.calls_text(), "")
+        self.assertEqual(self.active(), OLD)
+
     def test_a_lock_that_is_released_in_time_is_waited_for(self):
         import threading, time
         held = open(self.root / "locks" / "release.lock", "r+")
@@ -446,13 +468,53 @@ class RunTests(Rig):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(self.active(), NEW)
 
-    def test_the_work_holds_the_locks_while_it_runs(self):
+    def test_the_release_lock_is_held_while_it_runs_and_the_radio_and_repository_locks_are_not(self):
         probe = self.root / "probe.txt"
         (self.tools / "saturn-release-install-root.sh").write_text(
-            f'#!/usr/bin/env bash\necho "installer $*" >>"$FAKE_CALLS"\n[ "$1" = --validate ] && {{ "{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation x --resources release,radio >"{probe}" 2>&1; echo "rc=$?" >>"{probe}"; exit 0; }}\n'
+            f'#!/usr/bin/env bash\necho "installer $*" >>"$FAKE_CALLS"\n[ "$1" = --validate ] && {{ '
+            f'"{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation x --resources release >/dev/null 2>&1; echo "release rc=$?" >>"{probe}"; '
+            f'"{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation x --resources radio,repository >/dev/null 2>&1; echo "radio+repository rc=$?" >>"{probe}"; exit 0; }}\n'
             'mkdir -p "$FAKE_RELEASES/$(basename "$1")"\n')
         self.assertEqual(self.run_update().returncode, 0)
-        self.assertIn("rc=75", probe.read_text(), "the locks were not held while the installer ran")
+        self.assertEqual(probe.read_text().split("\n")[:2], ["release rc=75", "radio+repository rc=0"],
+                         "release must be held (a second deployment cannot start) and radio/repository must not be (saturn-go's startup needs them)")
+
+    def test_the_server_can_start_while_the_activation_runs(self):
+        """The regression of the first page-driven update: the services restart inside the activation, and saturn-go's startup takes radio+repository."""
+        self.assertEqual(self.run_update().returncode, 0)
+        self.assertEqual((self.root / "server.log").read_text().split(), ["server-start", "rc=0"][:0] + ["server-start", "rc=0"])
+        self.assertEqual(self.status()["status"], "success")
+        self.assertEqual(self.active(), NEW)
+
+    def test_a_server_that_could_not_start_is_reported_as_a_failed_rollback_not_as_success(self):
+        # a stand-in for the broker bug itself: something else holds radio for the whole activation (here: from outside, taken after the early check)
+        import subprocess, time
+        holder = None
+        original = (self.tools / "saturn-release-install-root.sh").read_text()
+        (self.tools / "saturn-release-install-root.sh").write_text(
+            original + f'\nnohup python3 -c "import fcntl,time; f=open(\'{self.root}/locks/radio.lock\',\'r+\'); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(6)" >/dev/null 2>&1 &\nsleep 0.5\n')
+        result = self.run_update()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        status = self.status()
+        self.assertEqual((status["status"], status["phase"]), ("error", "busy"))
+        self.assertIn("installed but was not activated", status["message"])
+        self.assertNotIn("activator", self.calls_text(), "the services must not be restarted while the radio lock is taken")
+        self.assertEqual(self.active(), OLD)
+        time.sleep(0)
+
+    def test_a_failed_lock_check_refuses_instead_of_going_ahead(self):
+        real = self.tools / "saturn-maintenance-lock.py"
+        moved = self.tools / "saturn-maintenance-lock-real.py"
+        real.rename(moved)
+        real.write_text(f'#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = probe ] && {{ echo "tool broken" >&2; exit 3; }}; done\nexec "{moved}" "$@"\n')
+        real.chmod(0o755)
+        result = self.run_update()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        status = self.status()
+        self.assertEqual((status["status"], status["phase"]), ("error", "lock"))
+        self.assertIn("could not check", status["message"])
+        self.assertEqual(self.calls_text(), "")
+        self.assertEqual(self.active(), OLD)
 
     def test_every_step_is_in_the_log(self):
         self.run_update(FAKE_OUTCOME="rolled-back")

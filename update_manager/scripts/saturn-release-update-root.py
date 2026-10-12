@@ -5,7 +5,8 @@ The Update action of the Saturn Go page builds a release bundle as the service u
 installing, activating or rolling back: it runs the existing root installer (saturn-release-install-root.sh) and the existing root activator
 (saturn-release-activate-root.sh), whose transaction restarts the services, proves reception with the headless receive validation, and
 restores the previous release if that fails. What this broker adds is the part that has to survive the web service restarting: it runs in
-its own transient unit, holds the maintenance locks, keeps the status file the page reads up to date, and classifies the outcome.
+its own transient unit, holds the release lock (and checks, without holding them, that the radio and repository locks are free: saturn-go's startup needs
+them), keeps the status file the page reads up to date, and classifies the outcome.
 
 Modes (the service user may run only the first two, through sudo; --run is for the transient unit and refuses to run from anything else):
 
@@ -52,7 +53,12 @@ STATE_WRITER = "saturn-state-write.py"
 HELPERS = (ACTIVATOR, "saturn-remote-validate.py", "saturn-remote-receive-guard.js")
 CONTRACT_MARK = re.compile(r"saturn-helper-contract:\s*([0-9]+)")
 
-LOCK_RESOURCES = "release,radio"
+# The maintenance locks. `release` is HELD for the whole run: a second deployment cannot start while this one does. `radio` and `repository` are only CHECKED
+# (never held), because the activation restarts saturn-go, and saturn-go's own startup runs its restore recovery under exactly those two locks and exits when
+# either is busy: held here, the target's server could not start (readiness failed) and neither could the previous release's (the rollback failed). The first
+# page-driven update on the G2 failed that way. Whoever else wants them is the page, and the page is down while the services restart.
+LOCK_RESOURCES = "release"
+CHECKED_RESOURCES = "radio,repository"
 LOCK_WAIT_SECONDS = 90
 RUN_TIMEOUT_SECONDS = 2 * 3600
 EXIT_REFUSED, EXIT_NOT_RESTORED, EXIT_UNVERIFIED, EXIT_CONFLICT = 2, 70, 71, 75
@@ -334,6 +340,9 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool, locked: boo
             return 0
         if not locked:
             return run_under_locks(env, bundle, allow_migration, status, release)
+        if not others_are_idle(env):
+            status.write("error", "busy", "Another maintenance operation holds the radio or repository lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
+            return EXIT_REFUSED
         os.makedirs(env.log_dir, mode=0o750, exist_ok=True)
         log_path = os.path.join(env.log_dir, f"{time.strftime('%Y%m%dT%H%M%S')}-{commit[:12]}.log")
         log = open(log_path, "w", encoding="utf-8")
@@ -351,6 +360,10 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool, locked: boo
             if run_logged([tool(env, INSTALLER), bundle], log):
                 status.write("error", "refused", "The release could not be installed (see the log); the active release was not changed", EXIT_REFUSED, True, release=release)
                 return EXIT_REFUSED
+        if not others_are_idle(env):       # again, right before the services restart: the install above took a while
+            status.write("error", "busy", "Another maintenance operation holds the radio or repository lock; the release is installed but was not activated. Try again when it has finished",
+                         EXIT_REFUSED, True, release=release)
+            return EXIT_REFUSED
         status.write("running", "activate", "Activating: the services restart, reception is verified by a headless session, and the previous release is restored if that fails", release=release)
         rc = run_logged([tool(env, ACTIVATOR), commit], log)
         after = radio_state(env)
@@ -378,6 +391,17 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool, locked: boo
             log.close()
 
 
+def others_are_idle(env: Environment) -> bool:
+    """True when nothing else holds the radio or repository lock. Checked, not held (see CHECKED_RESOURCES); fails closed if the check itself fails."""
+    process = subprocess.run([tool(env, LOCK_TOOL), "--lock-dir", env.lock_dir, "probe", "--operation", "release-update", "--resources", CHECKED_RESOURCES],
+                             capture_output=True, text=True, timeout=30)
+    if process.returncode == 0:
+        return True
+    if process.returncode == EXIT_CONFLICT:
+        return False
+    raise Refused("lock", f"the maintenance lock tool could not check the {CHECKED_RESOURCES} locks (exit {process.returncode}): {process.stderr.strip()[:200]}")
+
+
 def run_under_locks(env: Environment, bundle: str, allow_migration: bool, status: Status, release: dict) -> int:
     """Run the rest of the update under the host maintenance locks (the same ones the other maintenance operations take), retrying briefly while
     the page's own script, which holds them until it exits, finishes."""
@@ -394,7 +418,7 @@ def run_under_locks(env: Environment, bundle: str, allow_migration: bool, status
             break
         time.sleep(2)
     if process.returncode == EXIT_CONFLICT:
-        status.write("error", "busy", "Another maintenance operation holds the release or radio lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
+        status.write("error", "busy", "Another deployment holds the release lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
         return EXIT_REFUSED
     return process.returncode
 

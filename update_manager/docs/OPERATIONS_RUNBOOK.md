@@ -113,7 +113,7 @@ With managed updates enabled, an authenticated administrator's **Run Saturn Go U
 3. builds exactly that commit into a release bundle on the device (`saturn-release-build.sh`: tests, native build, manifest; never activates), about an hour and a half on a
    Raspberry Pi 4/CM4, with the radio running throughout, and validates the bundle;
 4. hands the bundle to the broker (`saturn-release-update-root.py --dispatch`), which runs in its own transient `saturn-release-update-*` unit because activation restarts
-   `saturn-go.service`: it holds the host maintenance locks, runs the existing root installer and activator (install inactive, switch, restart, **prove reception with a
+   `saturn-go.service`: it holds the `release` maintenance lock (it only checks that `radio` and `repository` are free: `saturn-go`'s startup needs them), runs the existing root installer and activator (install inactive, switch, restart, **prove reception with a
    temporary receive-only headless session, restore the previous release if that fails**), and writes the outcome to the deploy status the page shows. No browser has to be connected.
 
 The status file records `success`; or `error` with the phase `rolled_back` (validation failed, the previous release was restored and its reception verified; the first

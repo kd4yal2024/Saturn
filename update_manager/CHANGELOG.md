@@ -10,7 +10,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   restore the previous release automatically when that fails: `update-saturn-go.sh` resolves the ref to one commit
   and builds that commit (`saturn-release-update-flow.sh`), and the new root broker `saturn-release-update-root.py`
   (the service user may call only `--preflight` and `--dispatch`, only while the policy is on) runs the update in
-  its own transient unit under the host maintenance locks and writes the outcome, the release identities and the
+  its own transient unit, holding the `release` maintenance lock (and checking, without holding them, that `radio` and `repository` are free), and writes the outcome, the release identities and the
   radio settings before and after to the deploy status file. Privileged helpers stay installer-managed: a release
   that declares a newer `saturn-helper-contract` than the installed helpers is refused with "installer update
   required" before anything changes. A legacy installation is moved only by an explicit
@@ -21,6 +21,9 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   nginx), builds no server or Bridge, copies no web assets, restarts no radio service, refreshes the Bridge unit without touching the running Bridge
   (`SATURN_BRIDGE_UNIT_ONLY`), and checks readiness against the release that is running instead of its own checkout's commit (which could only fail there).
   `SATURN_INSTALL_PLAN=1` prints what a run would do without root and without changing anything; `SATURN_INSTALL_APPLICATION=auto|force|skip` overrides the rule.
+- The broker no longer holds the `radio` maintenance lock while the services restart. `saturn-go`'s own startup runs its restore recovery under the `repository` and `radio` locks and exits when either is
+  busy, so a broker holding `radio` made the target's server unable to start (readiness failed) and the previous release's too (the rollback was recorded as failed, exit 70). The broker now holds only
+  `release` for the run and checks `radio` and `repository` are free at the start and again just before the activation, refusing with phase `busy` if they are not (or if the check itself fails).
 - A release is built in a clean, allow-listed environment (`env -i` plus the toolchain and locale, `PKG_CONFIG_*`, line-buffering and the `SATURN_RELEASE_*`, `SATURN_SATURNGO_BUILD_*` and `SATURN_WDSP_*` build
   knobs), never in the environment of the running `saturn-go` service that the page hands the script. The service's environment holds its runtime configuration and its web credential
   (`SATURN_REMOTE_BASIC_AUTH`); inherited, that credential turned authentication on in the Rust server's own route tests, so six `remote_tls` tests failed with 401 in the first page-driven build on the G2
