@@ -278,7 +278,10 @@ one check (it is never stored), to learn what the host's browser really needs.
 
 Where the 350M default is too small for the host's browser (the first appliance needs 500M, with 551 to 586 MiB available), set `VALIDATION_MEMORY_MAX="500M"` once in
 `/etc/default/saturn-release-activate`: the plain check, the activation, the rollback validation and the reconciliation then all use it. Root-owned, not group or world
-writable, one line. Keep a backup of the file first. The host must have `MemAvailable` for the cap plus 32 MiB at launch, or no browser starts and reception is unproven. Just after a restart the host reads lower than at rest and a restarted Bridge writes its first telemetry a few seconds late,
+writable, one line. Keep a backup of the file first. The host must have `MemAvailable` for the cap plus 32 MiB at launch, or no browser starts and reception is unproven. The 32 MiB reserve is the default; an administrator may choose another with `VALIDATION_MEMORY_RESERVE` (for example `"16M"`, never below `8M`) in the same file. It is kept as a setting
+and not as a new default on purpose: one appliance's measurement is not every host's. On the first appliance the plain check read 532 and 533 MiB available when it passed (the threshold itself), and
+**an update through the Update page read 490 to 502 MiB**, because the update's own Python processes (the validator's two, and, before the broker handed over to a shell, three of the broker's) are
+resident while the check runs; the check is honest about that memory, it is real. Just after a restart the host reads lower than at rest and a restarted Bridge writes its first telemetry a few seconds late,
 so the validator waits for both (at most 30 s each, `owner_wait_s` and `headroom_wait_s`) and says how long it waited, what it saw first and what it saw at best.
 
 It reports the role the session was given (and whether the legacy fallback was

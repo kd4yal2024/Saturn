@@ -332,6 +332,22 @@ client of those locks and is down while the services restart.
 State left on the G2: release `42ff0919…` installed inactive (its bundle is staged), `cc09c61` active and ready, and the transaction record `rollback_failed`. A record in that state blocks further activations until it is reconciled
 (`saturn-release-activate-root.sh --reconcile-rollback`, which verifies the previous release is running and receiving and preserves the original record beside the new one).
 
+### What the fourth and fifth page-driven attempts found (2026-10-12 07:12 and 07:27 EDT): the memory gate
+
+With the lock fix in place the whole chain worked on the appliance up to the headless check: the bundle was reused without a rebuild, the manifest validated, the release was installed and switched, `saturn-go` and the new Bridge started cleanly,
+`/readyz` reported `42ff0919…`, and the new Bridge **restored its saved receive settings from `rx-state-v1.txt`** (the file was written by the earlier failed attempt's Bridge). Then both attempts failed `host.memory_headroom`: 490 to 502 MiB
+available against the 532 MiB needed (500M cap plus 32 MiB reserve), flat for the whole 30 s wait; the rollback's own check read 475 to 497 MiB, so it also could not start a browser (`receive_verified: false`, exit 71, record `rolled_back`).
+The radio was restored and ready each time.
+
+What was measured (a 1 Hz sampler on the appliance, read-only): `MemAvailable` is about 550 MiB at rest; **a plain restart of both services shows no dip** (545 to 553 MiB), so this is not a post-restart effect; cache, slab, zram and shared memory are flat
+through an update; **anonymous memory is 192 MiB for the whole update and 135 MiB before and after** (the difference vanishes the moment the update unit ends), and the five Python processes alive then add up to that difference: the validator's
+controller (29 MiB RSS) and its waiter (26), and the broker's three (15, 15, 14). The earlier passes read 532 and 533 MiB, which is the threshold itself: the gate has always been at its edge on this 905 MB host, and the broker's processes pushed it about 35 MiB below.
+
+Changes made, neither of which alters the gate's meaning: the broker no longer keeps Python resident while the activator runs (about 30 MiB), and the reserve is now an administrator-owned setting (`VALIDATION_MEMORY_RESERVE`, default 32M, floor 8M).
+The estimate with the broker slimmed is about 520 to 525 MiB available at the check, still a few MiB below 532; the validator's own two processes are most of what remains. **Decisions that are not mine to make**, for you and the reviewer: whether
+to lower this appliance's reserve (the setting now exists; the browser's measured peaks were 413, 421, 437, 441, 448, 468 and 472 MiB against the 500M cap, so the cap itself has little slack), whether to trim the validator's footprint (its waiter
+process is a separate Python program), or to accept the check as it is and rerun when the host happens to read higher. Counting swap or zram as headroom was considered and rejected: the Bridge has only 8 MiB locked.
+
 ## Not verified / residual risk
 
 * **The restart-timing waits are bounded, not removed.** If the host's memory never climbs back to cap + 32 MiB within 30 s, or the owner never writes telemetry, the validation still fails (and an activation rolls back);
