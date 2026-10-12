@@ -86,7 +86,8 @@ RADIO_TOP = ("rf_safe", "backend")
 
 # The host must have this much memory available beyond the browser's cap before a browser is started: validating must never push the
 # radio's own processes into swap.
-HEADROOM_MARGIN_BYTES = 32 * 1024 ** 2
+HEADROOM_MARGIN_BYTES = 32 * 1024 ** 2       # the default reserve; an administrator may choose another with --memory-reserve (VALIDATION_MEMORY_RESERVE)
+HEADROOM_MARGIN_FLOOR_BYTES = 8 * 1024 ** 2     # ... but never less than this
 
 DEFAULT_LIMITS = {
     "ready_url_wait_s": 30.0,     # the services were just restarted: how long the target may take to report itself ready
@@ -918,7 +919,10 @@ class Validator:
         validation is refused rather than started, so the radio's processes are never the ones that pay for it."""
         if self.args.isolation != "required":
             return True
-        wanted = parse_size(self.args.memory_max) + HEADROOM_MARGIN_BYTES
+        reserve = parse_size(self.args.memory_reserve)
+        if reserve < HEADROOM_MARGIN_FLOOR_BYTES:
+            return self.recorder.condition("host.memory_headroom", False, f"the memory reserve {self.args.memory_reserve} is below the {HEADROOM_MARGIN_FLOOR_BYTES // 1048576} MiB minimum, so the check cannot be trusted")
+        wanted = parse_size(self.args.memory_max) + reserve
         unreadable = "the host's available memory could not be read, so it cannot be shown that the browser fits"
         available = first = best = host_counters(Path(self.args.proc_root)).get("MemAvailable")
         if available is None:
@@ -936,7 +940,7 @@ class Validator:
             best = max(best, available)
         if available < wanted and self.stop_requested.is_set():
             return self.interrupted("host.memory_headroom", "waiting for the host to have the memory the browser needs")
-        text = f"{available / 1048576:.0f} MiB available; the browser may take up to {self.args.memory_max} and {HEADROOM_MARGIN_BYTES // 1048576} MiB are kept in reserve"
+        text = f"{available / 1048576:.0f} MiB available; the browser may take up to {self.args.memory_max} and {reserve // 1048576} MiB are kept in reserve"
         if waited_for:
             text += (f" (after waiting {now() - started:.1f} s: {first / 1048576:.0f} MiB at first"
                      + ("" if available >= wanted else f", {best / 1048576:.0f} MiB at the most") + ")")
@@ -1653,6 +1657,7 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--browser", default="/usr/bin/chromium")
     run.add_argument("--launcher", choices=("systemd", "direct"), default="systemd")
     run.add_argument("--memory-max", default="350M")
+    run.add_argument("--memory-reserve", default="32M", help="memory kept free beyond the browser's cap before a browser is started (at least 8M)")
     run.add_argument("--memory-enforcement", choices=("auto", "cgroup", "watchdog"), default="auto",
                      help="cgroup: the kernel applies MemoryMax. watchdog: the kernel cannot (no memory controller, e.g. cgroup_disable=memory on the "
                           "Raspberry Pi image), so this process reads the browser's proportional memory and stops its unit above the cap; recorded as "

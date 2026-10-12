@@ -6,7 +6,7 @@ The installer used to rewrite that file from fixed text on every run, which sile
 from the installer:
 
   * Installer-owned keys (paths, service names, URLs): always the installer's current values.
-  * Administrator-owned keys (ACTIVATION_ENABLED, VALIDATION_ENABLED, VALIDATION_MEMORY_MAX, VALIDATION_TIMEOUT_SECONDS,
+  * Administrator-owned keys (ACTIVATION_ENABLED, VALIDATION_ENABLED, VALIDATION_MEMORY_MAX, VALIDATION_MEMORY_RESERVE, VALIDATION_TIMEOUT_SECONDS,
     VALIDATION_LEGACY_BRIDGE_RELEASES, VALIDATION_EXPECT_RXC1, READY_TIMEOUT_SECONDS, VALIDATION_LAUNCHER, VALIDATION_URL,
     VALIDATION_BROWSER, VALIDATION_TLS_CERT, VALIDATION_PERF_JSON, VALIDATION_LOG_ROOT): the existing value when it is valid,
     otherwise the installer's default (or none, for a key the defaults do not set). Every key the activator accepts is either one of
@@ -38,6 +38,8 @@ ADMIN_KEYS = {
     "ACTIVATION_ENABLED": lambda v: v in ("0", "1"),
     "VALIDATION_ENABLED": lambda v: v in ("0", "1"),
     "VALIDATION_MEMORY_MAX": lambda v: re.fullmatch(r"[1-9][0-9]*[MG]", v) is not None,
+    # memory kept free beyond the browser's cap (default 32M in the activator; at least 8 MiB, the activator's floor)
+    "VALIDATION_MEMORY_RESERVE": lambda v: re.fullmatch(r"[1-9][0-9]*[MG]", v) is not None and int(v[:-1]) * (1024 if v.endswith("G") else 1) >= 8,
     "VALIDATION_TIMEOUT_SECONDS": lambda v: re.fullmatch(r"[1-9][0-9]*", v) is not None and int(v) <= 600,
     "VALIDATION_LEGACY_BRIDGE_RELEASES": lambda v: all(re.fullmatch(r"[0-9a-f]{40}", item) for item in v.split()),
     "VALIDATION_EXPECT_RXC1": lambda v: v in ("any", "valid", "unarmed", "disabled", "unsupported", "unavailable", "partial"),
@@ -61,6 +63,7 @@ KNOWN_KEYS = {
     "P23_PERF_URL", "BACKEND_STATUS_HELPER", "READY_TIMEOUT_SECONDS", "P2APP_PANEL_ENABLED", "TRANSACTION_GROUP", "VALIDATION_ENABLED", "VALIDATOR",
     "VALIDATOR_GUARD", "VALIDATION_TIMEOUT_SECONDS", "VALIDATION_EXPECT_RXC1", "VALIDATION_LEGACY_BRIDGE_RELEASES", "VALIDATION_LAUNCHER",
     "VALIDATION_BROWSER", "VALIDATION_URL", "VALIDATION_TLS_CERT", "VALIDATION_PERF_JSON", "VALIDATION_LOG_ROOT", "VALIDATION_MEMORY_MAX",
+    "VALIDATION_MEMORY_RESERVE",
 }
 
 LINE = re.compile(r"^([A-Z][A-Z0-9_]*)=(.*)$")

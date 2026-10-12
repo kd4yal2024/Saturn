@@ -83,6 +83,7 @@ VALIDATION_TLS_CERT="/var/lib/saturn-state/remote-tls/saturn-remote.crt"
 VALIDATION_PERF_JSON="/run/saturn-bridge/perf.json"
 VALIDATION_LOG_ROOT="/var/lib/saturn-state/deployments/validation"
 VALIDATION_MEMORY_MAX="350M"
+VALIDATION_MEMORY_RESERVE="32M"
 VALIDATION_CONTROL_DIR=""
 VALIDATION_LABEL=""
 VALIDATOR_PID=""
@@ -187,6 +188,7 @@ load_config(){
       VALIDATION_PERF_JSON) VALIDATION_PERF_JSON="$value" ;;
       VALIDATION_LOG_ROOT) VALIDATION_LOG_ROOT="$value" ;;
       VALIDATION_MEMORY_MAX) VALIDATION_MEMORY_MAX="$value" ;;
+      VALIDATION_MEMORY_RESERVE) VALIDATION_MEMORY_RESERVE="$value" ;;
       *) die "unsupported activation config key: $key" ;;
     esac
   done <"$CONFIG_FILE"
@@ -219,6 +221,11 @@ validate_configuration(){
   fi
   [[ "$VALIDATION_MEMORY_MAX" =~ ^[1-9][0-9]*[MG]$ ]] \
     || die "VALIDATION_MEMORY_MAX must look like 350M"
+  [[ "$VALIDATION_MEMORY_RESERVE" =~ ^[1-9][0-9]*[MG]$ ]] \
+    || die "VALIDATION_MEMORY_RESERVE must look like 32M"
+  local reserve_mib="${VALIDATION_MEMORY_RESERVE%[MG]}"
+  [[ "$VALIDATION_MEMORY_RESERVE" == *G ]] && reserve_mib=$(( reserve_mib * 1024 ))
+  (( reserve_mib >= 8 )) || die "VALIDATION_MEMORY_RESERVE must be at least 8M"
   local url_re='^https://127\.0\.0\.1:[0-9]+/[A-Za-z0-9_./-]+(\?[A-Za-z0-9_=&.-]*)?$'
   [[ "$VALIDATION_URL" =~ $url_re ]] || die "VALIDATION_URL must be an explicit loopback HTTPS URL"
   for path in \
@@ -891,7 +898,7 @@ validation_start(){
     --ready-url "${SATURN_GO_READY_URL%%\?*}" --perf-url "$P23_PERF_URL" --perf-json "$VALIDATION_PERF_JSON"
     --unit "$BRIDGE_SERVICE" --unit "$SATURN_GO_SERVICE" --owner-unit "$BRIDGE_SERVICE" --auth-unit "$SATURN_GO_SERVICE"
     --release-root "$RELEASES_ROOT" --tls-cert "$VALIDATION_TLS_CERT" --browser "$VALIDATION_BROWSER"
-    --launcher "$VALIDATION_LAUNCHER" --memory-max "$VALIDATION_MEMORY_MAX" --guard-script "$VALIDATOR_GUARD"
+    --launcher "$VALIDATION_LAUNCHER" --memory-max "$VALIDATION_MEMORY_MAX" --memory-reserve "$VALIDATION_MEMORY_RESERVE" --guard-script "$VALIDATOR_GUARD"
     --isolation required
   )
   [[ "$label" != "target" && -z "$PREVIOUS_RELEASE" ]] && args+=(--no-exe-check)

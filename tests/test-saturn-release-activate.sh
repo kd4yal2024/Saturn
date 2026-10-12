@@ -737,6 +737,7 @@ assert option("--expect-rxc1") == "unarmed" and option("--launcher") == "direct"
 assert option("--viewer-role") == "required"       # a release that is not named as predating viewer-role enforcement must give the viewer role
 assert option("--isolation") == "required"          # the browser's sandbox and memory cap are verified, not assumed
 assert option("--memory-max") == "350M"             # the configured cap, unless a diagnostic check was asked to measure with another
+assert option("--memory-reserve") == "32M"          # the reserve beyond the cap: 32 MiB unless the administrator chose another
 assert option("--guard-script") == guard
 assert option("--ready-url").endswith("/readyz") and "?" not in option("--ready-url")
 assert option("--owner-unit") == "saturn-bridge.service" and option("--auth-unit") == "saturn-go.service"
@@ -1314,7 +1315,7 @@ cmp "$TMP_ROOT/transaction.snapshot" "$TRANSACTION_FILE"
 printf '#!/bin/sh\n' >"$FAKE_BIN/systemd-run"
 chmod 0755 "$FAKE_BIN/systemd-run"
 sed -i 's/^VALIDATION_LAUNCHER=.*/VALIDATION_LAUNCHER="systemd"/' "$CONFIG_FILE"
-printf 'VALIDATION_MEMORY_MAX="123M"\nVALIDATION_LEGACY_BRIDGE_RELEASES="%s"\n' "$NEW_COMMIT" >>"$CONFIG_FILE"
+printf 'VALIDATION_MEMORY_MAX="123M"\nVALIDATION_MEMORY_RESERVE="16M"\nVALIDATION_LEGACY_BRIDGE_RELEASES="%s"\n' "$NEW_COMMIT" >>"$CONFIG_FILE"
 : >"$SATURN_TEST_VALIDATOR_ARGS_LOG"
 export SATURN_TEST_BRIDGE_OPERATOR_COMMITS="$NEW_COMMIT"
 "$ACTIVATOR" --check-reception >"$TMP_ROOT/last-run.log"
@@ -1328,9 +1329,19 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     argv = json.loads(handle.readline())
 assert argv[argv.index("--launcher") + 1] == "systemd"
 assert argv[argv.index("--memory-max") + 1] == "123M"
+assert argv[argv.index("--memory-reserve") + 1] == "16M"       # the administrator's reserve reaches the validator
 assert "--no-sandbox" not in argv and argv[argv.index("--isolation") + 1] == "required"
 assert argv[argv.index("--viewer-role") + 1] == "legacy-fallback"      # the running release is the one named
 PY
+# a reserve that is malformed or below the 8 MiB floor is refused before anything is touched
+for bad in 'lots' '0M' '7M' '16' '-5M'; do
+  sed -i '/^VALIDATION_MEMORY_RESERVE=/d' "$CONFIG_FILE"
+  printf 'VALIDATION_MEMORY_RESERVE="%s"\n' "$bad" >>"$CONFIG_FILE"
+  expect_failure nonzero "$ACTIVATOR" --check-reception
+  grep -Fq 'VALIDATION_MEMORY_RESERVE must' "$TMP_ROOT/last-run.log" || { echo "a reserve of '$bad' was not refused by name" >&2; exit 1; }
+done
+sed -i '/^VALIDATION_MEMORY_RESERVE=/d' "$CONFIG_FILE"
+printf 'VALIDATION_MEMORY_RESERVE="16M"\n' >>"$CONFIG_FILE"
 rm "$FAKE_BIN/systemd-run"
 # The systemd launcher cannot be used without systemd-run. (This machine may have a real one, so the PATH is restricted to python3.)
 mkdir -p "$TMP_ROOT/minbin"

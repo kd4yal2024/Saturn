@@ -1399,6 +1399,41 @@ class MemoryHeadroomTests(RigCase):
         self.run_to_failure(rig, "host.memory_headroom", detail="could not be read")
         self.assertIsNone(rig.browser_pid())
 
+    def test_a_smaller_reserve_lowers_the_requirement(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=370 * 1024)      # 350M cap + 32 MiB = 382 needed: refused by default ...
+        rig.start(("--memory-reserve", "8M"))                                   # ... 350M + 8 MiB = 358: enough
+        self.assertEqual(rig.wait_ready()[0], 0)
+        detail = rig.condition("host.memory_headroom")
+        self.assertTrue(detail["ok"], detail)
+        self.assertIn("8 MiB are kept in reserve", detail["detail"])
+        rig.stop(); rig.finish()
+
+    def test_a_larger_reserve_needs_more(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)
+        rig.start(("--memory-reserve", "200M"))                                 # 350M + 200M = 550 MiB needed
+        rig.finish()
+        failed = rig.status()["failed"]
+        self.assertEqual(failed["id"], "host.memory_headroom")
+        self.assertIn("550 MiB needed", failed["detail"])
+        self.assertIsNone(rig.browser_pid())
+
+    def test_a_reserve_below_the_floor_cannot_be_chosen(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=900 * 1024)
+        rig.start(("--memory-reserve", "4M"))
+        rig.finish()
+        failed = rig.status()["failed"]
+        self.assertEqual(failed["id"], "host.memory_headroom")
+        self.assertIn("below the 8 MiB minimum", failed["detail"])
+        self.assertIsNone(rig.browser_pid())
+
+    def test_the_default_reserve_is_thirty_two_mebibytes(self):
+        self.assertEqual(V.HEADROOM_MARGIN_BYTES, 32 * 1024 ** 2)
+        self.assertEqual(V.HEADROOM_MARGIN_FLOOR_BYTES, 8 * 1024 ** 2)
+        rig = self.rig(isolation="systemd", mem_available_kb=381 * 1024)      # one MiB short of 350M + 32 MiB when no reserve is named
+        rig.start()
+        rig.finish()
+        self.assertIn("382 MiB needed", rig.status()["failed"]["detail"])
+
     def test_a_larger_measurement_cap_needs_the_larger_headroom(self):
         rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)
         rig.start(("--memory-max", "500M"))

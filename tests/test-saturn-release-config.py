@@ -115,10 +115,10 @@ class MergeTests(Rig):
         self.assertEqual(got["ACTIVATION_ENABLED"], "1")
 
     def test_every_administrator_setting_is_kept(self):
-        existing = (f'ACTIVATION_ENABLED="1"\nVALIDATION_ENABLED="0"\nVALIDATION_MEMORY_MAX="600M"\nVALIDATION_TIMEOUT_SECONDS="200"\n'
+        existing = (f'ACTIVATION_ENABLED="1"\nVALIDATION_ENABLED="0"\nVALIDATION_MEMORY_MAX="600M"\nVALIDATION_MEMORY_RESERVE="16M"\nVALIDATION_TIMEOUT_SECONDS="200"\n'
                     f'VALIDATION_LEGACY_BRIDGE_RELEASES="{COMMIT}"\nVALIDATION_EXPECT_RXC1="valid"\nREADY_TIMEOUT_SECONDS="45"\n')
         got = self.values(existing=existing)
-        for key, want in (("ACTIVATION_ENABLED", "1"), ("VALIDATION_ENABLED", "0"), ("VALIDATION_MEMORY_MAX", "600M"), ("VALIDATION_TIMEOUT_SECONDS", "200"),
+        for key, want in (("ACTIVATION_ENABLED", "1"), ("VALIDATION_ENABLED", "0"), ("VALIDATION_MEMORY_MAX", "600M"), ("VALIDATION_MEMORY_RESERVE", "16M"), ("VALIDATION_TIMEOUT_SECONDS", "200"),
                           ("VALIDATION_LEGACY_BRIDGE_RELEASES", COMMIT), ("VALIDATION_EXPECT_RXC1", "valid"), ("READY_TIMEOUT_SECONDS", "45")):
             self.assertEqual(got[key], want, key)
 
@@ -161,7 +161,8 @@ class MergeTests(Rig):
         self.assertEqual(C.KNOWN_KEYS - installer_keys - set(C.ADMIN_KEYS), set(), "a known key would be lost silently on every installer run")
 
     def test_an_invalid_setting_is_dropped_not_copied(self):
-        for key, bad in (("VALIDATION_MEMORY_MAX", "lots"), ("VALIDATION_MEMORY_MAX", "0M"), ("VALIDATION_MEMORY_MAX", "500"), ("ACTIVATION_ENABLED", "2"),
+        for key, bad in (("VALIDATION_MEMORY_MAX", "lots"), ("VALIDATION_MEMORY_MAX", "0M"), ("VALIDATION_MEMORY_MAX", "500"), ("VALIDATION_MEMORY_RESERVE", "7M"),
+                         ("VALIDATION_MEMORY_RESERVE", "lots"), ("VALIDATION_MEMORY_RESERVE", "16"), ("ACTIVATION_ENABLED", "2"),
                          ("VALIDATION_TIMEOUT_SECONDS", "601"), ("VALIDATION_EXPECT_RXC1", "sometimes"), ("READY_TIMEOUT_SECONDS", "301"),
                          ("VALIDATION_LEGACY_BRIDGE_RELEASES", "329f3109")):
             got, notes = self.merge(existing=f'{key}="{bad}"\n')
