@@ -25,6 +25,7 @@ spec.loader.exec_module(B)
 FAKE_BUILDER = r'''#!/usr/bin/env bash
 echo "builder $*" >>"$FAKE_CALLS"
 echo "builder-env cargo=$(command -v cargo || echo MISSING) cargo_home=${CARGO_HOME:-} rustup_home=${RUSTUP_HOME:-}" >>"$FAKE_CALLS"
+echo "builder-inherited remote_auth=${SATURN_REMOTE_BASIC_AUTH-unset} addr=${SATURN_ADDR-unset} state_dir=${SATURN_STATE_DIR-unset} webroot=${SATURN_WEBROOT-unset} jobs=${SATURN_RELEASE_BUILD_JOBS-unset} swap=${SATURN_SATURNGO_BUILD_SWAP_MIB-unset} out=${SATURN_RELEASE_OUTPUT_ROOT-unset} repo=${SATURN_RELEASE_REPO_ROOT-unset} prompt=${GIT_TERMINAL_PROMPT-unset} home=${HOME-unset} lang=${LANG-unset} pkg=${PKG_CONFIG_PATH-unset}" >>"$FAKE_CALLS"
 remote="" ref="" resolve=0 expect=""
 while [ $# -gt 0 ]; do case "$1" in --source-remote) remote=$2; shift 2;; --source-ref) ref=$2; shift 2;; --resolve-only) resolve=1; shift;; --expect-commit) expect=$2; shift 2;; --output-root) shift 2;; *) shift;; esac; done
 if [ -n "$remote" ]; then
@@ -92,8 +93,10 @@ class Flow(B.Rig):
             SATURN_RELEASE_STAGING_DIR=str(self.staging), SATURN_RELEASE_BUILDER=str(self.builder), SATURN_RELEASE_MANIFEST_TOOL=str(self.root / "no-such-tool"),
             SATURN_SATURNGO_DEPLOY_STATUS_FILE=str(self.status_file), SATURN_ACTIVE_REPO_ROOT=str(self.checkout), SATURN_SATURNGO_POLICY_URL=str(self.remote),
             SATURN_SATURNGO_POLICY_REF=ref, SATURN_SATURNGO_POLICY_REMOTE="origin", SATURN_RELEASE_REPO_ROOT=str(self.checkout),
-            FAKE_WORK=str(self.work), GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            SATURN_RELEASE_BUILD_ENV_EXTRA="FAKE_[A-Z_]+|GIT_[A-Z_]+", FAKE_WORK=str(self.work), GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
         environment.update(env)
+        for name in [name for name, value in environment.items() if value is None]:      # None unsets
+            del environment[name]
         return subprocess.run(["bash", str(at), *flags], capture_output=True, text=True, env=environment, timeout=180)
 
     def builds(self):
@@ -157,6 +160,56 @@ class UnderThePagesEnvironment(Flow):
         status = self.status()
         self.assertEqual(status["phase"], "managed_updates_disabled")
         self.assertIn("managed updates are disabled", status["message"])
+
+
+SERVICE_ENVIRONMENT = dict(     # what the saturn-go service's own environment holds (names as on the G2); the credential here is a made-up one
+    SATURN_REMOTE_BASIC_AUTH="user:made-up-secret", SATURN_ADDR="127.0.0.1:8080", SATURN_STATE_DIR="/var/lib/saturn-state",
+    SATURN_WEBROOT="/opt/saturn/current/webroot", SATURN_CONFIG="/var/lib/saturn-web/config.json", SATURN_REPO_ROOT="/elsewhere")
+
+
+class TheBuildsEnvironment(Flow):
+    """A release is built in a clean environment: no service configuration, no credential; the toolchain and the build knobs still arrive."""
+
+    def inherited(self):
+        return [line for line in self.calls_text().splitlines() if line.startswith("builder-inherited")]
+
+    def test_the_services_configuration_and_credential_never_reach_the_builder(self):
+        result = self.script(**SERVICE_ENVIRONMENT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lines = self.inherited()
+        self.assertEqual(len(lines), 2, "the resolve and the build both run the builder")
+        for line in lines:
+            for leaked in ("made-up-secret", "127.0.0.1:8080", "/var/lib/saturn-state", "/opt/saturn/current/webroot", "/elsewhere"):
+                self.assertNotIn(leaked, line)
+            self.assertIn("remote_auth=unset addr=unset state_dir=unset webroot=unset", line)
+        self.assertNotIn("made-up-secret", result.stdout + result.stderr + self.calls_text())
+
+    def test_what_a_build_needs_still_arrives(self):
+        result = self.script(SATURN_RELEASE_BUILD_JOBS="2", SATURN_SATURNGO_BUILD_SWAP_MIB="1024", LANG="en_GB.UTF-8", PKG_CONFIG_PATH="/x/pkgconfig", **SERVICE_ENVIRONMENT)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        resolve, build = self.inherited()
+        for line in (resolve, build):
+            self.assertIn("jobs=2 swap=1024", line)
+            self.assertIn(f"repo={self.checkout}", line)
+            self.assertIn("prompt=0", line)
+            self.assertIn("lang=en_GB.UTF-8 pkg=/x/pkgconfig", line)
+            self.assertNotIn("home=unset", line)
+        self.assertIn(f"out={self.staging}", build)
+
+    def test_a_utf8_locale_is_the_default_when_the_service_has_none(self):
+        result = self.script(LANG=None, LC_ALL=None, LC_CTYPE=None)       # the saturn-go service has no LANG at all
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for line in self.inherited():
+            self.assertIn("lang=C.UTF-8", line)
+
+    def test_the_build_settings_are_the_flows_not_the_callers(self):
+        # a caller's own value for a variable the flow sets is replaced, not trusted
+        result = self.script(SATURN_RELEASE_OUTPUT_ROOT="/somewhere/else", GIT_TERMINAL_PROMPT="1")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        resolve, build = self.inherited()
+        self.assertIn(f"out={self.staging}", build)
+        self.assertIn("prompt=0", resolve + build)
+        self.assertNotIn("/somewhere/else", build)
 
 
 class HappyPath(Flow):
@@ -433,6 +486,15 @@ class SourceChecks(unittest.TestCase):
         definition = definition[:definition.index("\n}\n")]
         for needed in ('export CARGO_HOME=', 'export RUSTUP_HOME=', 'export PATH="$CARGO_BIN_DIR:$PATH"'):
             self.assertIn(needed, definition)
+
+    def test_the_builder_is_started_only_through_the_clean_environment(self):
+        invocations = [line.strip() for line in self.flow.splitlines() if '"$builder"' in line and not line.strip().startswith("#")]
+        self.assertEqual(len(invocations), 2, invocations)      # the definition's own env -i call, and the [[ -x ]] check
+        self.assertTrue(any(line.startswith('env -i LANG=C.UTF-8 "${clean_env[@]}" "${settings[@]}" "$builder"') for line in invocations))
+        self.assertEqual(self.flow.count("run_release_builder "), 3, "the definition, the resolve and the build")
+        allow = self.flow[self.flow.index("RELEASE_BUILD_ENV_ALLOW="):].splitlines()[0]
+        for secret_or_config in ("SATURN_REMOTE", "SATURN_ADDR", "SATURN_STATE", "SATURN_WEBROOT", "SATURN_CONFIG", "SATURN_[A-Z]"):
+            self.assertNotIn(secret_or_config, allow)
 
     def test_the_flow_installs_and_restarts_nothing_itself(self):
         for forbidden in ("systemctl", "systemd-run", "ln -s", "cp -", "install -m"):

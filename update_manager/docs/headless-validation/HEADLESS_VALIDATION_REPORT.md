@@ -310,6 +310,15 @@ environment the page gives its children. Fixed by `prepare_build_toolchain_env`,
 every command the builder needs is present (`cmake` is not, and is not needed), the installed builder resolves the branch to the right commit and honours `--expect-commit`, the service has no write restrictions on the paths the build uses, and the
 sudo-to-broker boundary refuses a non-existent bundle cleanly (`--dispatch` of a bundle without a manifest: exit 2, recorded).
 
+### What the second page-driven attempt found (2026-10-11 19:46 to 20:04 EDT)
+
+With the toolchain fixed, the real run resolved `b35bde58c871…` and built for 18 minutes, then stopped in the Rust server's test gate: six `remote_tls` route tests expected 200, 307 or 404 and got 401. Nothing was installed or changed (release
+pointer, configuration hash, services and the transaction record as before). Cause: the build inherited the `saturn-go` service's environment, which holds `SATURN_REMOTE_BASIC_AUTH`; the remote router reads that variable and then requires
+credentials, and the tests send none. The earlier builds on the G2 ran from an ssh shell, where it is not set. Reproduced here: the same six tests pass without the variable and fail with it. Beyond the tests, the build scripts and every npm package
+could have read that credential. The flow now starts the builder with `env -i` and an allow-list (the toolchain, locale, `PKG_CONFIG_*`, line-buffering for the live output, `SATURN_RELEASE_*`, `SATURN_SATURNGO_BUILD_*`, `SATURN_WDSP_*`; git gets
+`GIT_TERMINAL_PROMPT=0` from the flow), so a release is built in the environment the earlier successful builds had, not in the service's. The Rust server's tests are still sensitive to that variable when run by hand in a shell that has it; that is
+noted, not changed here (it is in the release payload).
+
 ## Not verified / residual risk
 
 * **The restart-timing waits are bounded, not removed.** If the host's memory never climbs back to cap + 32 MiB within 30 s, or the owner never writes telemetry, the validation still fails (and an activation rolls back);

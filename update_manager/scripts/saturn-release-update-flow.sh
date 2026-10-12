@@ -13,6 +13,31 @@
 UPDATE_MODE="legacy"
 BROKER_OWNS_STATUS=0
 
+# A release is built in a clean, allow-listed environment, never in the one the page hands this script. That environment is the running service's: its runtime
+# configuration and its credentials (SATURN_REMOTE_BASIC_AUTH, SATURN_ADDR, SATURN_STATE_DIR, ...). Inherited, the credential turns authentication on in the Rust
+# server's own route tests (6 of them failed with 401 on the G2) and is readable by every build script and npm package. What a build may inherit: the toolchain and
+# locale, the pkg-config path, line-buffering for the live output, and the build knobs (SATURN_RELEASE_*, SATURN_SATURNGO_BUILD_*, SATURN_WDSP_*). Git gets
+# GIT_TERMINAL_PROMPT=0 from the flow itself; no other GIT_* variable is passed on.
+RELEASE_BUILD_ENV_ALLOW='^(PATH|HOME|USER|LOGNAME|SHELL|LANG|LANGUAGE|LC_[A-Z_]+|TZ|TMPDIR|CARGO_[A-Z_]+|RUSTUP_[A-Z_]+|RUSTFLAGS|PKG_CONFIG_[A-Z_]+|LD_PRELOAD|_STDBUF_[IOE]|SATURN_RELEASE_[A-Z0-9_]+|SATURN_SATURNGO_BUILD_[A-Z0-9_]+|SATURN_WDSP_[A-Z0-9_]+)$'
+
+release_build_env(){   # NUL-separated NAME=value for every exported variable a release build may inherit
+  local name extra="${SATURN_RELEASE_BUILD_ENV_EXTRA:-}"      # extra names (an alternation), for test doubles only
+  while IFS= read -r name; do
+    if [[ "$name" =~ $RELEASE_BUILD_ENV_ALLOW ]] || { [[ -n "$extra" ]] && [[ "$name" =~ ^($extra)$ ]]; }; then
+      printf '%s=%s\0' "$name" "${!name}"
+    fi
+  done < <(compgen -e)
+}
+
+run_release_builder(){   # run_release_builder [NAME=value ...] -- ARGS... : the builder, in that environment plus the given settings
+  local -a clean_env=() settings=()
+  while [[ $# -gt 0 && "$1" != "--" ]]; do settings+=("$1"); shift; done
+  shift
+  mapfile -d '' -t clean_env < <(release_build_env)
+  # (a UTF-8 locale unless the environment names one: the service has no LANG, the shells the earlier G2 builds ran in had en_GB.UTF-8)
+  env -i LANG=C.UTF-8 "${clean_env[@]}" "${settings[@]}" "$builder" "$@"
+}
+
 release_config_value(){   # release_config_value KEY -> the value in the root-owned activation configuration (last line wins), empty if unset
   local key="$1" file="${SATURN_RELEASE_ACTIVATE_CONFIG:-/etc/default/saturn-release-activate}" line value=""
   [[ -r "$file" ]] || return 0
@@ -82,7 +107,8 @@ run_release_flow(){
   else
     [[ -n "$SATURNGO_URL" ]] || die "Saturn Go policy repo URL not configured. Save the Saturn Go page settings first."
     ensure_public_policy_repo_accessible "$SATURNGO_URL" "$SATURNGO_REF"
-    out="$(SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" GIT_TERMINAL_PROMPT=0 "$builder" --source-remote "$SATURNGO_URL" --source-ref "$SATURNGO_REF" --resolve-only 2>&1)" \
+    out="$(run_release_builder SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" GIT_TERMINAL_PROMPT=0 -- \
+           --source-remote "$SATURNGO_URL" --source-ref "$SATURNGO_REF" --resolve-only 2>&1)" \
       || die "The selected ref could not be resolved: ${out##*$'\n'}"
     resolved="$(printf '%s\n' "$out" | sed -n 's/^resolved_commit=//p' | head -1)"
   fi
@@ -117,10 +143,8 @@ run_release_flow(){
     write_status "running" "$STATUS_PHASE" "Building release ${resolved:0:12} on this device (this takes a long time)"
     info "Building release ${resolved:0:12} (native build on this device; the radio keeps running)..."
     progress 20
-    (
-      export SATURN_RELEASE_OUTPUT_ROOT="$staging" SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" GIT_TERMINAL_PROMPT=0
-      "$builder" "${builder_args[@]}"
-    ) || die "The release build failed or stopped (see the output above; a ref that moved after it was resolved stops it before any work); nothing was installed or changed"
+    run_release_builder SATURN_RELEASE_OUTPUT_ROOT="$staging" SATURN_RELEASE_REPO_ROOT="$REPO_ROOT" GIT_TERMINAL_PROMPT=0 -- "${builder_args[@]}" \
+      || die "The release build failed or stopped (see the output above; a ref that moved after it was resolved stops it before any work); nothing was installed or changed"
     [[ -d "$bundle" ]] || die "The build finished but did not produce $bundle"
   fi
 
