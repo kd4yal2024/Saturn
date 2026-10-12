@@ -30,8 +30,8 @@ set -u
 # A non-interactive shell (ssh pi@g2 'command') has no Rust toolchain on its PATH; the builder needs cargo.
 case ":$PATH:" in *":$HOME/.cargo/bin:"*) ;; *) PATH="$HOME/.cargo/bin:$PATH" ;; esac
 BRANCH=goldmarsh/headless-validation
-ACT_SHA=4f5bcb3594a04f010efed7eafc1839691c329db04a6ebce885a5d8816f76bdf7
-VAL_SHA=089fbba97018677afd7a36c801edef7e9873d9e7cddd10240f455af29eaaffbd
+ACT_SHA=f4c307d7e6f5a1172837d1b12ff83589386f239cf01d541ae9530456178b829d
+VAL_SHA=166e6d9e13418dce63903601744e889e23ad21648c11689e3ec21281133567c4
 GUARD_SHA=b5ad14b439bf48bcc49703368fac9000a6dfd02b481419c3123ce35476a721fb
 INSTALLER_SHA=6a094523d810f2058bcc22fa7c5d80a401d78e5760b145bef98451a7459f2b67
 PREV=329f3109b17428ee04e3f14031da6cf25cb04810
