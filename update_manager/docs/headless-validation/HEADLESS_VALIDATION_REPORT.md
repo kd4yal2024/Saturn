@@ -6,7 +6,8 @@ by the staged procedure: the receive validation ran as the viewer, the record is
 described next, and the source answered it (see "Hardware results with release `50898660`"); the first `activate`, of release `50898660`, then rolled back with exit 71 for two timing assumptions of the validator
 (see "First activation attempt"), which `cc09c61` corrects. **That was the bootstrap through the staged shell procedure.** The normal user-facing update (the Update action of the Saturn Go page, and the Saturn-Go installer) has since been
 connected to the same machinery on this branch for *existing installations that run releases* (see "Managed updates for existing installations"). That work is implemented and tested on a development
-machine; **it has not yet been run on the G2** (see "What is still open").
+machine **and has since been run on the G2**: the completion test passed all five of its acceptance items (see "Completion test of the managed updates on the G2" and "What the sixth to tenth page-driven runs showed"),
+and the G2 now runs release `42ff0919fa99169155bd4b0fe0c70a6415601810`, installed through the normal page. The G2 ran `cc09c61` from the bootstrap on 2026-10-11 until the page-driven updates of 2026-10-13/14 (three completed moves between `cc09c61` and `42ff0919…`, plus the controlled failure and one attempt that was rolled back), and runs `42ff0919…` since 2026-10-14 06:50 EDT.
 
 This file and `g2_headless_steps.sh` live in the source tree (`update_manager/docs/headless-validation/`) so that nothing depends on a scratch directory. The commit
 under test is the **release** `cc09c61f91030d4c5a38d6c570a20c28b5d97e03` (the earlier `50898660388fba554e0cbfc63844cbac7c87326b` was installed and rolled back, and stays installed inactive): it is what was built, is
@@ -182,7 +183,7 @@ The helper exited 0. Read independently over ssh afterwards, not from the helper
 The evidence (the `committed` record, the target validation directory, the journal and the state) is kept off the G2 in the review folder `activation_cc09c61_20261011/`, hashes verified. The earlier exit-71 attempt is kept
 in `exit71_attempt_20261011/`.
 
-## Managed updates for existing installations (implemented and tested here; not yet run on the G2)
+## Managed updates for existing installations (implemented and tested here; run on the G2 since: see the completion test)
 
 * **Entry point.** The Update action of the Saturn Go page runs `update-saturn-go.sh`. It now decides on the *layout* (is a release what runs: `/opt/saturn/current` is a link to `/opt/saturn/releases/<commit>`)
   separately from the *authorization* (`ACTIVATION_ENABLED`). A release layout with managed updates enabled takes the release flow; a release layout with updates disabled **refuses** (phase `managed_updates_disabled`,
@@ -202,21 +203,22 @@ in `exit71_attempt_20261011/`.
   stores or restores PTT, MOX or a transmit session. The Bridge unit must name that state directory (the installer refreshes the unit); until it has, the Bridge runs without persistence.
 * **What was verified, and where.** Unit and integration tests on a development machine: the configuration merge, the broker (with stand-ins for the installer and activator and the real lock tool), the flow and the routing,
   the builder's pin, the installer's plan mode for both layouts, and the Bridge's persistence including three end-to-end tests against the real Bridge with WDSP and replayed hardware. Mutation runs over each of these
-  (a no-op control must survive; every mutant is killed by a named test). **Nothing of this has run on the G2.**
+  (a no-op control must survive; every mutant is killed by a named test). *When this section was written nothing of it had run on the G2; the completion test below is where it did.*
 
 ## What is still open
 
 * **Scope of the managed-update work.** What exists is *managed updates for existing installations*: an installation that already runs releases (this G2) updates through the Update action, with the activation
   policy an explicit installer choice. A fresh installation still deploys the legacy layout, and moving it onto releases is done with the explicit `--migrate-to-releases`; converting the installer's fresh-install path to
   the same release machinery is separate, not yet done work.
-* **Not yet run on the G2:** the installer refresh on the release layout (with the choice to enable managed updates), an update through the normal page with no browser attached, the saved receive settings coming
-  back after the restart, and the reruns of the installer that must leave the activation policy and the 500M allowance as they are. These are the completion test; `main` stays unchanged until it passes and is reviewed.
+* **Run on the G2 (2026-10-11 to 2026-10-14):** the installer refresh on the release layout, updates through the normal page with no browser attached, the saved receive settings coming back after the restart, a controlled
+  failure with automatic rollback, the retry, and the reruns of the installer (including disable and enable) that leave the activation policy and the 500M allowance as they are: all five acceptance items passed (see
+  "Completion test"). `main` stays unchanged until the evidence is reviewed; that review and the merge decision are what is open here.
 * **The whole-appliance installer is not release-aware, and is now safe on a release installation.** `sudo ./install.sh` runs the shared provisioner (packages, build, XDMA driver through DKMS, P2, then Saturn Go and the Bridge); its
   Saturn-Go phase would run `install-saturn-bridge.sh` without unit-only mode (building the Bridge, switching the backend and restarting it) and verify readiness against the checkout's commit rather than the running release.
   `scripts/install-saturn-appliance.sh` therefore refuses on a release layout, with the same layout rule as the Saturn-Go installer, **before** packages, drivers, builds or services are touched (also with `--dry-run`), says what it found and names
   `update_manager/install_saturn_go_nginx.sh`; `SATURN_INSTALL_APPLICATION=force` is the explicit override, and it fails closed when the layout cannot be determined. Delegating to, or converting, the provisioner's Saturn-Go
   phase (the fresh-install conversion) remains separate work.
-* A controlled rollback has not yet been exercised on the appliance (the `failure` stage exists for it); the unplanned one, on 14:17, ended in exit 71 and is the reason for the restart-timing waits.
+* The controlled rollback has been exercised on the appliance (2026-10-14 00:02 EDT, see "Completion test"); the unplanned one, on 2026-10-11 14:17, ended in exit 71 and is the reason for the restart-timing waits.
 
 ## Evidence (all run on this machine, except where the hardware results above say otherwise)
 
@@ -271,7 +273,7 @@ in `exit71_attempt_20261011/`.
    Per the instruction, 3 happens only after the source review and a successful `check`. Each of the three switches the root-owned `ACTIVATION_ENABLED` policy on for its one helper run only,
    says so, and restores the configuration byte-identical (or says loudly that it could not). A stage exits 0 only when the outcome is the expected one.
 
-## Completion test of the managed updates on the G2 (not yet run; you run the sudo steps)
+## Completion test of the managed updates on the G2 (the plan as written on 2026-10-11; results in the sections after it and in "Acceptance results")
 
 State read from the G2 when this was written: it runs `cc09c61` (committed); `ACTIVATION_ENABLED="0"`, `VALIDATION_MEMORY_MAX="500M"`; the working checkout `/home/pi/github/Saturn` is at `d29c5d88` (old, with modified tracked build
 outputs; it is only a place the builder fetches into, and is not touched); the Update page's policy resolves `stable` to `main` of `kd4yal2024/Saturn`, and **`main` must not move**, so the test types the review branch into the page's Branch / Ref field (the page saves that field as both `stable_ref` and `custom_ref` and switches the channel to `custom`; afterwards type `main` back and save); the Bridge
@@ -355,14 +357,16 @@ detail. Tested against the appliance's real `/proc` with stand-in processes. **W
 reserve suggests. The browser's measured peaks (413 to 472 MiB) are well under the cap, the watchdog stops it at the cap and it is the OOM killer's first choice, so this is a thinner margin, not a removed one. Idle availability on the appliance
 ranged 518 to 544 MiB this evening (mean 539) and 532 to 629 this morning (mean 553); a requirement of 525 MiB (500M plus a 25M reserve) passes at nearly all of those readings, 516 (16M reserve) at all of them.
 
-### What the sixth to ninth page-driven runs showed (2026-10-13 23:53 to 2026-10-14 06:16 EDT)
+### What the sixth to tenth page-driven runs showed (2026-10-13 23:53 to 2026-10-14 06:16 EDT)
 
 With the idle-memory decision in place (`fafbd4a7` installed; the check counted 566 MiB against the 525 MiB needed, 500M cap plus the 25M reserve this appliance sets):
 
 * **Update from `cc09c61` to `42ff0919…` through the normal page: success, exit 0.** Bundle reused, manifest validated, dispatched in the transient unit, `42ff0919…` active and committed; the automatic headless validation passed (native page,
   viewer role, the cap enforced by the validator's watchdog, no legacy fallback, no browser connected beforehand). Acceptance item 1.
-* **Controlled failure and automatic rollback.** With one added line in the administrator configuration that makes the validation fail, the update was refused after validation and the previous release was restored and verified receiving
-  (`receive_verified: true`); the saved receive settings were byte-identical before and after (`rx-state-v1.txt`, sha256 `30df0372…`), and the configuration was returned to its recorded hash (`c889aefe…`) afterwards. Acceptance items 2 and 3.
+* **Controlled failure and automatic rollback (00:02 EDT).** Target: the test branch `goldmarsh/rollback-test-cc09c61`, which carries exactly the code of `cc09c61`, so it was a downgrade from `42ff0919…`; with `VALIDATION_EXPECT_RXC1="valid"`
+  added to the administrator configuration (RXC1 reads `unarmed`). The target was installed, started and validated, and failed `rxc1.intended_state` ("RXC1 status 'unarmed', intended 'valid'"); the update was refused, `42ff0919…` was restored and
+  its reception verified by a second headless validation (viewer, `done`), the record is `rolled_back`, and the Bridge came back with the saved receive settings: `rx-state-v1.txt` was byte-identical before and after (sha256 `30df0372…`).
+  The test line was removed afterwards and the configuration is back at its recorded hash (`c889aefe…`). Acceptance items 2 and 3.
 * **Retry reused the bundle and succeeded.** The page printed that a built bundle for the commit already existed, nothing was rebuilt, status `success`, record `committed`. That release (`cc09c61`) predates the settings persistence, so the radio
   came back at 14.2 MHz and the status says `settings_preserved: false`; the saved file was not touched. Acceptance item 4.
 * **Update back to `42ff0919…` (06:15 EDT): rolled back, and the rollback was correct.** The target's validation failed `session.connected_as_viewer`: *connected; the Bridge assigned role 'operator'*. The previous release was restored and its reception
@@ -374,6 +378,29 @@ With the idle-memory decision in place (`fafbd4a7` installed; the check counted 
   **Fix (mine, in the validator):** a role that reads `operator` or is not yet known is given `role_settle_s` (default 10 s) to become `viewer`; every other role is refused at once; a role that does not settle is refused with the time it was given; the named
   legacy fallback is taken only after the window and never for a role that merely read `operator` first; the settled session records `role_transient_s`. The page and the Bridge are unchanged. Ten new tests (eight fail on the old validator; the other two pin behaviour that must not change), and 12 of 12
   mutants of the new logic are killed with the no-op control surviving. Retest on the appliance: refresh the installer-managed scripts from the fixed commit, then the same page update (the bundle is already built).
+* **Update back to `42ff0919…` with the fixed validator (06:50 EDT): success, exit 0, record `committed`** (unit `saturn-release-update-20261014065010`, bundle reused). Target validation: native, viewer enforced by the Bridge, no legacy fallback,
+  watchdog cap, peak 405 MiB, 547 MiB counted at the headroom check. The role read `viewer` at once this time, so the settling path was not exercised on the appliance (the race did not recur); it is covered by the tests and mutants above and by the
+  Bridge's own source. **The saved tuning came back:** the new Bridge's journal reads "restored receive settings from /var/lib/saturn-bridge/rx-state-v1.txt", and the radio went from the old release's 14.2 MHz to 3.899 MHz LSB (VFO B 3.885 MHz, NR2, AGC SLOW,
+  ...); the file is unchanged. RXC1 reads `unarmed` after each page-driven update and is recorded, not required.
+  **Known wording fault, not fixed:** the deploy status says `settings_preserved: false` here (and after the retry), because it compares the radio's state before the update, which was the older release's 14.2 MHz default, with the state after.
+  The result is right and the field is misleading; it should compare against the saved settings file, or be renamed.
+* **Installer reruns and the disable/enable round trip (06:42 to 06:58 EDT, release `42ff0919…` active throughout, no service restarted).** Rerun with the default choice: administrator keys kept (`ACTIVATION_ENABLED=1`, `VALIDATION_MEMORY_MAX=500M`,
+  `VALIDATION_MEMORY_RESERVE=25M`, `READY_TIMEOUT_SECONDS=30`), 61 scripts kept/updated, configuration hash unchanged. `SATURN_MANAGED_UPDATES=disable`: `ACTIVATION_ENABLED` 1 -> 0, everything else kept. The page then **refused cleanly** (a dry run; the refusal precedes any use of the
+  dry-run flag): "This installation runs managed releases (active release 42ff0919fa99) but managed updates are disabled, so there is nothing this update could safely do ... Enable managed updates by running the installer with SATURN_MANAGED_UPDATES=enable."; status
+  `error`/`managed_updates_disabled`, exit 1; no update unit, no validation, nothing staged, release and record unchanged. `SATURN_MANAGED_UPDATES=enable`: `ACTIVATION_ENABLED` 0 -> 1 and the configuration is **byte-identical to before the round trip** (`c889aefe…`).
+
+### Acceptance results (the reviewer's sequence, all on the G2)
+
+| # | Item | Result | Where |
+|---|------|--------|-------|
+| 1 | Normal-page update succeeds with automatic reception validation | passed 2026-10-13 23:53 EDT (`cc09c61` -> `42ff0919…`) and again 2026-10-14 06:50 EDT (`cc09c61` -> `42ff0919…`) | evidence folder `managed_update_completion_test_20261011/`, `upgrade_back_success_after_fix_20261014/` |
+| 2 | Recognizable receive settings saved | passed: 3.899 MHz LSB, VFO B 3.885 MHz, NR2, AGC SLOW, ... in `rx-state-v1.txt`, sha256 `30df0372…` | `rx-state-reference_after_update1.txt` |
+| 3 | Controlled failure restores the previous release, reception and those settings | passed 2026-10-14 00:02 EDT (`rxc1.intended_state`; `42ff0919…` restored, validated, file byte-identical) | validation records on the G2, `HEADLESS_VALIDATION_REPORT.md` above |
+| 4 | Retry reuses the bundle and succeeds | passed 2026-10-14 00:09 EDT (no rebuild, `committed`) | same |
+| 5 | Installer reruns preserve configuration; disabling updates refuses cleanly | passed 2026-10-14 06:42 to 06:58 EDT (three keep reruns; disable -> clean refusal; enable -> byte-identical configuration) | `disable_enable_roundtrip_20261014/` |
+
+One failure occurred on the way and is documented above: the ninth page-driven run was rolled back by a race in the validator's role check (fixed in `e8db4852`, rerun passed). Not part of this test and still open: the matched audio comparison, the conversion of the
+fresh-install path to releases, the `settings_preserved` wording, and the reviewer's decision on merging to `main`.
 
 ## Not verified / residual risk
 
