@@ -94,6 +94,7 @@ DEFAULT_LIMITS = {
     "headroom_wait_s": 30.0,      # ... and the host's available memory to climb back to what the browser needs (it dips just after a restart)
     "page_load_s": 45.0,
     "connect_s": 45.0,
+    "role_settle_s": 10.0,        # once connected and ready: how long the role may still read operator/pending while the Bridge reads the session's viewer declaration
     "data_s": 45.0,               # how long, once connected, fresh data and decoded audio may take to show up
     "window_s": 3.0,              # the measured interval over which counters must advance
     "min_audio_played": 30,       # decoded audio frames that must be played in that interval (about 0.6 s of audio)
@@ -1177,6 +1178,8 @@ class Validator:
         self.recorder.condition("session.started", True, f"{self.driver} start accepted")
         deadline = now() + self.limits["connect_s"]
         snap: dict[str, Any] = {}
+        unsettled_since: float | None = None
+        settle_s = self.limits["role_settle_s"]
         while now() < deadline and not self.stop_requested.is_set():
             snap = self.snapshot()
             if self.alarm():
@@ -1184,16 +1187,30 @@ class Validator:
             if snap.get("connected") and snap.get("bridgeReady"):
                 role = snap.get("role")
                 self.recorder.update(role=role, role_enforced_by_bridge=role == "viewer")
+                if role in (None, "operator"):
+                    # The Bridge makes the first client it registers the operator and says so in the same burst as `ready;`; it releases that role
+                    # when it reads the session's own viewer declaration, a round trip later (on a busy Pi a moment the polling can land in). A role
+                    # is therefore judged once it has settled, never on the first reading, and it must still become `viewer` within the window.
+                    if unsettled_since is None:
+                        unsettled_since = now()
+                        deadline = max(deadline, unsettled_since + settle_s)
+                    if now() - unsettled_since < settle_s:
+                        self.sleep(self.limits["poll_s"])
+                        continue
+                after = "" if unsettled_since is None else f" (after {now() - unsettled_since:.1f} s as operator or pending, until the Bridge read the session's viewer declaration)"
                 if role == "viewer":
-                    return self.recorder.condition("session.connected_as_viewer", True, "connected; the Bridge assigned the viewer role and enforces it")
+                    if unsettled_since is not None:
+                        self.recorder.update(role_transient_s=round(now() - unsettled_since, 2))
+                    return self.recorder.condition("session.connected_as_viewer", True, "connected; the Bridge assigned the viewer role and enforces it" + after)
+                stayed = "" if unsettled_since is None else f" and it stayed so for the {settle_s:g} s the Bridge was given to read the viewer declaration"
                 if role == "operator" and self.args.viewer_role == "legacy-fallback":
                     # check_guard() has already proven the guard active: a run whose guard is not never gets as far as starting a session
                     self.recorder.update(legacy_fallback_used=True)
                     return self.recorder.condition(
                         "session.role_legacy_fallback", True,
                         "LEGACY BRIDGE FALLBACK USED: the Bridge assigned the role 'operator' because this release predates viewer-role enforcement. "
-                        "Receive-only rests on the injected guard (proven active), the live wire audit and the unchanged-radio check, not on the Bridge")
-                return self.recorder.condition("session.connected_as_viewer", False, f"connected; the Bridge assigned role {role!r} (a validation session must be a viewer)")
+                        "Receive-only rests on the injected guard (proven active), the live wire audit and the unchanged-radio check, not on the Bridge" + stayed)
+                return self.recorder.condition("session.connected_as_viewer", False, f"connected; the Bridge assigned role {role!r}{stayed} (a validation session must be a viewer)")
             self.sleep(self.limits["poll_s"])
         if self.stop_requested.is_set():
             return self.interrupted("session.connected_as_viewer", "the session was connecting")

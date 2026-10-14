@@ -30,6 +30,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   running against 534 to 540 MiB idle just before, so with a 500M cap no reserve could pass; the choice to count the idle figure is the owner's. What it costs: the browser may take up to the cap with the reserve counted
   from the idle figure, not from what is left once the validator runs, i.e. about 35 MiB less margin for the radio's processes in the worst case (a browser at its cap; the measured peaks were 413 to 472 MiB, the watchdog kills it at
   the cap and it is the OOM killer's first choice).
+- The headless validation judges the session's role once it has **settled**. The Bridge registers the first client it sees as the operator and announces that with `ready;`; it releases the role when it reads the
+  session's own viewer declaration, a round trip later, and the validator used to judge the first reading in which the page was connected and ready. On the first appliance that was right in three runs and wrong in the fourth
+  (`session.connected_as_viewer`: the Bridge assigned role 'operator'; the Bridge's journal shows the viewer declaration read in the same second), so a correct update was rolled back. A role that reads `operator` or is not
+  yet known is now given `role_settle_s` (default 10 s) to become `viewer`; any other role is refused at once, a role that does not settle is refused with the time it was given, the legacy fallback for the named older releases is
+  taken only after that window and not for a role that merely read `operator` at first, and a settled session records how long the transient lasted (`role_transient_s`).
 - `VALIDATION_MEMORY_RESERVE` (administrator-owned, kept by the installer, default `32M`, at least `8M`) sets the memory kept free beyond the browser's cap before a browser is started. The default is unchanged;
   it exists so that one appliance's measurement does not have to become every host's default.
 - The broker no longer holds the `radio` maintenance lock while the services restart. `saturn-go`'s own startup runs its restore recovery under the `repository` and `radio` locks and exits when either is

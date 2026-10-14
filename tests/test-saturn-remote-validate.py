@@ -36,7 +36,7 @@ SECRET = "saturn:Pw-7Hq2-zebra-TANGO-41"
 SECRET_PASSWORD = SECRET.split(":", 1)[1]
 FAST = {"ready_url_wait_s": 3, "page_load_s": 8, "connect_s": 5, "data_s": 6, "window_s": 1.0, "hold_stall_s": 2.0, "max_seconds": 40,
         "cleanup_s": 4, "call_s": 4, "poll_s": 0.2, "min_audio_played": 20, "min_opus_frames": 20, "min_display": 5,
-        "owner_wait_s": 0.6, "headroom_wait_s": 0.6}
+        "owner_wait_s": 0.6, "headroom_wait_s": 0.6, "role_settle_s": 1.0}
 
 spec = importlib.util.spec_from_file_location("saturn_remote_validate", VALIDATOR)
 V = importlib.util.module_from_spec(spec)
@@ -125,9 +125,14 @@ def snapshot():
     if SC.get("audio_stall_after") is not None and connected: played = int(50 * min(e, SC["audio_stall_after"]))
     opus = 0 if (not connected or SC.get("no_audio_frames")) else int(50 * ed)
     rows = 0 if (not connected or SC.get("no_display")) else int(30 * ed)
+    # the Bridge registers the first client as the operator and releases that role when it reads the session's viewer declaration: the role reads
+    # `role_before` (operator unless the scenario says otherwise; null = no role yet) until `viewer_after` seconds after the connection
+    role = SC.get("role", "viewer")
+    if SC.get("viewer_after") is not None and e < SC["viewer_after"]:
+        role = SC.get("role_before", "operator")
     return {"mode": "legacy" if SC.get("legacy") else "receive", "at": int(time.time() * 1000), "path": "/remote-next",
             "connected": connected, "bridgeReady": connected and not SC.get("bridge_not_ready"), "connectPending": not connected and st["connected_at"] is not None,
-            "role": SC.get("role", "viewer") if connected else None, "wsReadyState": 1 if connected else 3,
+            "role": role if connected else None, "wsReadyState": 1 if connected else 3,
             "audioContextState": SC.get("audio_ctx", "running") if connected else "suspended",
             "codec": SC.get("codec", "opus") if connected else None, "opusFrames": opus, "pcmFrames": 0,
             "decodeErrors": int(5 * e) if SC.get("decode_errors") else 0, "lateDrops": 0, "audioFramesPlayed": played, "lastAudioSequence": played,
@@ -806,6 +811,102 @@ class FailureTests(RigCase):
         self.assertEqual((status["role_policy"], status["legacy_fallback_used"]), ("required", False))
         self.assertNotIn("session.role_legacy_fallback", status["conditions"])
         self.assertCleanedUp(rig)
+
+    def connected_to_judged(self, status):
+        """Seconds between the session being accepted and the role being judged: how long the validator gave the role to settle."""
+        return status["conditions"]["session.connected_as_viewer"]["at"] - status["conditions"]["session.started"]["at"]
+
+    def test_a_role_that_reads_operator_until_the_bridge_reads_the_viewer_declaration_is_judged_once_settled(self):
+        # a real G2 run (2026-10-14) failed on exactly this: `ready;` and the operator role arrive first, the viewer role a round trip later
+        rig = self.rig(scenario={"viewer_after": 0.9}, limits={"role_settle_s": 6})
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), ready)
+        status = rig.status()
+        self.assertEqual((status["role"], status["role_enforced_by_bridge"]), ("viewer", True))
+        self.assertEqual((status["role_policy"], status["legacy_fallback_used"]), ("required", False))
+        judged = status["conditions"]["session.connected_as_viewer"]
+        self.assertTrue(judged["ok"], judged)
+        self.assertIn("viewer declaration", judged["detail"], "the record must say the role was not the viewer at first")
+        self.assertGreaterEqual(status["role_transient_s"], 0.3)
+        self.assertGreaterEqual(self.connected_to_judged(status), 0.8, "the role was judged before it had settled")
+        rig.stop(); self.assertEqual(rig.finish(), 0)
+
+    def test_a_role_that_is_not_yet_known_is_also_given_time_to_settle(self):
+        rig = self.rig(scenario={"viewer_after": 0.9, "role_before": None}, limits={"role_settle_s": 6})
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), ready)
+        status = rig.status()
+        self.assertEqual((status["role"], status["role_enforced_by_bridge"]), ("viewer", True))
+        self.assertGreaterEqual(status["role_transient_s"], 0.3)
+        rig.stop(); self.assertEqual(rig.finish(), 0)
+
+    def test_a_viewer_from_the_first_reading_records_no_transient(self):
+        rig = self.rig()
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        status = rig.status()
+        self.assertNotIn("role_transient_s", status)
+        self.assertNotIn("viewer declaration", status["conditions"]["session.connected_as_viewer"]["detail"])
+        rig.stop(); rig.finish()
+
+    def test_a_role_that_stays_operator_is_refused_only_after_the_window_has_passed(self):
+        rig = self.rig(scenario={"role": "operator"}, limits={"role_settle_s": 2.0})
+        status = self.run_to_failure(rig, "session.connected_as_viewer", detail="stayed so for the 2 s")
+        self.assertGreaterEqual(self.connected_to_judged(status), 1.9, "an operator reading was judged before the Bridge had its time")
+        self.assertEqual((status["role"], status["role_enforced_by_bridge"], status["legacy_fallback_used"]), ("operator", False, False))
+        self.assertCleanedUp(rig)
+
+    def test_the_window_is_bounded_a_viewer_role_that_comes_too_late_is_refused(self):
+        rig = self.rig(scenario={"viewer_after": 6.0}, limits={"role_settle_s": 1.0, "connect_s": 3})
+        status = self.run_to_failure(rig, "session.connected_as_viewer", detail="stayed so")
+        self.assertLess(self.connected_to_judged(status), 4.0, "the wait for the viewer role must end")
+        self.assertCleanedUp(rig)
+
+    def test_the_connect_limit_does_not_cut_the_role_window_short(self):
+        # connected after 0.3 s, viewer after 1.6 s: inside the 4 s the role is given, beyond the 1.2 s allowed for connecting
+        rig = self.rig(scenario={"viewer_after": 1.6}, limits={"role_settle_s": 4, "connect_s": 1.2})
+        rig.start()
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), ready)
+        self.assertEqual(rig.status()["role"], "viewer")
+        rig.stop(); rig.finish()
+
+    def test_the_default_role_window_is_long_enough_for_a_busy_pi_and_short_enough_to_matter(self):
+        # the tests above shorten the window; the shipped one is what runs on the G2
+        self.assertGreaterEqual(V.DEFAULT_LIMITS["role_settle_s"], 5.0)
+        self.assertLessEqual(V.DEFAULT_LIMITS["role_settle_s"], V.DEFAULT_LIMITS["connect_s"])
+
+    def test_another_role_is_refused_at_once_without_waiting(self):
+        rig = self.rig(scenario={"role": "observer"}, limits={"role_settle_s": 8})
+        status = self.run_to_failure(rig, "session.connected_as_viewer", detail="'observer'")
+        self.assertLess(self.connected_to_judged(status), 4.0, "only operator and pending are given time to settle")
+        self.assertNotIn("stayed so", status["failed"]["detail"])
+
+    def test_the_named_fallback_is_not_used_for_a_role_that_only_reads_operator_at_first(self):
+        rig = self.rig(scenario={"viewer_after": 0.9}, limits={"role_settle_s": 6})
+        rig.start(("--viewer-role", "legacy-fallback"))
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), ready)
+        status = rig.status()
+        self.assertEqual((status["role"], status["role_enforced_by_bridge"]), ("viewer", True))
+        self.assertEqual((status["role_policy"], status["legacy_fallback_used"]), ("legacy-fallback", False))
+        self.assertNotIn("session.role_legacy_fallback", status["conditions"], "a Bridge that enforces the viewer role must not be recorded as a legacy one")
+        rig.stop(); rig.finish()
+
+    def test_the_named_fallback_is_taken_only_once_the_role_has_stayed_operator_for_the_window(self):
+        rig = self.rig(scenario={"role": "operator"}, limits={"role_settle_s": 2.0})
+        rig.start(("--viewer-role", "legacy-fallback"))
+        code, ready = rig.wait_ready()
+        self.assertEqual((code, ready["state"]), (0, "ready"), ready)
+        status = rig.status()
+        fallback = status["conditions"]["session.role_legacy_fallback"]
+        self.assertTrue(fallback["ok"])
+        self.assertIn("stayed so for the 2 s", fallback["detail"])
+        self.assertGreaterEqual(fallback["at"] - status["conditions"]["session.started"]["at"], 1.9, "the fallback was taken before the Bridge had its time")
+        self.assertTrue(status["legacy_fallback_used"])
+        rig.stop(); rig.finish()
 
     def test_a_bridge_that_predates_viewer_enforcement_is_accepted_only_under_the_named_fallback(self):
         rig = self.rig(scenario={"role": "operator"})

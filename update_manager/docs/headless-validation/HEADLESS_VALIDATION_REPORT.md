@@ -355,6 +355,26 @@ detail. Tested against the appliance's real `/proc` with stand-in processes. **W
 reserve suggests. The browser's measured peaks (413 to 472 MiB) are well under the cap, the watchdog stops it at the cap and it is the OOM killer's first choice, so this is a thinner margin, not a removed one. Idle availability on the appliance
 ranged 518 to 544 MiB this evening (mean 539) and 532 to 629 this morning (mean 553); a requirement of 525 MiB (500M plus a 25M reserve) passes at nearly all of those readings, 516 (16M reserve) at all of them.
 
+### What the sixth to ninth page-driven runs showed (2026-10-13 23:53 to 2026-10-14 06:16 EDT)
+
+With the idle-memory decision in place (`fafbd4a7` installed; the check counted 566 MiB against the 525 MiB needed, 500M cap plus the 25M reserve this appliance sets):
+
+* **Update from `cc09c61` to `42ff0919…` through the normal page: success, exit 0.** Bundle reused, manifest validated, dispatched in the transient unit, `42ff0919…` active and committed; the automatic headless validation passed (native page,
+  viewer role, the cap enforced by the validator's watchdog, no legacy fallback, no browser connected beforehand). Acceptance item 1.
+* **Controlled failure and automatic rollback.** With one added line in the administrator configuration that makes the validation fail, the update was refused after validation and the previous release was restored and verified receiving
+  (`receive_verified: true`); the saved receive settings were byte-identical before and after (`rx-state-v1.txt`, sha256 `30df0372…`), and the configuration was returned to its recorded hash (`c889aefe…`) afterwards. Acceptance items 2 and 3.
+* **Retry reused the bundle and succeeded.** The page printed that a built bundle for the commit already existed, nothing was rebuilt, status `success`, record `committed`. That release (`cc09c61`) predates the settings persistence, so the radio
+  came back at 14.2 MHz and the status says `settings_preserved: false`; the saved file was not touched. Acceptance item 4.
+* **Update back to `42ff0919…` (06:15 EDT): rolled back, and the rollback was correct.** The target's validation failed `session.connected_as_viewer`: *connected; the Bridge assigned role 'operator'*. The previous release was restored and its reception
+  verified (status `error`/`rolled_back`, exit 1, record `rolled_back`; the saved settings file and the configuration unchanged). Nothing was wrong with the release: the Bridge's journal for that second reads `TCI client 3 assigned operator role`,
+  `TCI client 4 assigned viewer role`, `TCI client 3 declared a viewer session and released the operator role`, `opened session … as Viewer`. The Bridge registers the first client as the operator and says so in the same burst as `ready;`, and releases
+  the role when it reads the session's own viewer declaration (`release_operator_for_viewer_session`, `session_pair.rs`); the validator took the first reading in which the page was connected and ready, 1.05 s after the session started on a busy
+  Pi, and that reading fell between the two. The earlier runs presumably read after it (the validator did not record the reading that would show it). `owner.gate_equivalent` also failed in that record, but only because the validator evaluates every remaining condition after a failure, 1.7 s into the session, before the
+  receive client had begun to move data (`state.sdr_active` false); it is a consequence, not a second fault.
+  **Fix (mine, in the validator):** a role that reads `operator` or is not yet known is given `role_settle_s` (default 10 s) to become `viewer`; every other role is refused at once; a role that does not settle is refused with the time it was given; the named
+  legacy fallback is taken only after the window and never for a role that merely read `operator` first; the settled session records `role_transient_s`. The page and the Bridge are unchanged. Ten new tests (eight fail on the old validator; the other two pin behaviour that must not change), and 12 of 12
+  mutants of the new logic are killed with the no-op control surviving. Retest on the appliance: refresh the installer-managed scripts from the fixed commit, then the same page update (the bundle is already built).
+
 ## Not verified / residual risk
 
 * **The restart-timing waits are bounded, not removed.** If the host's memory never climbs back to cap + 32 MiB within 30 s, or the owner never writes telemetry, the validation still fails (and an activation rolls back);
