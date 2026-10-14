@@ -273,9 +273,11 @@ SCRIPT_NAME = "saturn-remote-validate.py"
 
 def own_memory_bytes(proc_root: Path) -> int:
     """The anonymous memory used by the processes of THIS program (the controller and the small waiter the activator starts beside it), read from
-    /proc: each is a Python interpreter, ~35 MiB together on the Pi. The headroom check judges the host by the memory it has WITHOUT them, its idle
-    figure: this program is not what the browser competes with for what the radio needs, and counting it made the check refuse on a host whose idle
-    memory is enough. It is added back openly (the condition says how much), capped, and 0 wherever it cannot be read."""
+    /proc: each is a Python interpreter, ~35 MiB together on the Pi. They stay resident while the browser runs, so they DO compete with it, and with the
+    radio's processes, for memory. The headroom check nevertheless adds them back to MemAvailable and judges the host by that idle estimate: a decision of
+    the owner (2026-10-12), taken because with them counted no reserve fits a 500M cap on the Pi (the plain check read 492 to 506 MiB against 534 to 540
+    idle). The price is that the reserve is measured from the idle figure and not from what is available while the validator runs. It is added back
+    openly (the check reports the actual figure, this one and the estimate separately), capped, and 0 wherever it cannot be read."""
     total = 0
     try:
         entries = list(proc_root.glob("[0-9]*"))
@@ -946,8 +948,10 @@ class Validator:
         return view
 
     def check_memory_headroom(self) -> bool:
-        """Before the browser is started: the host has the memory free that the cap lets the browser take, plus a margin. Where it has not, the
-        validation is refused rather than started, so the radio's processes are never the ones that pay for it."""
+        """Before the browser is started: the host has the memory free that the cap lets the browser take, plus a margin, judged on the host's IDLE
+        memory (MemAvailable plus this program's own processes: see own_memory_bytes; the owner's decision, reported apart from the actual figure). Where it
+        has not, the validation is refused rather than started. That is a decision about an estimate, not a guarantee that the margin remains with the browser
+        at its cap; the watchdog (which stops the browser at the cap) and its OOM score (first choice of the OOM killer) are the backstops."""
         if self.args.isolation != "required":
             return True
         reserve = parse_size(self.args.memory_reserve)
@@ -957,39 +961,62 @@ class Validator:
         unreadable = "the host's available memory could not be read, so it cannot be shown that the browser fits"
         proc_root = Path(self.args.proc_root)
 
-        def counted() -> tuple[int | None, int]:
-            """(the host's available memory plus what this program's own processes use, that program memory)"""
+        def reading() -> tuple[int | None, int]:
+            """(the host's actual MemAvailable, the memory that this program's own processes hold)"""
             free = host_counters(proc_root).get("MemAvailable")
-            own = own_memory_bytes(proc_root) if free is not None else 0
-            return (None if free is None else free + own), own
+            return free, (own_memory_bytes(proc_root) if free is not None else 0)
 
-        available, own = counted()
-        first = best = available
-        if available is None:
+        actual, own = reading()
+        if actual is None:
             return self.recorder.condition("host.memory_headroom", False, unreadable)
+        first = best = actual + own
         # Just after the services were restarted (an activation, or the rollback after one) the host may read lower than it does at rest: wait,
         # within a bound, for the memory instead of refusing at the first reading. Never longer than the bound, and a browser is not started until
         # the memory is there.
         started, waited_for = now(), False
-        while available < wanted and now() - started < self.limits["headroom_wait_s"] and not self.stop_requested.is_set():
+        while actual + own < wanted and now() - started < self.limits["headroom_wait_s"] and not self.stop_requested.is_set():
             waited_for = True
             self.sleep(self.limits["poll_s"])
-            available, own = counted()
-            if available is None:
+            actual, own = reading()
+            if actual is None:
                 return self.recorder.condition("host.memory_headroom", False, unreadable)
-            best = max(best, available)
-        if available < wanted and self.stop_requested.is_set():
+            best = max(best, actual + own)
+        estimate = actual + own
+        if estimate < wanted and self.stop_requested.is_set():
             return self.interrupted("host.memory_headroom", "waiting for the host to have the memory the browser needs")
-        text = f"{available / 1048576:.0f} MiB available"
+        # The policy (the owner's decision of 2026-10-12): the check is judged on the IDLE estimate, MemAvailable plus the validator's own processes. That is not
+        # the same as the memory that would remain with the browser at its cap, and the record keeps the two apart.
+        passed = estimate >= wanted
+        cap = parse_size(self.args.memory_max)
+        kept_at_cap = actual - cap
+        intact = kept_at_cap >= reserve
+        mib = lambda value: f"{value / 1048576:.0f}"  # noqa: E731
+        text = f"actual MemAvailable {mib(actual)} MiB"
         if own:
-            text += f" (counting the {own / 1048576:.0f} MiB that the validator's own processes use, which the browser does not compete for)"
-        text += f"; the browser may take up to {self.args.memory_max} and {reserve // 1048576} MiB are kept in reserve"
+            text += (f"; idle-memory estimate {mib(estimate)} MiB (the actual figure plus the {mib(own)} MiB that this validator's own processes hold: they stay resident "
+                     "while the browser runs and compete with it for memory, and are counted by the owner's decision to judge the check on idle memory)")
+        text += f"; the browser may take up to {self.args.memory_max} and {mib(reserve)} MiB are kept in reserve ({mib(wanted)} MiB needed)"
         if waited_for:
-            text += (f" (after waiting {now() - started:.1f} s: {first / 1048576:.0f} MiB at first"
-                     + ("" if available >= wanted else f", {best / 1048576:.0f} MiB at the most") + ")")
-        if available < wanted:
-            text += f" ({wanted / 1048576:.0f} MiB needed): no browser was started"
-        return self.recorder.condition("host.memory_headroom", available >= wanted, text)
+            text += (f" (after waiting {now() - started:.1f} s: {mib(first)} MiB at first"
+                     + ("" if passed else f", {mib(best)} MiB at the most") + ")")
+        if own:
+            text += ". Judged on the idle-memory estimate, not on the actual figure"
+        if kept_at_cap >= reserve:
+            text += f". With the browser at its cap the host would still have about {mib(kept_at_cap)} MiB available"
+        elif kept_at_cap >= 0:
+            text += (f". With the browser at its cap the host would have only about {mib(kept_at_cap)} MiB available, less than the {mib(reserve)} MiB reserve: "
+                     "the reserve holds only on the idle estimate")
+        else:
+            text += f". The actual availability is below the browser's cap: at the cap the host would be short by about {mib(-kept_at_cap)} MiB"
+        if passed and actual < wanted:
+            text += "; this check passed only on the idle estimate"
+        if not passed:
+            text += ": no browser was started"
+        self.recorder.update(memory_headroom={
+            "judged_on": "idle_estimate", "actual_available_bytes": actual, "own_added_back_bytes": own, "idle_estimate_bytes": estimate,
+            "cap_bytes": cap, "reserve_bytes": reserve, "required_bytes": wanted, "kept_at_cap_bytes": kept_at_cap, "reserve_intact_at_cap": intact,
+            "passed": passed, "passed_only_on_idle_estimate": passed and actual < wanted, "waited_s": round(now() - started, 2) if waited_for else 0.0})
+        return self.recorder.condition("host.memory_headroom", passed, text)
 
     def baseline(self) -> bool:
         """The owner's telemetry before the session: there, fresh, and the running service's own. The services were just restarted (an activation,

@@ -1481,12 +1481,12 @@ class MemoryHeadroomTests(RigCase):
         self.assertEqual(rig.wait_ready()[0], 0)
         detail = rig.condition("host.memory_headroom")
         self.assertTrue(detail["ok"], detail)
-        self.assertIn("450 MiB available", detail["detail"])
+        self.assertIn("actual MemAvailable 450 MiB", detail["detail"])
         rig.stop(); rig.finish()
 
     def test_a_host_without_the_memory_is_refused_and_no_browser_is_started(self):
         rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
-        status = self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available.*382 MiB needed\): no browser was started")
+        status = self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 300 MiB.*382 MiB needed\).*no browser was started")
         self.assertIsNone(rig.browser_pid(), "a browser was started although the host cannot spare the memory")
         self.assertFalse((rig.world / "browser_argv.json").exists())
 
@@ -1550,13 +1550,13 @@ class MemoryHeadroomTests(RigCase):
         self.assertEqual(rig.wait_ready()[0], 0)
         detail = rig.condition("host.memory_headroom")
         self.assertTrue(detail["ok"], detail)
-        self.assertRegex(detail["detail"], r"395 MiB available \(counting the 35 MiB that the validator's own processes use")
+        self.assertRegex(detail["detail"], r"actual MemAvailable 360 MiB; idle-memory estimate 395 MiB \(the actual figure plus the 35 MiB that this validator's own processes hold")
         rig.stop(); rig.finish()
 
     def test_adding_the_validators_memory_back_cannot_make_a_host_without_the_memory_pass(self):
         rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
         self.own_process(rig, 4101, 36000)
-        self.run_to_failure(rig, "host.memory_headroom", detail=r"335 MiB available \(counting the 35 MiB.*382 MiB needed\): no browser was started")
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 300 MiB; idle-memory estimate 335 MiB.*382 MiB needed\).*no browser was started")
         self.assertIsNone(rig.browser_pid())
 
     def test_only_this_programs_processes_are_counted(self):
@@ -1564,19 +1564,127 @@ class MemoryHeadroomTests(RigCase):
         self.own_process(rig, 4101, 36000, argv=("grep", "-r", "saturn-remote-validate.py"))                           # names the script, is not it
         self.own_process(rig, 4102, 36000, argv=("vim", "/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py"))
         self.own_process(rig, 4103, 36000, argv=("python3", "/usr/local/lib/saturn-go/scripts/some-other-script.py"))
-        self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available; the browser may take up to 350M.*382 MiB needed\)")
-        self.assertNotIn("counting", rig.status()["failed"]["detail"])
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 300 MiB; the browser may take up to 350M.*382 MiB needed\)")
+        self.assertNotIn("idle-memory estimate", rig.status()["failed"]["detail"])
+        self.assertEqual(rig.status()["memory_headroom"]["own_added_back_bytes"], 0)
 
     def test_the_memory_added_back_is_bounded(self):
         rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
         self.own_process(rig, 4101, 500 * 1024)           # a runaway reading must not be able to buy a pass
-        self.run_to_failure(rig, "host.memory_headroom", detail=r"364 MiB available \(counting the 64 MiB.*382 MiB needed\)")
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 300 MiB; idle-memory estimate 364 MiB \(the actual figure plus the 64 MiB.*382 MiB needed\)")
 
     def test_an_unreadable_process_entry_counts_as_nothing(self):
         rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
         self.own_process(rig, 4101, 0, status=False)       # a process that vanished between the two reads
         (rig.world / "proc" / "4102").mkdir()              # no cmdline at all
-        self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available; the browser may take up to 350M.*382 MiB needed\)")
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 300 MiB; the browser may take up to 350M.*382 MiB needed\)")
+
+    def headroom(self, rig):
+        return rig.status()["memory_headroom"]
+
+    def test_the_reviewers_probe_passes_by_the_owners_decision_and_says_what_the_host_really_has(self):
+        """490 MiB available, a 500M cap, 35 MiB of the validator's own processes added back, a 25 MiB reserve: the owner's decision to judge on idle memory lets it
+        pass (525 MiB estimated), but that is not 25 MiB remaining at the cap, and the record must not read as if it were."""
+        rig = self.rig(isolation="systemd", mem_available_kb=490 * 1024, unit_props={"MemoryMax": str(500 * 1024 ** 2)})
+        self.own_process(rig, 4101, 14336)                                     # 14 MiB + 21 MiB = 35 MiB exactly
+        self.own_process(rig, 4102, 21504, argv=("python3", "/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py", "wait"))
+        rig.start(("--memory-max", "500M", "--memory-reserve", "25M"))
+        self.assertEqual(rig.wait_ready()[0], 0, rig.status().get("failed"))
+        condition = rig.condition("host.memory_headroom")
+        self.assertTrue(condition["ok"], condition)
+        figures = self.headroom(rig)
+        MiB = 1024 * 1024
+        self.assertEqual((figures["actual_available_bytes"], figures["own_added_back_bytes"], figures["idle_estimate_bytes"]), (490 * MiB, 35 * MiB, 525 * MiB))
+        self.assertEqual((figures["cap_bytes"], figures["reserve_bytes"], figures["required_bytes"]), (500 * MiB, 25 * MiB, 525 * MiB))
+        self.assertEqual(figures["kept_at_cap_bytes"], -10 * MiB, "at the cap this host would be 10 MiB short, not 25 MiB to the good")
+        self.assertIs(figures["reserve_intact_at_cap"], False)
+        self.assertIs(figures["passed_only_on_idle_estimate"], True)
+        self.assertEqual(figures["judged_on"], "idle_estimate")
+        detail = condition["detail"]
+        for needed in ("actual MemAvailable 490 MiB", "idle-memory estimate 525 MiB", "35 MiB", "525 MiB needed", "short by about 10 MiB", "only on the idle estimate",
+                       "Judged on the idle-memory estimate, not on the actual figure"):
+            self.assertIn(needed, detail)
+        rig.stop(); rig.finish()
+
+    def test_the_validators_own_processes_are_not_said_to_be_out_of_the_browsers_way(self):
+        """They stay resident while the browser runs, so they do compete with it for memory; they are counted by decision, and the record says that."""
+        rig = self.rig(isolation="systemd", mem_available_kb=360 * 1024)
+        self.own_process(rig, 4101, 36000)
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        detail = rig.condition("host.memory_headroom")["detail"]
+        self.assertNotIn("does not compete", detail)
+        self.assertNotIn("not compete", detail)
+        self.assertIn("stay resident while the browser runs", detail)
+        self.assertIn("compete with it for memory", detail)
+        self.assertIn("owner's decision", detail)
+        rig.stop(); rig.finish()
+
+    def test_no_text_of_the_validator_or_its_documentation_says_the_browser_does_not_compete_with_those_processes(self):
+        root = Path(__file__).resolve().parents[1] / "update_manager"
+        for path in (root / "scripts/saturn-remote-validate.py", root / "docs/OPERATIONS_RUNBOOK.md", root / "CHANGELOG.md",
+                     root / "docs/headless-validation/HEADLESS_VALIDATION_REPORT.md"):
+            text = " ".join(path.read_text().split())
+            for false_claim in ("does not compete", "not compete with", "is not what the browser competes with", "browser does not compete"):
+                self.assertNotIn(false_claim, text, f"{path.name} still says the validator's resident processes are out of the browser's way")
+
+    def test_a_host_that_keeps_the_reserve_at_the_cap_is_not_flagged(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=600 * 1024)       # 350M cap, 32 MiB reserve: 250 MiB would be left at the cap
+        self.own_process(rig, 4101, 36000)
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        figures = self.headroom(rig)
+        self.assertEqual(figures["kept_at_cap_bytes"], 250 * 1024 * 1024)
+        self.assertIs(figures["reserve_intact_at_cap"], True)
+        self.assertIs(figures["passed_only_on_idle_estimate"], False)
+        detail = rig.condition("host.memory_headroom")["detail"]
+        self.assertIn("still have about 250 MiB", detail)
+        self.assertNotIn("only on the idle estimate", detail)
+        rig.stop(); rig.finish()
+
+    def test_availability_that_exactly_covers_cap_and_reserve_keeps_the_reserve_intact(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=382 * 1024)      # 350M cap + 32 MiB reserve exactly, nothing added back
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        figures = self.headroom(rig)
+        self.assertEqual(figures["kept_at_cap_bytes"], 32 * 1024 * 1024)
+        self.assertIs(figures["reserve_intact_at_cap"], True)
+        self.assertIs(figures["passed_only_on_idle_estimate"], False)
+        self.assertIn("still have about 32 MiB", rig.condition("host.memory_headroom")["detail"])
+        rig.stop(); rig.finish()
+
+    def test_availability_exactly_at_the_cap_is_not_called_short(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=350 * 1024)      # exactly the cap: nothing short, nothing in reserve
+        self.own_process(rig, 4101, 36000)                                     # passes only on the estimate (350 + 35)
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        figures = self.headroom(rig)
+        self.assertEqual(figures["kept_at_cap_bytes"], 0)
+        self.assertIs(figures["reserve_intact_at_cap"], False)
+        detail = rig.condition("host.memory_headroom")["detail"]
+        self.assertIn("only about 0 MiB", detail)
+        self.assertNotIn("short by", detail)
+        rig.stop(); rig.finish()
+
+    def test_with_nothing_added_back_the_actual_figure_is_the_whole_story(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        figures = self.headroom(rig)
+        self.assertEqual((figures["own_added_back_bytes"], figures["actual_available_bytes"], figures["idle_estimate_bytes"]), (0, 450 * 1024 * 1024, 450 * 1024 * 1024))
+        detail = rig.condition("host.memory_headroom")["detail"]
+        self.assertIn("actual MemAvailable 450 MiB", detail)
+        self.assertNotIn("idle-memory estimate", detail)
+        self.assertNotIn("Judged on", detail, "nothing was added back, so there is no estimate to say the check was judged on")
+        rig.stop(); rig.finish()
+
+    def test_a_refusal_reports_both_figures_and_the_picture_at_the_cap(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
+        self.own_process(rig, 4101, 36000)
+        status = self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 300 MiB.*idle-memory estimate 335 MiB.*382 MiB needed.*no browser was started")
+        figures = status["memory_headroom"]
+        self.assertIs(figures["passed"], False)
+        self.assertIs(figures["passed_only_on_idle_estimate"], False)
 
     def test_a_larger_measurement_cap_needs_the_larger_headroom(self):
         rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)
@@ -1656,7 +1764,7 @@ class RestartTimingTests(RigCase):
         text = "MemTotal: 927000 kB\nMemAvailable: %d kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n"
         threading.Timer(0.8, lambda: meminfo.write_text(text % (360 * 1024))).start()      # more than before, still less than the 382 MiB needed
         threading.Timer(1.4, lambda: meminfo.write_text(text % (320 * 1024))).start()
-        self.run_to_failure(rig, "host.memory_headroom", detail=r"320 MiB available.*300 MiB at first, 360 MiB at the most.*382 MiB needed\): no browser was started")
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 320 MiB.*382 MiB needed.*300 MiB at first, 360 MiB at the most.*no browser was started")
         self.assertIsNone(rig.browser_pid())
 
     def test_memory_that_becomes_unreadable_while_waiting_is_not_assumed(self):
@@ -1686,12 +1794,12 @@ class RestartTimingTests(RigCase):
         self.assertEqual(rig.wait_ready()[0], 0, rig.status().get("failed"))
         detail = rig.condition("host.memory_headroom")
         self.assertTrue(detail["ok"], detail)
-        self.assertRegex(detail["detail"], r"439 MiB available.*after waiting [0-9.]+ s: 300 MiB at first")
+        self.assertRegex(detail["detail"], r"actual MemAvailable 439 MiB.*after waiting [0-9.]+ s: 300 MiB at first")
         rig.stop(); rig.finish()
 
     def test_memory_that_never_climbs_back_is_refused_after_the_bound_with_what_was_seen(self):
         rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 1.0})
-        self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available.*after waiting [0-9.]+ s: 300 MiB at first, 300 MiB at the most.*382 MiB needed\): no browser was started")
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 300 MiB.*382 MiB needed.*after waiting [0-9.]+ s: 300 MiB at first, 300 MiB at the most.*no browser was started")
         self.assertIsNone(rig.browser_pid())
         self.assertFalse((rig.world / "browser_argv.json").exists())
 

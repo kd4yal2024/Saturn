@@ -10,7 +10,7 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   restore the previous release automatically when that fails: `update-saturn-go.sh` resolves the ref to one commit
   and builds that commit (`saturn-release-update-flow.sh`), and the new root broker `saturn-release-update-root.py`
   (the service user may call only `--preflight` and `--dispatch`, only while the policy is on) runs the update in
-  its own transient unit, holding the `release` maintenance lock (and checking, without holding them, that `radio` and `repository` are free), and writes the outcome, the release identities and the
+  its own transient unit, holding the maintenance locks for the whole run (`release` exclusively, `radio` and `repository` shared), and writes the outcome, the release identities and the
   radio settings before and after to the deploy status file. Privileged helpers stay installer-managed: a release
   that declares a newer `saturn-helper-contract` than the installed helpers is refused with "installer update
   required" before anything changes. A legacy installation is moved only by an explicit
@@ -25,8 +25,10 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   re-executed copy of itself, does its checks and the install, and then replaces itself with a small shell that runs the activator and starts `--finish` to classify the outcome. Measured on the first appliance during an update:
   anonymous memory 192 MiB against 135 MiB at rest, from five Python processes (the validator's two, the broker's three), which held `MemAvailable` at 490 to 502 MiB against the 532 MiB the headless browser's
   headroom check needs; a plain service restart showed no dip at all. The unit's own `RuntimeMaxSec` (two hours) replaces the lock tool's timeout.
-- The headless browser's memory-headroom check judges the host by its **idle** memory: it adds back the anonymous memory of the validator's own processes (the controller and the small waiter the activator starts beside it,
-  about 35 MiB together on the Pi, read from `/proc`, capped at 64 MiB, 0 where unreadable) to `MemAvailable`, and the evidence says how much it added. On the first appliance the plain check read 492 to 506 MiB with those processes
+- The headless browser's memory-headroom check is judged on the host's **idle-memory estimate**, by the owner's decision: it adds back the anonymous memory of the validator's own processes (the controller and the small waiter the activator starts beside it,
+  about 35 MiB together on the Pi, read from `/proc`, capped at 64 MiB, 0 where unreadable) to `MemAvailable`. Those processes stay resident while the browser runs and do compete with it for memory; the check no longer says otherwise. It reports the actual
+  `MemAvailable`, the added memory and the estimate separately, what the host would keep with the browser at its cap, and "passed only on the idle estimate" when the actual figure alone would not have passed (for example 490 MiB actual + 35 MiB added back
+  passes a 500M cap with a 25 MiB reserve, yet at the cap that host would be 10 MiB short); the same figures are in the validator's `memory_headroom` record. On the first appliance the plain check read 492 to 506 MiB with those processes
   running against 534 to 540 MiB idle just before, so with a 500M cap no reserve could pass; the choice to count the idle figure is the owner's. What it costs: the browser may take up to the cap with the reserve counted
   from the idle figure, not from what is left once the validator runs, i.e. about 35 MiB less margin for the radio's processes in the worst case (a browser at its cap; the measured peaks were 413 to 472 MiB, the watchdog kills it at
   the cap and it is the OOM killer's first choice).
@@ -37,9 +39,13 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   taken only after that window and not for a role that merely read `operator` at first, and a settled session records how long the transient lasted (`role_transient_s`).
 - `VALIDATION_MEMORY_RESERVE` (administrator-owned, kept by the installer, default `32M`, at least `8M`) sets the memory kept free beyond the browser's cap before a browser is started. The default is unchanged;
   it exists so that one appliance's measurement does not have to become every host's default.
-- The broker no longer holds the `radio` maintenance lock while the services restart. `saturn-go`'s own startup runs its restore recovery under the `repository` and `radio` locks and exits when either is
-  busy, so a broker holding `radio` made the target's server unable to start (readiness failed) and the previous release's too (the rollback was recorded as failed, exit 70). The broker now holds only
-  `release` for the run and checks `radio` and `repository` are free at the start and again just before the activation, refusing with phase `busy` if they are not (or if the check itself fails).
+- Maintenance exclusion holds for the whole update, rollback included. The broker first held `radio` exclusively, and `saturn-go`'s own startup (restore recovery under `repository` and `radio`, which exits when either is busy)
+  could not start: readiness failed and the rollback was recorded as failed (exit 70). It then held only `release` and merely CHECKED the other two at the start and before the activation, which left a gap: FPGA flashing, a
+  repository restore, the Pi-HPSDR updaters or the radio backend switch (none of which takes the release lock) could take `radio` the moment after the check, while the restarted server was already reachable. The broker now holds `release`
+  exclusively and `radio` and `repository` **shared** from its first lock to the end (a busy exclusive holder means phase `busy`, after the same wait as the release lock), and the lock tool admits exactly one operation to a
+  shared hold: `saturn-go`'s startup recovery, by name (`restore:recover`) and by those two resources only, and only while another process holds the release lock. Every other request is exclusive and is refused (75) or waits.
+  The lock tool has a `capabilities` action; an installed tool without `shared_recovery` makes the update refuse with "installer update required" before anything changes. A test starts competing maintenance after the last
+  check, during the activation and during a rollback, and expects every one of them refused while the server's recovery is admitted.
 - A release is built in a clean, allow-listed environment (`env -i` plus the toolchain and locale, `PKG_CONFIG_*`, line-buffering and the `SATURN_RELEASE_*`, `SATURN_SATURNGO_BUILD_*` and `SATURN_WDSP_*` build
   knobs), never in the environment of the running `saturn-go` service that the page hands the script. The service's environment holds its runtime configuration and its web credential
   (`SATURN_REMOTE_BASIC_AUTH`); inherited, that credential turned authentication on in the Rust server's own route tests, so six `remote_tls` tests failed with 401 in the first page-driven build on the G2

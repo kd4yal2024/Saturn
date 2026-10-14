@@ -5,8 +5,8 @@ The Update action of the Saturn Go page builds a release bundle as the service u
 installing, activating or rolling back: it runs the existing root installer (saturn-release-install-root.sh) and the existing root activator
 (saturn-release-activate-root.sh), whose transaction restarts the services, proves reception with the headless receive validation, and
 restores the previous release if that fails. What this broker adds is the part that has to survive the web service restarting: it runs in
-its own transient unit, holds the release lock (and checks, without holding them, that the radio and repository locks are free: saturn-go's startup needs
-them), keeps the status file the page reads up to date, and classifies the outcome.
+its own transient unit, holds the maintenance locks for the whole run (the release lock exclusively, the radio and repository locks SHARED, so that nothing
+else can start in between and saturn-go's own startup recovery still can), keeps the status file the page reads up to date, and classifies the outcome.
 
 Modes (the service user may run only the first two, through sudo; --run is for the transient unit and refuses to run from anything else):
 
@@ -15,7 +15,7 @@ Modes (the service user may run only the first two, through sudo; --run is for t
   --dispatch [--allow-legacy-migration] BUNDLE
                               Checks the bundle and everything --preflight checks, then starts --run in a detached transient unit and returns.
   --run [--allow-legacy-migration] BUNDLE
-                              Does the update (as root, inside the unit): takes the release lock, installs, then replaces itself with a small shell
+                              Does the update (as root, inside the unit): takes the maintenance locks, installs, then replaces itself with a small shell
                               that runs the activator, so that no Python process stays resident while the headless browser's memory headroom is
                               checked.
   --finish CONTEXT --activator-rc N
@@ -60,12 +60,20 @@ CONTRACT_MARK = re.compile(r"saturn-helper-contract:\s*([0-9]+)")
 
 # The maintenance locks are taken here, in this process, with flock on the same lock files the lock tool and saturn-go use: no lock-tool wrapper and no
 # second copy of this program stay resident (each Python process costs memory that the headless browser's headroom check counts: the lock tool and the
-# re-executed broker were two of the five Python processes that held it ~55 MiB below the 532 MiB the check needs). `release` is HELD for the whole run: a second deployment cannot start while this one does. `radio` and `repository` are only CHECKED
-# (never held), because the activation restarts saturn-go, and saturn-go's own startup runs its restore recovery under exactly those two locks and exits when
-# either is busy: held here, the target's server could not start (readiness failed) and neither could the previous release's (the rollback failed). The first
-# page-driven update on the G2 failed that way. Whoever else wants them is the page, and the page is down while the services restart.
+# re-executed broker were two of the five Python processes that held it ~55 MiB below the 532 MiB the check needs).
+#
+# What is held, and why it is shaped like this. `release` is held EXCLUSIVELY for the whole run: a second deployment cannot start while this one does.
+# `radio` and `repository` are held SHARED for the whole run, rollback included (the descriptors are inherited through the hand-over to the activator and
+# the finish step). Every other maintenance operation asks for them exclusively, through the lock tool or with a plain flock (FPGA flashing, repository
+# restore, the Pi-HPSDR updaters, the radio backend switch), so none of them can start at any point of the run, and the restarted web server being
+# reachable before the validation has finished does not matter. The one caller that must get in is saturn-go itself: the activation restarts it, its startup
+# runs a restore recovery under exactly those two locks (operation `restore:recover`) and EXITS when it cannot take them, so locks held exclusively here made
+# the target's server unable to start (readiness failed) and the previous release's too (the rollback was recorded as failed): the first page-driven update
+# on the G2 failed that way. The lock tool therefore admits that one operation, by name and by those two resources, to a shared hold. An earlier version
+# of this program only CHECKED radio and repository before the activation and let go of them; anything could take them the moment after the check.
 LOCK_RESOURCES = "release"
-CHECKED_RESOURCES = "radio,repository"
+SHARED_RESOURCES = "radio,repository"
+LOCK_TOOL = "saturn-maintenance-lock.py"
 LOCK_WAIT_SECONDS = 90
 RUN_TIMEOUT_SECONDS = 2 * 3600          # enforced by the transient unit (RuntimeMaxSec)
 EXIT_REFUSED, EXIT_NOT_RESTORED, EXIT_UNVERIFIED, EXIT_CONFLICT = 2, 70, 71, 75
@@ -205,10 +213,26 @@ def check_policy_and_layout(env: Environment, allow_migration: bool) -> tuple[st
     if layout == "legacy" and not allow_migration:
         raise Refused("migration_required", "this installation uses the legacy layout (no release is active). Moving to managed releases is a one-way "
                                             "change and is never done by an ordinary update: run the update with --migrate-to-releases to do it deliberately")
-    for name in (INSTALLER, ACTIVATOR, "saturn-remote-validate.py", "saturn-remote-receive-guard.js"):
+    for name in (INSTALLER, ACTIVATOR, "saturn-remote-validate.py", "saturn-remote-receive-guard.js", LOCK_TOOL):
         if not os.path.exists(tool(env, name)):
             raise Refused("installer_update_required", f"the privileged helper {name} is not installed; run the installer")
+    check_lock_tool(env)
     return layout, commit
+
+
+def check_lock_tool(env: Environment) -> None:
+    """This program holds radio and repository for the whole run and relies on the lock tool to admit saturn-go's own startup recovery to that hold. With a tool
+    that cannot, the restarted server would not start (a failed rollback), so refuse, naming the installer, before anything is changed."""
+    try:
+        result = subprocess.run([tool(env, LOCK_TOOL), "capabilities"], capture_output=True, text=True, timeout=15)
+        capabilities = json.loads(result.stdout) if result.returncode == 0 else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        capabilities = {}
+    shared = capabilities.get("shared_recovery") if isinstance(capabilities, dict) else None
+    if not isinstance(shared, int) or isinstance(shared, bool) or shared < 1:
+        raise Refused("installer_update_required",
+                      f"installer update required: the installed {LOCK_TOOL} cannot admit saturn-go's own restore recovery while an update holds the radio and "
+                      "repository locks, so the restarted server could not start. Run the Saturn Go installer from the new checkout; nothing was changed")
 
 
 def read_manifest(bundle: str) -> dict:
@@ -365,28 +389,45 @@ def hold_release_lock(env: Environment, status: Status, release: dict) -> int | 
             time.sleep(min(2.0, max(0.05, env.lock_wait / 20)))
 
 
-def others_are_idle(env: Environment) -> bool:
-    """True when nothing else holds the radio or repository lock. Checked, not held (see CHECKED_RESOURCES); fails closed if the check itself fails."""
-    taken: list[int] = []
+def hold_shared_locks(env: Environment, status: Status, release: dict) -> list[int] | None:
+    """Take the radio and repository locks SHARED (see SHARED_RESOURCES), all or none. An exclusive holder (a restore, a flash, a backend switch) means
+    "busy"; the wait is as long as the release lock's, because the page's own script lets go of its locks one after the other as it exits. The descriptors
+    are inheritable: they stay held across the hand-over to the activator and the finish step."""
+    descriptors: list[int] = []
     try:
-        for name in CHECKED_RESOURCES.split(","):
-            descriptor = open_lock(env, name)
-            taken.append(descriptor)
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                return False
-        return True
-    finally:
-        for descriptor in taken:
-            os.close(descriptor)       # closing releases what was just taken
+        for name in SHARED_RESOURCES.split(","):
+            descriptors.append(open_lock(env, name))
+    except Refused:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise
+    deadline = time.monotonic() + env.lock_wait
+    announced = False
+    while True:
+        try:
+            for descriptor in descriptors:
+                fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            for descriptor in descriptors:
+                os.set_inheritable(descriptor, True)
+            return descriptors
+        except BlockingIOError:
+            for descriptor in descriptors:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)       # all or none
+            if time.monotonic() >= deadline:
+                for descriptor in descriptors:
+                    os.close(descriptor)
+                return None
+            if not announced:
+                status.write("running", "lock", "Waiting for the other maintenance operations to finish", release=release)
+                announced = True
+            time.sleep(min(2.0, max(0.05, env.lock_wait / 20)))
 
 
 # ---- the run ----------------------------------------------------------------------------------------------------------------------------
 # While the activator runs (the services restart and the headless browser is validated) nothing of this program may stay resident: the validation
 # refuses to start a browser unless the host has the memory for it, and a resident Python process is memory it does not have. So after the
 # preparation this process REPLACES ITSELF with a small shell that runs the activator, appends its output to the log, and then starts this program
-# again in --finish mode to classify the outcome. The release lock's descriptor is inherited through all of it.
+# again in --finish mode to classify the outcome. The descriptors of the release, radio and repository locks are inherited through all of it.
 SUPERVISOR = r"""log="$3"
 printf '$ %s %s\n' "$1" "$2" >>"$log"
 "$1" "$2" >>"$log" 2>&1
@@ -414,7 +455,8 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool) -> int:
         if lock is None:
             status.write("error", "busy", "Another deployment holds the release lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
             return EXIT_REFUSED
-        if not others_are_idle(env):
+        shared = hold_shared_locks(env, status, release)
+        if shared is None:
             status.write("error", "busy", "Another maintenance operation holds the radio or repository lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
             return EXIT_REFUSED
         os.makedirs(env.log_dir, mode=0o750, exist_ok=True)
@@ -434,10 +476,6 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool) -> int:
             if run_logged([tool(env, INSTALLER), bundle], log):
                 status.write("error", "refused", "The release could not be installed (see the log); the active release was not changed", EXIT_REFUSED, True, release=release)
                 return EXIT_REFUSED
-        if not others_are_idle(env):       # again, right before the services restart: the install above took a while
-            status.write("error", "busy", "Another maintenance operation holds the radio or repository lock; the release is installed but was not activated. Try again when it has finished",
-                         EXIT_REFUSED, True, release=release)
-            return EXIT_REFUSED
         status.write("running", "activate", "Activating: the services restart, reception is verified by a headless session, and the previous release is restored if that fails", release=release)
         context_path = log_path + ".context.json"
         descriptor = os.open(context_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

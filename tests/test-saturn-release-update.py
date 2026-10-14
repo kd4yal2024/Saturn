@@ -52,6 +52,30 @@ if os.environ.get("FAKE_ACTIVATOR_LOG"):
     resident = [line for line in listing if os.environ["FAKE_BROKER"] in line and line.split(None, 1)[0] != "bash"]
     open(os.environ["FAKE_ACTIVATOR_LOG"], "a").write(f"release-lock-probe-rc={held.returncode}\nbroker-python-processes={len(resident)}\n")
 
+# Competing maintenance that starts AFTER the broker's last check (this program runs after it): the operations saturn-go starts through the lock tool, with
+# the resources rust-server/src/maintenance_lock.rs gives them, and a script that locks the radio file directly (the radio backend switch does). Recorded at the start of
+# the activation and again when it ends, on every path (success, rollback, failure). `FAKE_COMPETE` names the log.
+if os.environ.get("FAKE_COMPETE"):
+    import atexit
+    def compete(tag):
+        tool, lock_dir = os.environ["FAKE_LOCK_TOOL"], os.environ["FAKE_LOCK_DIR"]
+        def through_the_tool(action, operation, resources):
+            return subprocess.run([tool, "--lock-dir", lock_dir, action, "--operation", operation, "--resources", resources], capture_output=True).returncode
+        rows = [("flash-fpga", through_the_tool("probe", "flash_fpga.sh", "fpga,radio")),
+                ("repository-restore", through_the_tool("probe", "restore:settings", "repository,radio")),
+                ("pihpsdr-update", through_the_tool("probe", "update-pihpsdr.py", "repository,package,radio")),
+                ("led-fix", through_the_tool("probe", "fix-led-power-button.sh", "radio")),
+                ("hold-radio", subprocess.run(["timeout", "2", tool, "--lock-dir", lock_dir, "hold", "--operation", "flash_fpga.sh", "--resources", "fpga,radio"],
+                                              stdin=subprocess.DEVNULL, capture_output=True).returncode),
+                ("direct-flock-radio", subprocess.run(["flock", "-n", lock_dir + "/radio.lock", "true"]).returncode),
+                ("direct-flock-repository", subprocess.run(["flock", "-n", lock_dir + "/repository.lock", "true"]).returncode),
+                ("recovery", through_the_tool("probe", "restore:recover", "repository,radio"))]
+        with open(os.environ["FAKE_COMPETE"], "a") as log:
+            for name, rc in rows:
+                log.write(f"{tag} {name} rc={rc}\n")
+    compete("during")
+    atexit.register(lambda: compete("end"))
+
 if outcome != "refused":
     started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:recover",
                               "--resources", "repository,radio", "--timeout-seconds", "10", "--", "true"], capture_output=True)
@@ -125,7 +149,7 @@ class Rig(unittest.TestCase):
         shutil.copy(LOCK_TOOL, self.tools / "saturn-maintenance-lock.py")
         for name in ("saturn-release-install-root.sh", "saturn-release-activate-root.sh", "saturn-remote-validate.py", "saturn-remote-receive-guard.js", "saturn-maintenance-lock.py"):
             (self.tools / name).chmod(0o755)
-        for resource in ("release", "radio", "repository", "package"):
+        for resource in ("release", "radio", "repository", "package", "fpga"):
             lock = root / "locks" / f"{resource}.lock"
             lock.write_text("")
             lock.chmod(0o660)
@@ -478,16 +502,77 @@ class RunTests(Rig):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(self.active(), NEW)
 
-    def test_the_release_lock_is_held_while_it_runs_and_the_radio_and_repository_locks_are_not(self):
+    def test_the_release_radio_and_repository_locks_are_all_held_while_it_runs(self):
         probe = self.root / "probe.txt"
         (self.tools / "saturn-release-install-root.sh").write_text(
             f'#!/usr/bin/env bash\necho "installer $*" >>"$FAKE_CALLS"\n[ "$1" = --validate ] && {{ '
             f'"{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation x --resources release >/dev/null 2>&1; echo "release rc=$?" >>"{probe}"; '
-            f'"{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation x --resources radio,repository >/dev/null 2>&1; echo "radio+repository rc=$?" >>"{probe}"; exit 0; }}\n'
+            f'"{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation x --resources radio >/dev/null 2>&1; echo "radio rc=$?" >>"{probe}"; '
+            f'"{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation x --resources repository >/dev/null 2>&1; echo "repository rc=$?" >>"{probe}"; exit 0; }}\n'
             'mkdir -p "$FAKE_RELEASES/$(basename "$1")"\n')
         self.assertEqual(self.run_update().returncode, 0)
-        self.assertEqual(probe.read_text().split("\n")[:2], ["release rc=75", "radio+repository rc=0"],
-                         "release must be held (a second deployment cannot start) and radio/repository must not be (saturn-go's startup needs them)")
+        self.assertEqual(probe.read_text().split("\n")[:3], ["release rc=75", "radio rc=75", "repository rc=75"],
+                         "nothing else may take any of the three while the installer runs: only saturn-go's own restore recovery is admitted, and only by name")
+
+    def competition(self, **env):
+        log = self.root / "compete.log"
+        result = self.run_update(FAKE_COMPETE=str(log), **env)
+        rows = {}
+        for line in log.read_text().splitlines():
+            tag, name, rc = line.split()
+            rows[(tag, name)] = int(rc.split("=")[1])
+        return result, rows
+
+    COMPETITORS = ("flash-fpga", "repository-restore", "pihpsdr-update", "led-fix", "hold-radio")
+
+    def assertNoOneGetsIn(self, rows):
+        for tag in ("during", "end"):
+            for name in self.COMPETITORS:
+                self.assertEqual(rows[(tag, name)], 75, f"{name} was let in {tag} the activation: {rows}")
+            for name in ("direct-flock-radio", "direct-flock-repository"):
+                self.assertEqual(rows[(tag, name)], 1, f"a script that locks the file directly got in {tag} the activation: {rows}")
+            self.assertEqual(rows[(tag, "recovery")], 0, f"the server's own restore recovery must be admitted {tag} the activation (its startup needs it): {rows}")
+
+    def test_competing_maintenance_started_after_the_last_check_cannot_proceed(self):
+        """The reviewer's finding: the broker checked radio and repository and let go of them, so FPGA flashing, a repository restore or the radio backend
+        switch could take the radio lock the moment after the check, while saturn-go (restarted, and reachable) and the activator went on."""
+        result, rows = self.competition()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNoOneGetsIn(rows)
+
+    def test_competing_maintenance_cannot_proceed_while_a_failed_update_is_rolled_back(self):
+        result, rows = self.competition(FAKE_OUTCOME="rolled-back")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.status()["phase"], "rolled_back")
+        self.assertNoOneGetsIn(rows)
+
+    def test_competing_maintenance_cannot_proceed_while_a_rollback_is_unverified(self):
+        result, rows = self.competition(FAKE_OUTCOME="unverified")
+        self.assertEqual(result.returncode, 71, result.stdout + result.stderr)
+        self.assertNoOneGetsIn(rows)
+
+    def test_competing_maintenance_cannot_proceed_while_a_rollback_fails(self):
+        result, rows = self.competition(FAKE_OUTCOME="rollback-failed")
+        self.assertEqual(result.returncode, 70, result.stdout + result.stderr)
+        self.assertNoOneGetsIn(rows)
+
+    def test_competing_maintenance_is_admitted_again_when_the_run_has_ended(self):
+        result, rows = self.competition()
+        self.assertEqual(result.returncode, 0)
+        for name, resources in (("flash_fpga.sh", "fpga,radio"), ("restore:settings", "repository,radio"), ("update-pihpsdr.py", "repository,package,radio"), ("x", "release")):
+            probe = subprocess.run([str(LOCK_TOOL), "--lock-dir", str(self.root / "locks"), "probe", "--operation", name, "--resources", resources], capture_output=True)
+            self.assertEqual(probe.returncode, 0, f"{name} still cannot run after the update has ended")
+        self.assertEqual(subprocess.run(["flock", "-n", str(self.root / "locks" / "radio.lock"), "true"]).returncode, 0)
+
+    def test_the_locks_are_held_from_the_start_not_only_once_the_activator_runs(self):
+        """Competitors that come in while the release is being installed (minutes on a slow card) are excluded too."""
+        probe = self.root / "during-install.txt"
+        (self.tools / "saturn-release-install-root.sh").write_text(
+            f'#!/usr/bin/env bash\necho "installer $*" >>"$FAKE_CALLS"\n[ "$1" = --validate ] && exit 0\n'
+            f'"{LOCK_TOOL}" --lock-dir "{self.root}/locks" probe --operation flash_fpga.sh --resources fpga,radio >/dev/null 2>&1; echo "rc=$?" >>"{probe}"\n'
+            'mkdir -p "$FAKE_RELEASES/$(basename "$1")"\n')
+        self.assertEqual(self.run_update().returncode, 0)
+        self.assertEqual(probe.read_text().split(), ["rc=75"])
 
     def test_the_server_can_start_while_the_activation_runs(self):
         """The regression of the first page-driven update: the services restart inside the activation, and saturn-go's startup takes radio+repository."""
@@ -497,20 +582,55 @@ class RunTests(Rig):
         self.assertEqual(self.active(), NEW)
 
     def test_a_server_that_could_not_start_is_reported_as_a_failed_rollback_not_as_success(self):
-        # a stand-in for the broker bug itself: something else holds radio for the whole activation (here: from outside, taken after the early check)
-        import subprocess, time
-        holder = None
-        original = (self.tools / "saturn-release-install-root.sh").read_text()
-        (self.tools / "saturn-release-install-root.sh").write_text(
-            original + f'\nnohup python3 -c "import fcntl,time; f=open(\'{self.root}/locks/radio.lock\',\'r+\'); fcntl.flock(f, fcntl.LOCK_EX); time.sleep(6)" >/dev/null 2>&1 &\nsleep 0.5\n')
+        # a stand-in for the failure itself: the server's startup takes radio and repository, finds them held and is not admitted (here: another operation name),
+        # as happened on the first page-driven update, and exits; the activation must then be a failed rollback, never a success
+        import subprocess
+        activator = (self.tools / "saturn-release-activate-root.sh").read_text()
+        (self.tools / "saturn-release-activate-root.sh").write_text(activator.replace(
+            'started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:recover",',
+            'started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:something-else",'))
+        result = self.run_update()
+        self.assertEqual(result.returncode, 70, result.stdout + result.stderr)
+        self.assertEqual(self.status()["phase"], "rollback_failed")
+        self.assertEqual((self.root / "server.log").read_text().split(), ["server-start", "rc=75"])
+
+    def test_a_radio_lock_that_is_released_a_moment_after_the_release_lock_is_waited_for(self):
+        # the page's own script holds release, repository, package and radio and lets go in that order as it exits
+        import threading
+        held = open(self.root / "locks" / "radio.lock", "r+")
+        fcntl.flock(held, fcntl.LOCK_EX)
+        threading.Timer(0.6, lambda: (fcntl.flock(held, fcntl.LOCK_UN), held.close())).start()
+        result = self.run_update(SATURN_RELEASE_UPDATE_LOCK_WAIT="20")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(self.active(), NEW)
+
+    def test_a_lock_tool_that_cannot_share_the_locks_with_the_servers_recovery_is_refused_before_anything_changes(self):
+        """The broker now holds radio and repository for the whole run and relies on the lock tool to admit the server's own recovery. With an older tool the
+        server could not start (the failure of the first page-driven update), so it refuses, naming the installer, before it changes anything."""
+        (self.tools / "saturn-maintenance-lock.py").write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(2)\n")
         result = self.run_update()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         status = self.status()
-        self.assertEqual((status["status"], status["phase"]), ("error", "busy"))
-        self.assertIn("installed but was not activated", status["message"])
-        self.assertNotIn("activator", self.calls_text(), "the services must not be restarted while the radio lock is taken")
+        self.assertEqual((status["status"], status["phase"]), ("error", "installer_update_required"))
+        self.assertIn("installer", status["message"])
+        self.assertEqual(self.calls_text(), "")
         self.assertEqual(self.active(), OLD)
-        time.sleep(0)
+        self.assertEqual(self.broker("--preflight").returncode, 2, "the page must hear it before it builds for hours")
+
+    def test_a_lock_tool_that_does_not_claim_the_capability_properly_is_refused(self):
+        for output in ("", "not json", "{}", '{"shared_recovery": 0}', '{"shared_recovery": false}', '{"shared_recovery": true}', '{"shared_recovery": "1"}', "[1]", "null"):
+            (self.tools / "saturn-maintenance-lock.py").write_text(f"#!/usr/bin/env python3\nprint({output!r})\n")
+            result = self.broker("--preflight")
+            self.assertEqual(result.returncode, 2, f"a tool answering {output!r} was accepted: {result.stdout}{result.stderr}")
+            self.assertIn("installer update required", result.stderr)
+        (self.tools / "saturn-maintenance-lock.py").write_text('#!/usr/bin/env python3\nprint(\'{"shared_recovery": 1}\')\n')
+        self.assertEqual(self.broker("--preflight").returncode, 0, "a tool that claims the capability was refused")
+
+    def test_a_missing_lock_tool_is_refused_with_the_installer_message(self):
+        (self.tools / "saturn-maintenance-lock.py").unlink()
+        result = self.broker("--preflight")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("saturn-maintenance-lock.py is not installed", result.stderr)
 
     def test_a_failed_lock_check_refuses_instead_of_going_ahead(self):
         lock = self.root / "locks" / "radio.lock"

@@ -327,9 +327,10 @@ The build passed every gate this time (the server's 155 tests, 761 web tests, th
 failed (exit 70, `rollback_failed`, `receive_verified: not_attempted`), yet the radio was running `cc09c61` healthy afterwards. **Cause (mine):** the broker held the `radio` maintenance lock for the whole run. `saturn-go`'s own startup runs its
 restore recovery under the `repository` and `radio` locks and exits with status 1 when either is busy, so the target's `saturn-go` could not start (journal: `failed to recover incomplete restore transaction: ... resource is busy: radio`, then a restart
 loop) and neither could the previous release's during the rollback; both started within a second of the broker exiting (23:13:28), which is why the radio is fine now. The target's Bridge itself started cleanly (`no saved receive settings ... starting at the defaults`).
-The staged procedure never held that lock, so the bootstrap never met it. Fixed: the broker holds `release` only, and checks `radio` and `repository` are free at the start and just before the activation. The test activator now does what `saturn-go`'s startup does
-(takes `repository` and `radio` with the real lock tool and exits 70 if busy), so every broker test guards this. What it leaves unchecked: another maintenance job that starts between the last check and the restart; the page is the only
-client of those locks and is down while the services restart.
+The staged procedure never held that lock, so the bootstrap never met it. Fixed then: the broker holds `release` only, and checks `radio` and `repository` are free at the start and just before the activation. The test activator now does what `saturn-go`'s startup does
+(takes `repository` and `radio` with the real lock tool and exits 70 if busy), so every broker test guards this. ~~What it leaves unchecked: another maintenance job that starts between the last check and the restart; the page is the only
+client of those locks and is down while the services restart.~~ **That last sentence was wrong, and the reviewer found it (2026-10-14): FPGA flashing, repository restore and the radio backend switch do not take the release lock, and the restarted server
+is reachable before the validation finishes. See "Reviewer's two findings on `323dcad6`" below for the fix.**
 
 State left on the G2: release `42ff0919…` installed inactive (its bundle is staged), `cc09c61` active and ready, and the transaction record `rollback_failed`. A record in that state blocks further activations until it is reconciled
 (`saturn-release-activate-root.sh --reconcile-rollback`, which verifies the previous release is running and receiving and preserves the original record beside the new one).
@@ -401,6 +402,32 @@ With the idle-memory decision in place (`fafbd4a7` installed; the check counted 
 
 One failure occurred on the way and is documented above: the ninth page-driven run was rolled back by a race in the validator's role check (fixed in `e8db4852`, rerun passed). Not part of this test and still open: the matched audio comparison, the conversion of the
 fresh-install path to releases, the `settings_preserved` wording, and the reviewer's decision on merging to `main`.
+
+### Reviewer's two findings on `323dcad6` (2026-10-14), and the focused fix
+
+The reviewer held the merge, narrowly, for two things; neither needs a new installer project, and the successful hardware runs remain valid.
+
+**1. Maintenance exclusion was not held through the activation (blocking).** The broker held `release` and only *checked* `radio` and `repository` before the activation, then let go. The reviewer reproduced another operation taking `radio.lock` immediately
+after that check while the release lock was still held. It matters because FPGA flashing (`fpga`, `radio`), repository restore (`repository`, `radio`), the Pi-HPSDR updaters and the radio backend switch (a plain `flock` of `radio.lock`) do not take the release lock, and the
+restarted web server can be used before the validation has finished; "the page is down" (my earlier claim) is not exclusion. I reproduced it first, with a test that starts competing maintenance after the last check (every competitor was let in: FPGA flash, repository restore,
+Pi-HPSDR update, LED fix, a held `radio` and plain `flock`s of both files), then fixed it:
+
+* The broker holds `release` **exclusively** and `radio` and `repository` **shared** from its first lock to the end of the run, rollback and the finish step included (the descriptors are inherited through the hand-over). Everything else asks for `radio` or `repository` exclusively, through the lock tool or
+  with a plain `flock`, so none of it can start at any point. Holding them exclusively again would repeat the first page-driven failure (the restarted `saturn-go` cannot take them and exits), so they are shared.
+* The lock tool admits **one** operation to a shared hold: `saturn-go`'s startup recovery, matched by name (`restore:recover`) and by exactly the resources `repository,radio`, and only while another process holds the release lock. A shared lock fails against any exclusive holder, so a restore, a flash or a legacy
+  deployment still keeps it out. No other name, no other resource set and no hold without an update behind it is let in.
+* The tool has a `capabilities` action. An installed tool without `shared_recovery` makes `--preflight`, `--dispatch` and `--run` refuse with "installer update required" before anything changes (an older tool would leave the restarted server unable to start).
+* Waiting: the shared locks are taken with the same patience as the release lock, because the page's own script lets go of its locks one after the other as it exits (the earlier immediate check could refuse in that window).
+
+Tests: the fake activator (which runs after the last check) now starts competitors with the real tool and with plain `flock`, at the start of the activation and again when it ends, for a success, a rolled-back update, an unverified rollback and a failed rollback: every competitor is refused (75 or `flock` exit 1) and
+the server's recovery is admitted; they are admitted again after the run; the locks are already held while the release is being installed; a stale tool is refused with the installer message, also by `--preflight`. Sixteen tests of the lock tool itself (`tests/test-saturn-maintenance-lock-shared.py`) pin the rule: which name, which resources,
+no admission to an exclusive or legacy hold, no admission without an update, resemblance (case, suffix, spaces) is not enough, and the look at the release lock leaves nothing held. Mutation testing (`mutate_lock.py`, no-op control per suite, which must survive and did): 25 mutants of the lock tool and the broker (admitting by any name, a prefix or another case; any resources; without an update behind the hold; never; exclusively; despite a failed shared lock; holding only one of the two locks; holding them exclusively; not inheriting them; not waiting; ignoring a busy lock; skipping, loosening or faking the capability check; the old release-only hold) -- 24 killed, and one survivor that is equivalent: the look at the release lock (`release_run_is_active`) takes its shared lock only when nobody holds the release lock, and in that case the tool refuses and exits at once, so an unclosed descriptor can hold nothing for any time that matters. 15 mutants of the memory reporting (judged on the actual figure, wrong fields, boundaries at the cap and at the reserve, the unsaid caveats, the false claim restored, the record not written) -- all 15 killed. The old test that pinned the gap (radio and repository "must not be held") is replaced by one that pins the opposite.
+
+**2. The memory guarantee was overstated.** The validator adds its still-running processes' memory to `MemAvailable`; the reviewer's probe passed with 490 MiB actually available, a 500 MiB cap, 35 MiB added back and a claimed 25 MiB reserve. That implements the owner's *idle-memory estimate*, but it does not show that 25 MiB remains with the browser
+at its cap (the host would be 10 MiB short), and the text claimed those resident processes were out of the browser's way, which is false: they stay resident while the browser runs and share the host's memory with it. Corrected: the policy decision is unchanged and now explicit; the claim is removed everywhere (validator, runbook, changelog); the condition and the validator's `memory_headroom` record
+report the actual `MemAvailable`, the added-back memory and the estimate separately, what would remain at the cap and whether the reserve would be intact there, and say "passed only on the idle estimate" when the actual figure alone would not have passed. The reviewer's probe is a test, with exactly those numbers.
+
+Left as follow-ups, as the reviewer allowed: the misleading `settings_preserved` field, the fresh-install conversion and the matched audio comparison.
 
 ## Not verified / residual risk
 

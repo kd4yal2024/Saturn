@@ -4,6 +4,16 @@
 The lock owner is this process.  In ``run`` mode it starts and waits for the
 maintenance command, so the locks remain held if the Saturn Go process that
 launched it restarts.
+
+One operation is admitted to locks that a release update holds SHARED: Saturn
+Go's own startup recovery (``restore:recover`` on ``repository`` and ``radio``).
+A managed update (saturn-release-update-root.py) holds ``release`` exclusively
+and ``radio`` and ``repository`` shared for its whole run, rollback included, so
+that no other maintenance can start in between; the activation restarts Saturn
+Go, whose startup takes exactly those two locks and exits when it cannot, so it
+is the one caller that joins the shared hold.  Every other request is exclusive
+and is refused (75) while the update holds them.  ``capabilities`` tells the
+update broker whether this tool can do that.
 """
 
 from __future__ import annotations
@@ -34,6 +44,11 @@ RESOURCE_ORDER = (
     "read-only",
 )
 EXIT_CONFLICT = 75
+# Saturn Go's startup recovery (rust-server/src/restore.rs: recover_restore_transactions) and the only locks it asks for.  It is admitted to a SHARED hold
+# of a release update; matched by name and by exactly these resources, so no other operation is let in by this rule.
+RECOVERY_OPERATION = "restore:recover"
+RECOVERY_RESOURCES = frozenset({"repository", "radio"})
+CAPABILITIES = {"schema": 1, "shared_recovery": 1}
 DEFAULT_OUTPUT_MAX_BYTES = 4 * 1024 * 1024
 DEFAULT_OUTPUT_MAX_LINES = 5000
 MAX_TIMEOUT_SECONDS = 6 * 60 * 60
@@ -58,7 +73,22 @@ def parse_resources(value: str) -> list[str]:
     return [resource for resource in RESOURCE_ORDER if resource in requested]
 
 
-def open_lock_files(lock_dir: Path, resources: list[str], create: bool) -> list[int]:
+def release_run_is_active(lock_dir: Path) -> bool:
+    """True while some process holds the release lock (a managed update holds it for its whole run).  Looked at with a shared lock that is let go at once."""
+    try:
+        fd = os.open(lock_dir / "release.lock", os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def open_lock_files(lock_dir: Path, resources: list[str], create: bool, recovery: bool = False) -> list[int]:
     if not lock_dir.is_dir() or lock_dir.is_symlink():
         fail(f"lock directory is missing or unsafe: {lock_dir}")
 
@@ -81,8 +111,17 @@ def open_lock_files(lock_dir: Path, resources: list[str], create: bool) -> list[
             try:
                 fcntl.flock(fd, operation | fcntl.LOCK_NB)
             except BlockingIOError:
-                os.close(fd)
-                fail(f"resource is busy: {resource}", EXIT_CONFLICT)
+                # Saturn Go's startup recovery may join a release update's SHARED hold (never an exclusive one: a shared lock fails against any exclusive holder)
+                joined = False
+                if recovery and operation == fcntl.LOCK_EX and release_run_is_active(lock_dir):
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                        joined = True
+                    except BlockingIOError:
+                        pass
+                if not joined:
+                    os.close(fd)
+                    fail(f"resource is busy: {resource}", EXIT_CONFLICT)
             os.set_inheritable(fd, True)
             descriptors.append(fd)
     except BaseException:
@@ -100,6 +139,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument("--create", action="store_true", help=argparse.SUPPRESS)
     subparsers = result.add_subparsers(dest="action", required=True)
+    subparsers.add_parser("capabilities", help="print what this tool can do, as JSON, and take no lock")
     for action in ("probe", "hold", "run"):
         sub = subparsers.add_parser(action)
         sub.add_argument("--operation", required=True)
@@ -222,8 +262,12 @@ def write_result(
 
 def main() -> int:
     args = parser().parse_args()
+    if args.action == "capabilities":
+        print(json.dumps(CAPABILITIES, separators=(",", ":")))
+        return 0
     resources = parse_resources(args.resources)
-    descriptors = open_lock_files(Path(args.lock_dir), resources, args.create)
+    recovery = args.operation == RECOVERY_OPERATION and set(resources) == RECOVERY_RESOURCES
+    descriptors = open_lock_files(Path(args.lock_dir), resources, args.create, recovery)
     payload = {
         "status": "locked",
         "operation": args.operation,
