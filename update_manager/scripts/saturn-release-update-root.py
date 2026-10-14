@@ -6,12 +6,13 @@ installing, activating or rolling back: it runs the existing root installer (sat
 (saturn-release-activate-root.sh), whose transaction restarts the services, proves reception with the headless receive validation, and
 restores the previous release if that fails. What this broker adds is the part that has to survive the web service restarting: it runs in
 its own transient unit, holds the maintenance locks for the whole run (the release lock exclusively, the radio and repository locks SHARED, so that nothing
-else can start in between and saturn-go's own startup recovery still can), keeps the status file the page reads up to date, and classifies the outcome.
+else can start in between, while saturn-go's own startup recovery is still answered, by a read-only check), refuses to start while a restore transaction is still
+pending, keeps the status file the page reads up to date, and classifies the outcome.
 
 Modes (the service user may run only the first two, through sudo; --run is for the transient unit and refuses to run from anything else):
 
   --preflight                 Policy and layout checks that need no bundle: managed updates enabled, a release layout (or an explicit
-                              migration), the privileged helpers present. Changes nothing. Lets the page refuse before it spends hours building.
+                              migration), the privileged helpers present, no restore transaction pending. Changes nothing. Lets the page refuse before it spends hours building.
   --dispatch [--allow-legacy-migration] BUNDLE
                               Checks the bundle and everything --preflight checks, then starts --run in a detached transient unit and returns.
   --run [--allow-legacy-migration] BUNDLE
@@ -51,6 +52,7 @@ DEFAULT_STATUS_FILE = "/var/lib/saturn-state/saturngo_deploy_status.json"
 DEFAULT_LOG_DIR = "/var/lib/saturn-state/release-update"
 DEFAULT_PERF_JSON = "/run/saturn-bridge/perf.json"
 DEFAULT_LOCK_DIR = "/run/lock/saturn-maintenance"
+DEFAULT_STATE_ROOT = "/var/lib/saturn-state"
 
 INSTALLER = "saturn-release-install-root.sh"
 ACTIVATOR = "saturn-release-activate-root.sh"
@@ -69,8 +71,15 @@ CONTRACT_MARK = re.compile(r"saturn-helper-contract:\s*([0-9]+)")
 # reachable before the validation has finished does not matter. The one caller that must get in is saturn-go itself: the activation restarts it, its startup
 # runs a restore recovery under exactly those two locks (operation `restore:recover`) and EXITS when it cannot take them, so locks held exclusively here made
 # the target's server unable to start (readiness failed) and the previous release's too (the rollback was recorded as failed): the first page-driven update
-# on the G2 failed that way. The lock tool therefore admits that one operation, by name and by those two resources, to a shared hold. An earlier version
-# of this program only CHECKED radio and repository before the activation and let go of them; anything could take them the moment after the check.
+# on the G2 failed that way. The lock tool therefore answers that one call, exactly as saturn-go makes it, while this program holds the locks. An earlier
+# version of this program only CHECKED radio and repository before the activation and let go of them; anything could take them the moment after the check.
+#
+# The answer is a READ-ONLY CHECK, never the recovery itself: the recovery proper writes (settings, the repository pointer, staging directories, the transaction
+# records), and under a shared hold nothing would keep it from writing while this update does, or twice at once. The coordination is therefore: (1) a restore
+# transaction that is still pending is not something an update may start with: this program asks the lock tool (`pending-restores`, read-only) before it
+# begins and refuses, changing nothing, if one is; saturn-go's own startup completes it, under the exclusive locks, outside an update. (2) The question is asked
+# again once the shared locks are held, because every writer needs those two locks exclusively: with them held no restore can start and none can be left
+# pending, so (3) the check that saturn-go's restarted server meets during the activation, and during a rollback, finds nothing to do.
 LOCK_RESOURCES = "release"
 SHARED_RESOURCES = "radio,repository"
 LOCK_TOOL = "saturn-maintenance-lock.py"
@@ -134,6 +143,7 @@ class Environment:
         self.perf_json = movable("SATURN_RELEASE_UPDATE_PERF_JSON", DEFAULT_PERF_JSON)
         self.lock_dir = movable("SATURN_RELEASE_UPDATE_LOCK_DIR", DEFAULT_LOCK_DIR)
         self.systemd_run = movable("SATURN_RELEASE_UPDATE_SYSTEMD_RUN", "systemd-run")
+        self.state_root = movable("SATURN_RELEASE_UPDATE_STATE_ROOT", DEFAULT_STATE_ROOT)
         self.lock_wait = float(movable("SATURN_RELEASE_UPDATE_LOCK_WAIT", str(LOCK_WAIT_SECONDS)))
         self.self_path = movable("SATURN_RELEASE_UPDATE_SELF", os.path.abspath(__file__))
         install = read_config(self.install_config, self.root)
@@ -221,18 +231,43 @@ def check_policy_and_layout(env: Environment, allow_migration: bool) -> tuple[st
 
 
 def check_lock_tool(env: Environment) -> None:
-    """This program holds radio and repository for the whole run and relies on the lock tool to admit saturn-go's own startup recovery to that hold. With a tool
-    that cannot, the restarted server would not start (a failed rollback), so refuse, naming the installer, before anything is changed."""
+    """This program holds radio and repository for the whole run and relies on the lock tool to answer saturn-go's own startup recovery while it does, with a
+    read-only check that runs nothing and writes nothing. A tool that cannot would leave the restarted server unable to start (a failed rollback), and the tool
+    of an earlier version ran whatever carried the recovery's name, writing, under the shared hold: refuse both, naming the installer, before anything is changed."""
     try:
         result = subprocess.run([tool(env, LOCK_TOOL), "capabilities"], capture_output=True, text=True, timeout=15)
         capabilities = json.loads(result.stdout) if result.returncode == 0 else {}
     except (OSError, ValueError, subprocess.TimeoutExpired):
         capabilities = {}
-    shared = capabilities.get("shared_recovery") if isinstance(capabilities, dict) else None
-    if not isinstance(shared, int) or isinstance(shared, bool) or shared < 1:
+    check = capabilities.get("recovery_check") if isinstance(capabilities, dict) else None
+    if not isinstance(check, int) or isinstance(check, bool) or check < 1 or "shared_recovery" in capabilities:
         raise Refused("installer_update_required",
-                      f"installer update required: the installed {LOCK_TOOL} cannot admit saturn-go's own restore recovery while an update holds the radio and "
-                      "repository locks, so the restarted server could not start. Run the Saturn Go installer from the new checkout; nothing was changed")
+                      f"installer update required: the installed {LOCK_TOOL} cannot answer saturn-go's own restore recovery with a read-only check while an update "
+                      "holds the radio and repository locks (it either leaves the restarted server unable to start or lets the recovery write under the shared "
+                      "locks). Run the Saturn Go installer from the new checkout; nothing was changed")
+
+
+def check_restore_transactions(env: Environment) -> None:
+    """Refuse, changing nothing, while a restore transaction is still pending (or cannot be read). The recovery that completes it writes, so it is done by
+    saturn-go's startup under the exclusive locks and outside an update, never during one. Asked without the locks (preflight, dispatch) it is advisory: a
+    restore that is running now shows as pending too. Asked with the shared locks held (the run) it is final, because no writer can start while they are."""
+    try:
+        result = subprocess.run([tool(env, LOCK_TOOL), "pending-restores", "--state-root", env.state_root], capture_output=True, text=True, timeout=30)
+        answer = json.loads(result.stdout) if result.stdout.strip() else {}
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        raise Refused("restore_check_failed", f"the restore transactions could not be checked ({error!r}); nothing was changed") from error
+    if not isinstance(answer, dict):
+        answer = {}
+    pending = answer.get("pending")
+    if result.returncode == 0 and answer.get("status") == "ok" and pending == []:
+        return
+    if result.returncode == 1 and answer.get("status") == "pending" and isinstance(pending, list) and pending:
+        raise Refused("restore_transaction_pending",
+                      "a restore transaction is incomplete or still running (" + "; ".join(str(item) for item in pending[:3]) + "), so no update is started. Saturn Go's "
+                      "startup completes it: wait for a running restore to finish, or restart the saturn-go service so its startup recovery rolls the "
+                      "incomplete one back, then run the update again; nothing was changed")
+    raise Refused("restore_check_failed", f"the restore transactions could not be checked (exit {result.returncode}: {(result.stderr or result.stdout).strip()[:200]}); "
+                                          "nothing was changed")
 
 
 def read_manifest(bundle: str) -> dict:
@@ -459,6 +494,7 @@ def do_run(env: Environment, bundle_arg: str, allow_migration: bool) -> int:
         if shared is None:
             status.write("error", "busy", "Another maintenance operation holds the radio or repository lock; nothing was changed. Try again when it has finished", EXIT_REFUSED, True, release=release)
             return EXIT_REFUSED
+        check_restore_transactions(env)           # final: with radio and repository held no restore can start, and none can be left pending from here on
         os.makedirs(env.log_dir, mode=0o750, exist_ok=True)
         log_path = os.path.join(env.log_dir, f"{time.strftime('%Y%m%dT%H%M%S')}-{commit[:12]}.log")
         log = open(log_path, "w", encoding="utf-8")
@@ -540,6 +576,7 @@ def do_dispatch(env: Environment, bundle_arg: str, allow_migration: bool) -> int
         layout, _ = check_policy_and_layout(env, allow_migration)
         bundle, commit, manifest = check_bundle(env, bundle_arg)
         check_helper_contract(env, bundle)
+        check_restore_transactions(env)           # advisory here (the run asks again under the locks), so that the page hears it before a unit is started
     except Refused as refusal:
         status.write("error", refusal.phase, refusal.message, EXIT_REFUSED, True)
         print(f"[saturn-release-update] REFUSED ({refusal.phase}): {refusal.message}", file=sys.stderr)
@@ -564,6 +601,7 @@ def do_dispatch(env: Environment, bundle_arg: str, allow_migration: bool) -> int
 def do_preflight(env: Environment, allow_migration: bool) -> int:
     try:
         layout, commit = check_policy_and_layout(env, allow_migration)
+        check_restore_transactions(env)
     except Refused as refusal:
         print(f"[saturn-release-update] REFUSED ({refusal.phase}): {refusal.message}", file=sys.stderr)
         return EXIT_REFUSED

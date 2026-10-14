@@ -16,6 +16,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from restore_fixtures import Host, tree_digest
+
 REPO = Path(__file__).resolve().parent.parent
 BROKER = REPO / "update_manager/scripts/saturn-release-update-root.py"
 LOCK_TOOL = REPO / "update_manager/scripts/saturn-maintenance-lock.py"
@@ -41,7 +43,13 @@ record_path, current, releases, perf = os.environ["FAKE_RECORD"], os.environ["FA
 
 # What the real activation does to the services: it restarts them, and saturn-go's own startup (restore recovery, rust-server restore.rs) takes the repository
 # and radio maintenance locks with the real lock tool and EXITS when either is busy. A held radio lock therefore means no server, a failed readiness
-# check and a failed rollback: the first page-driven update on the G2 failed exactly like that.
+# check and a failed rollback: the first page-driven update on the G2 failed exactly like that. The call is built the way rust-server/src/maintenance_lock.rs
+# wrapped_command and restore.rs recover_restore_transactions build it: the helper by its installed path, `recover --state-root <root>`, no deadline, no job options.
+def saturn_go_recovery(operation="restore:recover", command=None):
+    command = command or [os.environ["FAKE_RESTORE_HELPER"], "recover", "--state-root", os.environ["FAKE_STATE_ROOT"]]
+    return subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", operation,
+                           "--resources", "repository,radio", "--", *command], capture_output=True)
+
 if os.environ.get("FAKE_ACTIVATOR_LOG"):
     # what the host looks like from inside the activation: is the release lock still held (by the inherited descriptor), and is any Python process
     # of the broker still resident (each one is memory the headless browser's headroom check counts against it)?
@@ -69,7 +77,10 @@ if os.environ.get("FAKE_COMPETE"):
                                               stdin=subprocess.DEVNULL, capture_output=True).returncode),
                 ("direct-flock-radio", subprocess.run(["flock", "-n", lock_dir + "/radio.lock", "true"]).returncode),
                 ("direct-flock-repository", subprocess.run(["flock", "-n", lock_dir + "/repository.lock", "true"]).returncode),
-                ("recovery", through_the_tool("probe", "restore:recover", "repository,radio"))]
+                ("recovery-probe", through_the_tool("probe", "restore:recover", "repository,radio")),
+                ("recovery-mislabeled-command", saturn_go_recovery(command=["true"]).returncode),
+                ("recovery-another-helper-call", saturn_go_recovery(command=[os.environ["FAKE_RESTORE_HELPER"], "settings", "--state-root", os.environ["FAKE_STATE_ROOT"]]).returncode),
+                ("recovery", saturn_go_recovery().returncode)]
         with open(os.environ["FAKE_COMPETE"], "a") as log:
             for name, rc in rows:
                 log.write(f"{tag} {name} rc={rc}\n")
@@ -77,8 +88,7 @@ if os.environ.get("FAKE_COMPETE"):
     atexit.register(lambda: compete("end"))
 
 if outcome != "refused":
-    started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:recover",
-                              "--resources", "repository,radio", "--timeout-seconds", "10", "--", "true"], capture_output=True)
+    started = saturn_go_recovery()
     open(os.environ["FAKE_SERVER_LOG"], "a").write(f"server-start rc={started.returncode}\n")
     if started.returncode != 0:
         json.dump({"status": "rollback_failed", "phase": "rollback-failed", "target_commit": commit, "validation": {},
@@ -125,6 +135,17 @@ sys.exit(1)      # refused before the transaction began: the record is untouched
 '''
 
 
+# a lock tool that claims the capability and answers `pending-restores` with whatever a test needs
+STUB_TOOL = """#!/usr/bin/env python3
+import sys
+if sys.argv[1:] == ["capabilities"]:
+    print('{{"schema":1,"recovery_check":1}}')
+elif sys.argv[1] == "pending-restores":
+    print({pending!r})
+    sys.exit({rc})
+"""
+
+
 def helper_text(name: str, contract: int) -> str:
     mark = f"saturn-helper-contract: {contract}"
     return f"// {mark}\n" if name.endswith(".js") else f"#!/usr/bin/env bash\n# {mark}\n"
@@ -141,6 +162,14 @@ class Rig(unittest.TestCase):
         self.current = root / "current"
         self.status_file, self.perf, self.record, self.calls = root / "status.json", root / "run/perf.json", root / "record.json", root / "calls.log"
         self.calls.write_text("")
+        # the host's restore state, and the restore helper as saturn-go starts it, here a stand-in that only records that it was started (the real one writes)
+        self.host = Host(root / "host")
+        self.state_root = self.host.state
+        self.helper_log = root / "helper-started.log"
+        self.restore_helper = root / "bin/saturn-restore-transaction.py"
+        self.restore_helper.parent.mkdir()
+        self.restore_helper.write_text(f'#!/bin/sh\necho "$@" >>"{self.helper_log}"\nprintf \'{{"status":"ok","recovered":[]}}\\n\'\n')
+        self.restore_helper.chmod(0o755)
         (self.tools / "saturn-release-install-root.sh").write_text(FAKE_INSTALLER)
         (self.tools / "saturn-release-activate-root.sh").write_text(FAKE_ACTIVATOR)
         for name in HELPERS[1:]:
@@ -182,7 +211,8 @@ class Rig(unittest.TestCase):
                    SATURN_RELEASE_UPDATE_ACTIVATE_CONFIG=str(self.root / "activate.conf"), SATURN_RELEASE_UPDATE_STATUS_FILE=str(self.status_file),
                    SATURN_RELEASE_UPDATE_LOG_DIR=str(self.root / "logs"), SATURN_RELEASE_UPDATE_PERF_JSON=str(self.perf),
                    SATURN_RELEASE_UPDATE_LOCK_DIR=str(self.root / "locks"), SATURN_RELEASE_UPDATE_SYSTEMD_RUN=str(self.fake_systemd_run),
-                   SATURN_RELEASE_UPDATE_LOCK_WAIT="1", SATURN_RELEASE_UPDATE_SELF=str(BROKER),
+                   SATURN_RELEASE_UPDATE_LOCK_WAIT="1", SATURN_RELEASE_UPDATE_SELF=str(BROKER), SATURN_RELEASE_UPDATE_STATE_ROOT=str(self.state_root),
+                   FAKE_RESTORE_HELPER=str(self.restore_helper), FAKE_STATE_ROOT=str(self.state_root),
                    FAKE_CALLS=str(self.calls), FAKE_LOCK_TOOL=str(LOCK_TOOL), FAKE_LOCK_DIR=str(self.root / "locks"), FAKE_SERVER_LOG=str(self.root / "server.log"), FAKE_ACTIVATOR_LOG=str(self.root / "activator.log"), FAKE_BROKER=str(BROKER), FAKE_RELEASES=str(self.releases), FAKE_RECORD=str(self.record), FAKE_CURRENT=str(self.current), FAKE_PERF=str(self.perf))
         env.update(extra)
         return env
@@ -512,7 +542,7 @@ class RunTests(Rig):
             'mkdir -p "$FAKE_RELEASES/$(basename "$1")"\n')
         self.assertEqual(self.run_update().returncode, 0)
         self.assertEqual(probe.read_text().split("\n")[:3], ["release rc=75", "radio rc=75", "repository rc=75"],
-                         "nothing else may take any of the three while the installer runs: only saturn-go's own restore recovery is admitted, and only by name")
+                         "nothing else may take any of the three while the installer runs: only saturn-go's own restore recovery is answered, and only that exact call")
 
     def competition(self, **env):
         log = self.root / "compete.log"
@@ -531,7 +561,9 @@ class RunTests(Rig):
                 self.assertEqual(rows[(tag, name)], 75, f"{name} was let in {tag} the activation: {rows}")
             for name in ("direct-flock-radio", "direct-flock-repository"):
                 self.assertEqual(rows[(tag, name)], 1, f"a script that locks the file directly got in {tag} the activation: {rows}")
-            self.assertEqual(rows[(tag, "recovery")], 0, f"the server's own restore recovery must be admitted {tag} the activation (its startup needs it): {rows}")
+            self.assertEqual(rows[(tag, "recovery")], 0, f"the server's own restore recovery must be answered {tag} the activation (its startup needs it): {rows}")
+            for name in ("recovery-probe", "recovery-mislabeled-command", "recovery-another-helper-call"):
+                self.assertEqual(rows[(tag, name)], 75, f"{name} was let in {tag} the activation: {rows}")
 
     def test_competing_maintenance_started_after_the_last_check_cannot_proceed(self):
         """The reviewer's finding: the broker checked radio and repository and let go of them, so FPGA flashing, a repository restore or the radio backend
@@ -539,6 +571,7 @@ class RunTests(Rig):
         result, rows = self.competition()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNoOneGetsIn(rows)
+        self.assertFalse(self.helper_log.exists(), "the restore helper was started under the update's shared locks")
 
     def test_competing_maintenance_cannot_proceed_while_a_failed_update_is_rolled_back(self):
         result, rows = self.competition(FAKE_OUTCOME="rolled-back")
@@ -582,13 +615,12 @@ class RunTests(Rig):
         self.assertEqual(self.active(), NEW)
 
     def test_a_server_that_could_not_start_is_reported_as_a_failed_rollback_not_as_success(self):
-        # a stand-in for the failure itself: the server's startup takes radio and repository, finds them held and is not admitted (here: another operation name),
+        # a stand-in for the failure itself: the server's startup takes radio and repository, finds them held and is not answered (here: another operation name),
         # as happened on the first page-driven update, and exits; the activation must then be a failed rollback, never a success
-        import subprocess
         activator = (self.tools / "saturn-release-activate-root.sh").read_text()
+        self.assertEqual(activator.count("started = saturn_go_recovery()"), 1)
         (self.tools / "saturn-release-activate-root.sh").write_text(activator.replace(
-            'started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:recover",',
-            'started = subprocess.run([os.environ["FAKE_LOCK_TOOL"], "--lock-dir", os.environ["FAKE_LOCK_DIR"], "run", "--operation", "restore:something-else",'))
+            "started = saturn_go_recovery()", 'started = saturn_go_recovery(operation="restore:something-else")'))
         result = self.run_update()
         self.assertEqual(result.returncode, 70, result.stdout + result.stderr)
         self.assertEqual(self.status()["phase"], "rollback_failed")
@@ -604,9 +636,9 @@ class RunTests(Rig):
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(self.active(), NEW)
 
-    def test_a_lock_tool_that_cannot_share_the_locks_with_the_servers_recovery_is_refused_before_anything_changes(self):
-        """The broker now holds radio and repository for the whole run and relies on the lock tool to admit the server's own recovery. With an older tool the
-        server could not start (the failure of the first page-driven update), so it refuses, naming the installer, before it changes anything."""
+    def test_a_lock_tool_that_cannot_answer_the_servers_recovery_is_refused_before_anything_changes(self):
+        """The broker holds radio and repository for the whole run and relies on the lock tool to answer the server's own recovery with a read-only check. With
+        an older tool the server could not start (the failure of the first page-driven update), so it refuses, naming the installer, before it changes anything."""
         (self.tools / "saturn-maintenance-lock.py").write_text("#!/usr/bin/env python3\nimport sys\nsys.exit(2)\n")
         result = self.run_update()
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
@@ -618,12 +650,14 @@ class RunTests(Rig):
         self.assertEqual(self.broker("--preflight").returncode, 2, "the page must hear it before it builds for hours")
 
     def test_a_lock_tool_that_does_not_claim_the_capability_properly_is_refused(self):
-        for output in ("", "not json", "{}", '{"shared_recovery": 0}', '{"shared_recovery": false}', '{"shared_recovery": true}', '{"shared_recovery": "1"}', "[1]", "null"):
+        for output in ("", "not json", "{}", '{"recovery_check": 0}', '{"recovery_check": false}', '{"recovery_check": true}', '{"recovery_check": "1"}', "[1]", "null",
+                       '{"shared_recovery": 1}',                      # the earlier tool: it ran whatever carried the recovery's name, writing, under the shared locks
+                       '{"recovery_check": 1, "shared_recovery": 1}'):
             (self.tools / "saturn-maintenance-lock.py").write_text(f"#!/usr/bin/env python3\nprint({output!r})\n")
             result = self.broker("--preflight")
             self.assertEqual(result.returncode, 2, f"a tool answering {output!r} was accepted: {result.stdout}{result.stderr}")
             self.assertIn("installer update required", result.stderr)
-        (self.tools / "saturn-maintenance-lock.py").write_text('#!/usr/bin/env python3\nprint(\'{"shared_recovery": 1}\')\n')
+        (self.tools / "saturn-maintenance-lock.py").write_text(STUB_TOOL.format(pending='{"status":"ok","pending":[]}', rc=0))
         self.assertEqual(self.broker("--preflight").returncode, 0, "a tool that claims the capability was refused")
 
     def test_a_missing_lock_tool_is_refused_with_the_installer_message(self):
@@ -684,6 +718,141 @@ class RunTests(Rig):
     def test_one_mode_at_a_time(self):
         self.assertNotEqual(self.broker("--preflight", "--run").returncode, 0)
         self.assertNotEqual(self.broker().returncode, 0)
+
+
+class RestoreTransactionTests(Rig):
+    """A restore transaction that is still pending is completed by saturn-go's startup recovery, which WRITES, under the exclusive locks and outside an update.
+    The reviewer's point: allowing that recovery under the update's shared locks removed the protection its writes had. So an update never starts with one pending,
+    and the recovery that saturn-go's restarted server meets during the update (and the rollback) is a check that finds nothing to do."""
+
+    def run_update(self, bundle=None, **env):
+        if bundle is None:
+            if not hasattr(self, "the_bundle"):
+                self.the_bundle = self.bundle()
+            bundle = self.the_bundle
+        return self.broker("--run", str(bundle), **env)
+
+    def assertNothingChanged(self, digest):
+        self.assertEqual(self.calls_text(), "", "the installer or activator was called although a restore is pending")
+        self.assertEqual(self.active(), OLD)
+        self.assertFalse((self.releases / NEW).exists())
+        self.assertEqual(tree_digest(self.host.root), digest, "the pending restore, or anything else under the state root, was touched")
+        self.assertFalse(self.helper_log.exists(), "the restore helper was started")
+
+    def test_a_pending_settings_restore_stops_the_run_and_is_left_exactly_as_it_was(self):
+        ids = self.host.pending_settings()
+        digest = tree_digest(self.host.root)
+        result = self.run_update()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        status = self.status()
+        self.assertEqual((status["status"], status["phase"]), ("error", "restore_transaction_pending"))
+        self.assertIn(ids[0], status["message"])
+        self.assertIn("nothing was changed", status["message"])
+        self.assertIn("restart the saturn-go service", status["message"])
+        self.assertNothingChanged(digest)
+
+    def test_a_pending_repository_restore_stops_the_run_too(self):
+        ids = self.host.pending_source()
+        digest = tree_digest(self.host.root)
+        self.assertEqual(self.run_update().returncode, 2)
+        self.assertEqual(self.status()["phase"], "restore_transaction_pending")
+        self.assertIn(ids[0], self.status()["message"])
+        self.assertNothingChanged(digest)
+
+    def test_the_page_hears_it_at_preflight_and_at_dispatch_before_a_unit_is_started(self):
+        self.host.pending_settings()
+        digest = tree_digest(self.host.root)
+        preflight = self.broker("--preflight")
+        self.assertEqual(preflight.returncode, 2)
+        self.assertIn("restore_transaction_pending", preflight.stderr)
+        dispatch = self.broker("--dispatch", str(self.bundle()))
+        self.assertEqual(dispatch.returncode, 2, dispatch.stderr)
+        self.assertEqual(self.status()["phase"], "restore_transaction_pending")
+        self.assertNotIn("systemd-run", self.calls_text(), "a unit was started although a restore is pending")
+        self.assertEqual(tree_digest(self.host.root), digest)
+
+    def test_a_restore_left_pending_after_the_dispatch_still_stops_the_run(self):
+        """The check at dispatch is advisory; the run asks again once it holds the locks."""
+        bundle = self.bundle()
+        self.assertEqual(self.broker("--dispatch", str(bundle)).returncode, 0)
+        self.calls.write_text("")
+        self.host.pending_settings()
+        digest = tree_digest(self.host.root)
+        self.assertEqual(self.run_update(bundle).returncode, 2)
+        self.assertEqual(self.status()["phase"], "restore_transaction_pending")
+        self.assertNothingChanged(digest)
+
+    def test_the_run_asks_with_the_locks_held(self):
+        """Asked without them the answer could be stale the moment after: a stand-in tool shows what the lock state is when the broker asks during the run."""
+        record = self.root / "asked-with.txt"
+        (self.tools / "saturn-maintenance-lock.py").write_text(
+            "#!/usr/bin/env python3\nimport subprocess, sys\nreal = %r\n" % str(LOCK_TOOL) +
+            "if sys.argv[1] == 'pending-restores':\n"
+            "    rows = []\n"
+            "    for name in ('release', 'radio', 'repository'):\n"
+            "        rc = subprocess.run([sys.executable, real, '--lock-dir', %r, 'probe', '--operation', 'x', '--resources', name], capture_output=True).returncode\n" % str(self.root / "locks") +
+            "        rows.append(f'{name}={rc}')\n"
+            "    open(%r, 'a').write(' '.join(rows) + '\\n')\n" % str(record) +
+            "sys.exit(subprocess.run([sys.executable, real] + sys.argv[1:]).returncode)\n")
+        self.assertEqual(self.run_update().returncode, 0)
+        lines = record.read_text().splitlines()
+        self.assertIn("release=75 radio=75 repository=75", lines, "during the run the question must be asked with all three locks held: " + repr(lines))
+
+    def test_once_saturn_gos_startup_has_completed_it_the_same_update_goes_through(self):
+        ids = self.host.pending_settings()
+        self.assertEqual(self.run_update().returncode, 2)
+        recovered = self.host.helper("recover", "--state-root", str(self.state_root))
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(json.loads(recovered.stdout)["recovered"], ids)
+        self.calls.write_text("")
+        result = self.run_update()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.active(), NEW)
+        self.assertEqual(self.status()["status"], "success")
+
+    def test_finished_transactions_do_not_stop_it(self):
+        self.host.pending_settings()
+        self.assertEqual(self.host.helper("recover", "--state-root", str(self.state_root)).returncode, 0)
+        self.host.write_record("20261014T000000Z-2-bbbbbbbb", status="committed")
+        self.assertCountEqual(self.host.statuses(), ["rolled_back", "committed"])
+        self.assertEqual(self.run_update().returncode, 0)
+
+    def test_the_servers_recovery_during_the_update_changes_nothing_and_starts_nothing(self):
+        """What saturn-go's restarted server meets: the same call as always, answered, with the state exactly as it was and the helper never started."""
+        self.host.write_record("20261014T000000Z-3-cccccccc", status="rolled_back")
+        digest = tree_digest(self.host.root)
+        self.assertEqual(self.run_update().returncode, 0)
+        self.assertEqual((self.root / "server.log").read_text().split(), ["server-start", "rc=0"])
+        self.assertEqual(tree_digest(self.host.root), digest)
+        self.assertFalse(self.helper_log.exists())
+
+    def test_a_server_start_during_a_rollback_is_answered_the_same_way(self):
+        self.host.write_record("20261014T000000Z-4-dddddddd", status="committed")
+        digest = tree_digest(self.host.root)
+        result = self.run_update(FAKE_OUTCOME="rolled-back")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(self.status()["phase"], "rolled_back")
+        self.assertEqual((self.root / "server.log").read_text().split(), ["server-start", "rc=0"])
+        self.assertEqual(tree_digest(self.host.root), digest)
+
+    def test_a_question_that_cannot_be_answered_is_a_refusal_not_a_go_ahead(self):
+        for rc, output in ((3, ""), (0, "not json"), (0, "{}"), (0, '{"status":"ok","pending":null}'), (1, '{"status":"ok","pending":[]}'),
+                           (0, '{"status":"pending","pending":["x"]}'), (1, '{"status":"pending","pending":[]}'), (1, ""),
+                           (0, '{"pending":[]}'), (0, '{"status":"pending","pending":[]}'), (0, '{"status":"unknown","pending":[]}'), (0, '[]'), (0, 'null')):
+            with self.subTest(rc=rc, output=output):
+                (self.tools / "saturn-maintenance-lock.py").write_text(STUB_TOOL.format(pending=output, rc=rc))
+                result = self.run_update()
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn(self.status()["phase"], ("restore_check_failed", "restore_transaction_pending"))
+                self.assertEqual(self.calls_text(), "")
+                self.assertEqual(self.active(), OLD)
+
+    def test_a_stand_in_that_never_answers_is_a_refusal_too(self):
+        (self.tools / "saturn-maintenance-lock.py").write_text(
+            "#!/usr/bin/env python3\nimport sys\nif sys.argv[1:] == ['capabilities']:\n    print('{\"schema\":1,\"recovery_check\":1}')\nelse:\n    sys.exit(7)\n")
+        self.assertEqual(self.run_update().returncode, 2)
+        self.assertEqual(self.status()["phase"], "restore_check_failed")
+        self.assertEqual(self.calls_text(), "")
 
 
 class SourceTests(unittest.TestCase):
