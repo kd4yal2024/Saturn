@@ -64,8 +64,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
@@ -88,6 +86,7 @@ RADIO_TOP = ("rf_safe", "backend")
 # radio's own processes into swap.
 HEADROOM_MARGIN_BYTES = 32 * 1024 ** 2       # the default reserve; an administrator may choose another with --memory-reserve (VALIDATION_MEMORY_RESERVE)
 HEADROOM_MARGIN_FLOOR_BYTES = 8 * 1024 ** 2     # ... but never less than this
+HEADROOM_OWN_MEMORY_MAX_BYTES = 64 * 1024 ** 2  # the most of this program's own memory that the headroom check will add back (a sanity bound)
 
 DEFAULT_LIMITS = {
     "ready_url_wait_s": 30.0,     # the services were just restarted: how long the target may take to report itself ready
@@ -185,6 +184,9 @@ class Owner:
         self.args = args
 
     def http_json(self, url: str, timeout: float = 3.0) -> Any:
+        # imported here and not at the top: only the controller makes HTTP requests, and importing it (ssl, http, email, ...) costs ~10 MiB in every
+        # process of this program, including the small `wait` and `stop` processes that exist at the same moment as the browser's memory headroom check
+        import urllib.request
         with urllib.request.urlopen(url, timeout=timeout) as response:  # noqa: S310  (loopback URLs from root-owned configuration)
             return json.loads(response.read().decode("utf-8"))
 
@@ -265,6 +267,34 @@ def radio_state(perf: dict[str, Any]) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------------------------------------------------------------------
 # the browser
+SCRIPT_NAME = "saturn-remote-validate.py"
+
+
+def own_memory_bytes(proc_root: Path) -> int:
+    """The anonymous memory used by the processes of THIS program (the controller and the small waiter the activator starts beside it), read from
+    /proc: each is a Python interpreter, ~35 MiB together on the Pi. The headroom check judges the host by the memory it has WITHOUT them, its idle
+    figure: this program is not what the browser competes with for what the radio needs, and counting it made the check refuse on a host whose idle
+    memory is enough. It is added back openly (the condition says how much), capped, and 0 wherever it cannot be read."""
+    total = 0
+    try:
+        entries = list(proc_root.glob("[0-9]*"))
+    except OSError:
+        return 0
+    for entry in entries:
+        try:
+            argv = [os.path.basename(part.decode("utf-8", "replace")) for part in (entry / "cmdline").read_bytes().split(b"\0")[:2]]
+            # "python3 /path/saturn-remote-validate.py ...", or the script run directly; not an editor, grep or ps that merely names it
+            if not ((len(argv) > 1 and argv[0].startswith("python") and argv[1] == SCRIPT_NAME) or (argv and argv[0] == SCRIPT_NAME)):
+                continue
+            for line in (entry / "status").read_text().splitlines():
+                if line.startswith("RssAnon:"):
+                    total += int(line.split()[1]) * 1024
+                    break
+        except (OSError, ValueError, IndexError):
+            continue
+    return min(total, HEADROOM_OWN_MEMORY_MAX_BYTES)
+
+
 def parse_size(text: str) -> int:
     """systemd's reading of a size: plain bytes, or a number with a K, M, G or T suffix (powers of 1024)."""
     match = re.fullmatch(r"(\d+)([KMGT]?)", text.strip().upper())
@@ -876,7 +906,7 @@ class Validator:
                 if ready.get("ready") is True and commit == self.args.target_commit:
                     break
                 last = f"readyz reports ready={ready.get('ready')} build_commit={commit}, wanted {self.args.target_commit}"
-            except (OSError, ValueError, urllib.error.URLError) as error:
+            except (OSError, ValueError) as error:       # (a URLError is an OSError)
                 last = f"readyz not answering: {error}"
             self.sleep(1.0)
         else:
@@ -924,23 +954,35 @@ class Validator:
             return self.recorder.condition("host.memory_headroom", False, f"the memory reserve {self.args.memory_reserve} is below the {HEADROOM_MARGIN_FLOOR_BYTES // 1048576} MiB minimum, so the check cannot be trusted")
         wanted = parse_size(self.args.memory_max) + reserve
         unreadable = "the host's available memory could not be read, so it cannot be shown that the browser fits"
-        available = first = best = host_counters(Path(self.args.proc_root)).get("MemAvailable")
+        proc_root = Path(self.args.proc_root)
+
+        def counted() -> tuple[int | None, int]:
+            """(the host's available memory plus what this program's own processes use, that program memory)"""
+            free = host_counters(proc_root).get("MemAvailable")
+            own = own_memory_bytes(proc_root) if free is not None else 0
+            return (None if free is None else free + own), own
+
+        available, own = counted()
+        first = best = available
         if available is None:
             return self.recorder.condition("host.memory_headroom", False, unreadable)
-        # Just after the services were restarted (an activation, or the rollback after one) the host reads lower than it does at rest, and climbs
-        # back within seconds: wait, within a bound, for the memory instead of refusing at the first reading. Never longer than the bound, and
-        # a browser is not started until the memory is there.
+        # Just after the services were restarted (an activation, or the rollback after one) the host may read lower than it does at rest: wait,
+        # within a bound, for the memory instead of refusing at the first reading. Never longer than the bound, and a browser is not started until
+        # the memory is there.
         started, waited_for = now(), False
         while available < wanted and now() - started < self.limits["headroom_wait_s"] and not self.stop_requested.is_set():
             waited_for = True
             self.sleep(self.limits["poll_s"])
-            available = host_counters(Path(self.args.proc_root)).get("MemAvailable")
+            available, own = counted()
             if available is None:
                 return self.recorder.condition("host.memory_headroom", False, unreadable)
             best = max(best, available)
         if available < wanted and self.stop_requested.is_set():
             return self.interrupted("host.memory_headroom", "waiting for the host to have the memory the browser needs")
-        text = f"{available / 1048576:.0f} MiB available; the browser may take up to {self.args.memory_max} and {reserve // 1048576} MiB are kept in reserve"
+        text = f"{available / 1048576:.0f} MiB available"
+        if own:
+            text += f" (counting the {own / 1048576:.0f} MiB that the validator's own processes use, which the browser does not compete for)"
+        text += f"; the browser may take up to {self.args.memory_max} and {reserve // 1048576} MiB are kept in reserve"
         if waited_for:
             text += (f" (after waiting {now() - started:.1f} s: {first / 1048576:.0f} MiB at first"
                      + ("" if available >= wanted else f", {best / 1048576:.0f} MiB at the most") + ")")
@@ -1312,7 +1354,7 @@ class Validator:
                                       f"the owner counts {connections} connection(s) with the session attached, {self.baseline_connections} before it; client flag {view['metrics'].get('client')}")
         try:
             gate = gate_conditions(self.owner.p23(), self.args.backend)
-        except (OSError, ValueError, urllib.error.URLError) as error:
+        except (OSError, ValueError) as error:       # (a URLError is an OSError)
             gate = [("p23_perf is readable", str(error), False)]
         failed_gate = [f"{name}: {value!r}" for name, value, passed in gate if not passed]
         ok &= self.recorder.condition("owner.gate_equivalent", not failed_gate, "; ".join(failed_gate) or "every condition of the activation helper's receive-readiness gate holds with this session attached")

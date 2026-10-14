@@ -25,6 +25,11 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   re-executed copy of itself, does its checks and the install, and then replaces itself with a small shell that runs the activator and starts `--finish` to classify the outcome. Measured on the first appliance during an update:
   anonymous memory 192 MiB against 135 MiB at rest, from five Python processes (the validator's two, the broker's three), which held `MemAvailable` at 490 to 502 MiB against the 532 MiB the headless browser's
   headroom check needs; a plain service restart showed no dip at all. The unit's own `RuntimeMaxSec` (two hours) replaces the lock tool's timeout.
+- The headless browser's memory-headroom check judges the host by its **idle** memory: it adds back the anonymous memory of the validator's own processes (the controller and the small waiter the activator starts beside it,
+  about 35 MiB together on the Pi, read from `/proc`, capped at 64 MiB, 0 where unreadable) to `MemAvailable`, and the evidence says how much it added. On the first appliance the plain check read 492 to 506 MiB with those processes
+  running against 534 to 540 MiB idle just before, so with a 500M cap no reserve could pass; the choice to count the idle figure is the owner's. What it costs: the browser may take up to the cap with the reserve counted
+  from the idle figure, not from what is left once the validator runs, i.e. about 35 MiB less margin for the radio's processes in the worst case (a browser at its cap; the measured peaks were 413 to 472 MiB, the watchdog kills it at
+  the cap and it is the OOM killer's first choice).
 - `VALIDATION_MEMORY_RESERVE` (administrator-owned, kept by the installer, default `32M`, at least `8M`) sets the memory kept free beyond the browser's cap before a browser is started. The default is unchanged;
   it exists so that one appliance's measurement does not have to become every host's default.
 - The broker no longer holds the `radio` maintenance lock while the services restart. `saturn-go`'s own startup runs its restore recovery under the `repository` and `radio` locks and exits when either is

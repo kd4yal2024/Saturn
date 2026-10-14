@@ -348,6 +348,13 @@ The estimate with the broker slimmed is about 520 to 525 MiB available at the ch
 to lower this appliance's reserve (the setting now exists; the browser's measured peaks were 413, 421, 437, 441, 448, 468 and 472 MiB against the 500M cap, so the cap itself has little slack), whether to trim the validator's footprint (its waiter
 process is a separate Python program), or to accept the check as it is and rerun when the host happens to read higher. Counting swap or zram as headroom was considered and rejected: the Bridge has only 8 MiB locked.
 
+**Decision taken by the owner (2026-10-12): judge the check on idle memory.** The plain reception check, run alone on the appliance with nothing else going on, read 492 MiB at first and 506 at best against 534 to 540 MiB idle just before it
+(the sampler: anonymous memory 154 MiB before, 189 during, the difference being the validator's controller and waiter). With a 500M cap no reserve could pass (8 MiB, the floor, needs 508). The validator now adds back the anonymous memory of its
+own processes before comparing with cap plus reserve (`own_memory_bytes`: processes whose command is `python* saturn-remote-validate.py` or the script itself, `RssAnon` only, capped at 64 MiB, 0 where unreadable), and says so in the condition's
+detail. Tested against the appliance's real `/proc` with stand-in processes. **What it costs, stated plainly:** the reserve is now measured from the idle figure, so with a browser at its cap the radio's processes have about 35 MiB less margin than the
+reserve suggests. The browser's measured peaks (413 to 472 MiB) are well under the cap, the watchdog stops it at the cap and it is the OOM killer's first choice, so this is a thinner margin, not a removed one. Idle availability on the appliance
+ranged 518 to 544 MiB this evening (mean 539) and 532 to 629 this morning (mean 553); a requirement of 525 MiB (500M plus a 25M reserve) passes at nearly all of those readings, 516 (16M reserve) at all of them.
+
 ## Not verified / residual risk
 
 * **The restart-timing waits are bounded, not removed.** If the host's memory never climbs back to cap + 32 MiB within 30 s, or the owner never writes telemetry, the validation still fails (and an activation rolls back);

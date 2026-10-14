@@ -1434,6 +1434,49 @@ class MemoryHeadroomTests(RigCase):
         rig.finish()
         self.assertIn("382 MiB needed", rig.status()["failed"]["detail"])
 
+    def own_process(self, rig, pid, anon_kb, argv=("python3", "/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py", "run"), status=True):
+        directory = rig.world / "proc" / str(pid)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "cmdline").write_bytes(b"\0".join(part.encode() for part in argv) + b"\0")
+        if status:
+            (directory / "status").write_text(f"Name:\tpython3\nRssFile:\t9000 kB\nRssAnon:\t{anon_kb} kB\n")
+
+    def test_the_validators_own_memory_is_added_back_and_said(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=360 * 1024)      # 350M cap + 32 MiB = 382 needed; 360 alone is not enough ...
+        self.own_process(rig, 4101, 14000)                                     # ... the controller (about 14 MiB) and the waiter (about 21 MiB) are 35 MiB
+        self.own_process(rig, 4102, 21500, argv=("python3", "/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py", "wait"))
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        detail = rig.condition("host.memory_headroom")
+        self.assertTrue(detail["ok"], detail)
+        self.assertRegex(detail["detail"], r"395 MiB available \(counting the 35 MiB that the validator's own processes use")
+        rig.stop(); rig.finish()
+
+    def test_adding_the_validators_memory_back_cannot_make_a_host_without_the_memory_pass(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
+        self.own_process(rig, 4101, 36000)
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"335 MiB available \(counting the 35 MiB.*382 MiB needed\): no browser was started")
+        self.assertIsNone(rig.browser_pid())
+
+    def test_only_this_programs_processes_are_counted(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
+        self.own_process(rig, 4101, 36000, argv=("grep", "-r", "saturn-remote-validate.py"))                           # names the script, is not it
+        self.own_process(rig, 4102, 36000, argv=("vim", "/usr/local/lib/saturn-go/scripts/saturn-remote-validate.py"))
+        self.own_process(rig, 4103, 36000, argv=("python3", "/usr/local/lib/saturn-go/scripts/some-other-script.py"))
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available; the browser may take up to 350M.*382 MiB needed\)")
+        self.assertNotIn("counting", rig.status()["failed"]["detail"])
+
+    def test_the_memory_added_back_is_bounded(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
+        self.own_process(rig, 4101, 500 * 1024)           # a runaway reading must not be able to buy a pass
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"364 MiB available \(counting the 64 MiB.*382 MiB needed\)")
+
+    def test_an_unreadable_process_entry_counts_as_nothing(self):
+        rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024)
+        self.own_process(rig, 4101, 0, status=False)       # a process that vanished between the two reads
+        (rig.world / "proc" / "4102").mkdir()              # no cmdline at all
+        self.run_to_failure(rig, "host.memory_headroom", detail=r"300 MiB available; the browser may take up to 350M.*382 MiB needed\)")
+
     def test_a_larger_measurement_cap_needs_the_larger_headroom(self):
         rig = self.rig(isolation="systemd", mem_available_kb=450 * 1024)
         rig.start(("--memory-max", "500M"))
