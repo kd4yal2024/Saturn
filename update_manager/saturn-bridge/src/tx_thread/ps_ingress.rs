@@ -352,6 +352,10 @@ mod measurement_tests {
                 super::super::ps_measurement::Host::open(&directory, 7_200_000).unwrap(),
             )
             .unwrap();
+        // Match production startup: media selection follows the owner's first
+        // publication, before an installed configuration is exposed.
+        ready(&ingress);
+        ingress.view.lock_unpoisoned().as_mut().unwrap().installed = None;
         ingress.enable_tagged_pcm_review().unwrap();
         ready(&ingress);
         let mut client = socket.connect(ingress, model);
