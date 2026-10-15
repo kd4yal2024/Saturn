@@ -107,7 +107,7 @@ S-meter, TX meters and meter details
 | TX meter mode | id `tx-meter-mode` | main screen, pinnable | Meter → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Meter peak hold | id `instrument-meter-peak-btn` | main screen, pinnable | Meter → legacy display panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 
-## Receive (37)
+## Receive (38)
 
 RX audio, DSP and filtering — **live radio state**: no restore-defaults here.
 
@@ -116,6 +116,7 @@ RX audio, DSP and filtering — **live radio state**: no restore-defaults here.
 | DSP panel | id `operations-tab-dsp` | main screen, pinnable | Receive → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Start or stop audio | id `rx-audio-toggle-btn` | main screen, default | Receive → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Receive volume | id `rx-volume` | main screen, default | Receive → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| G2 rear headphones | id `rx-headphones-btn` | main screen, pinnable | Receive → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Audio buffer | id `audio-buffer-status` | main screen, pinnable | Receive → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Voice squelch | id `rx-ssql-btn` | main screen, pinnable | Receive → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Voice squelch level | id `rx-ssql-threshold` | main screen, pinnable | Receive → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
@@ -348,7 +349,7 @@ Device, versions, diagnostics
 
 ## Coverage
 
-233 interactive elements carry an id in the template: **170 indexed** and **63 explicitly excluded**, so nothing is unaccounted for.
+234 interactive elements carry an id in the template: **171 indexed** and **63 explicitly excluded**, so nothing is unaccounted for.
 The registry test fails if a template control is neither indexed nor excluded, and also fails on a stale exclusion, so this total is enforced rather than asserted here.
 
 ## Excluded controls, with reasons
@@ -416,6 +417,7 @@ The registry test fails if a template control is neither indexed nor excluded, a
 
 | Control | Covered by | Reason it is not a separate setting |
 | --- | --- | --- |
+| `managed-pcm-select` | PureSignal | Non-persisted offline-review TX owner selection; change only disconnected. |
 | `band-more-btn` | Band | Reveals the remaining band choices on narrow tiers. |
 | `mode-more-btn` | Demodulation mode | Reveals the remaining mode choices on narrow tiers. |
 | `two-tone-freq1` | Two-tone generator | Two-tone generator parameter. |
@@ -423,7 +425,6 @@ The registry test fails if a template control is neither indexed nor excluded, a
 | `two-tone-level` | Two-tone generator | Two-tone generator parameter. |
 | `two-tone-delay` | Two-tone generator | Two-tone generator parameter. |
 | `two-tone-invert-lsb` | Two-tone generator | Two-tone generator parameter. |
-| `rx-spectrum-label` | RX Measure | Firmware label for an RX spectrum capture. |
 | `rx-spectrum-duration` | RX Measure | Duration for an RX spectrum capture. |
 | `rx-spectrum-start-btn` | RX Measure | Starts the RX spectrum capture. |
 | `rx-spectrum-download-btn` | RX Measure | Downloads the completed RX spectrum capture. |

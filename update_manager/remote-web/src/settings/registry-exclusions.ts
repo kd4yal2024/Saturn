@@ -80,6 +80,7 @@ export const NON_SETTING_CONTROLS: readonly NonSettingControl[] = [
   control({ id: 'mobile-wake-lock-btn', reason: 'duplicate', coveredBy: 'display.wakeLockAction', note: 'Phone-view quick action for the wake lock.' }),
 
   // Parameters inside control surfaces that are already indexed.
+  control({ id: 'managed-pcm-select', reason: 'child-of-indexed', coveredBy: 'transmit.puresignal', note: 'Non-persisted offline-review TX owner selection; change only disconnected.' }),
   control({ id: 'band-more-btn', reason: 'child-of-indexed', coveredBy: 'radio.band', note: 'Reveals the remaining band choices on narrow tiers.' }),
   control({ id: 'mode-more-btn', reason: 'child-of-indexed', coveredBy: 'radio.mode', note: 'Reveals the remaining mode choices on narrow tiers.' }),
   control({ id: 'two-tone-freq1', reason: 'child-of-indexed', coveredBy: 'transmit.twoToneEnable', note: 'Two-tone generator parameter.' }),

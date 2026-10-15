@@ -110,6 +110,7 @@ function txReleaseHarness() {
   const documentNode = element('document');
   const windowNode = element('window');
   const context = {
+    managedPcmSelected: () => false, // legacy matrix; managed path has a separate suite
     state,
     performance: { now: () => (clock += 1) },
     WebSocket: { OPEN: 1, CONNECTING: 0 },

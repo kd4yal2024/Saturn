@@ -1,0 +1,117 @@
+{
+  "format": "saturn-puresignal-host-integration-review-v1",
+  "date": "2026-10-15",
+  "branch": "silverforge/puresignal-integration-9bc0140",
+  "baseCommit": "9bc0140a25e78454d1e7235a9abcaa4604e4bdbd",
+  "baseCiRun": "https://github.com/kd4yal2024/Saturn/actions/runs/38724563676",
+  "baseCiJobsPassed": 5,
+  "originalPsGitBase": "cc09c61f91030d4c5a38d6c570a20c28b5d97e03",
+  "originalReviewedPsSourcePin": "aaacc2622beab4a4597a7ee091812a1afbcf9748ddc58c687b670d5b3344a124",
+  "originalReviewedManifestFilesVerifiedUnchanged": 432,
+  "originalPsWorktreeModified": false,
+  "integration": [
+    "Keep managed capability/owner announcements before ready, then use GoldMarsh's ordered initial-snapshot enqueue function.",
+    "Retain GoldMarsh's Legacy receive-state integration and use the same allow-listed receive-state store in shared startup before acquisition, DSP and client admission.",
+    "Open direct acquisition with restored frequency, antenna and attenuation. Flush accepted receive settings on ordinary and failure shutdown.",
+    "Exercise shared receive-state restoration and actual TCI changes through both backend runtime fixtures, including acquisition failure.",
+    "Run both default and managed-puresignal native-stub configurations in CI, preserving the existing memlock setup and failure annotations."
+  ],
+  "additionalFilesReviewedOutsidePriorSourceManifest": [
+    "docs/ui-redesign/migration.md: generated inventory, migration drift check passed",
+    "update_manager/release/puresignal-no-rf/FEEDBACK_MEASUREMENT_METHOD.md: historical no-RF kit design, not RF authorization",
+    "update_manager/release/puresignal-no-rf/package-no-rf.py: immutable historical kit packaging, no installation or radio operation",
+    "update_manager/release/puresignal-no-rf/rebuild-reviewed.py: historical pinned offline rebuild, not a current integrated ARM binary"
+  ],
+  "preservation": {
+    "goldmarshChangedPathsSincePsBase": 40,
+    "goldmarshPathsVerifiedByteIdenticalToMain": 36,
+    "intentionalIntegrationOverlaps": [
+      ".github/workflows/ci.yml",
+      "update_manager/saturn-bridge/src/main.rs",
+      "update_manager/saturn-bridge/src/tci/client.rs",
+      "update_manager/saturn-bridge/src/tci/tests.rs"
+    ],
+    "installerUpdateScriptsChanged": false,
+    "rustServerSecurityLockfileChanged": false,
+    "firmwareDriverPollingChanged": false
+  },
+  "tests": {
+    "defaultNativeStubs": {
+      "command": "SATURN_BRIDGE_STUB_NATIVE=1 cargo test --offline --locked -- --test-threads=1",
+      "passed": true,
+      "library": 34,
+      "bridgeBinary": 497,
+      "harnessIntegration": 14,
+      "actualRoleOrderReplay": 1
+    },
+    "managedNativeStubs": {
+      "command": "SATURN_BRIDGE_STUB_NATIVE=1 cargo test --offline --locked --features managed-puresignal -- --test-threads=1",
+      "passed": true,
+      "library": 63,
+      "bridgeBinary": 584,
+      "harnessIntegration": 14,
+      "actualRoleOrderReplay": 1
+    },
+    "web": {
+      "passed": true,
+      "tests": 812,
+      "files": 87,
+      "typecheck": true,
+      "templateSeam": true,
+      "productionBuild": true,
+      "assetBudget": true,
+      "migrationInventory": true
+    },
+    "matchedNative": {
+      "architecture": "x86_64",
+      "wdspArchiveSha256": "8b75784e63e1c3c9baba993dc866db0002cee0037d42b0d80b88c059d58bb248",
+      "serialRuntimeTestsPassed": 8,
+      "combinedOwnerTestsPassed": 7,
+      "combinedOwnerTestsSkipped": 1,
+      "skippedProductionCombinedTestExplicitlyRunAndPassed": true,
+      "measurementOnlyReplayPassed": true,
+      "measurementBackendScenarios": 22,
+      "syntheticCaptureFilesVerified": 16,
+      "pairedBlocksVerified": 131,
+      "physicalRfExecuted": false
+    },
+    "python": {
+      "noRfKit": 11,
+      "evidenceChecker": 8,
+      "satpPreflight": 11,
+      "satpInstallerRecovery": 16,
+      "managedUpdateFlow": 42,
+      "maintenanceSharedLocks": 35,
+      "passed": true
+    },
+    "otherChecksPassed": [
+      "cargo fmt -- --check",
+      "git diff --check and git diff --cached --check",
+      "shellcheck on PS replay and reviewed ARM shell scripts",
+      "tests/test-saturn-go-worktree.sh",
+      "tests/test-saturn-release-manifest.sh",
+      "tests/test-saturn-release-source.sh",
+      "tests/test-no-external-symlinks.sh"
+    ]
+  },
+  "preservedFailure": {
+    "firstRuntimeRun": "QueueOverrun during P2 arming while other builds/tests were active; fault latched and authority/native cleanup completed",
+    "unchangedIsolatedRepeat": "passed both backends",
+    "subsequentCompleteSerialRuntimeSuite": "all eight passed",
+    "productionProtectionThresholdsChanged": false,
+    "conclusion": "Offline functional integration only. Do not infer bounded hardware or loaded-host scheduling performance from the serial passes."
+  },
+  "limits": {
+    "legacyRemainsDefault": true,
+    "managedFeatureDefaultOff": true,
+    "managedOpusQualified": false,
+    "bankedOpusProposalStopped": true,
+    "measurementOnlyLiveEndpointAdded": false,
+    "newArmCandidateBuiltOrExecuted": false,
+    "chromeOrActualTlsProxyRerunForThisIntegration": false,
+    "remoteCiRunForIntegratedBranch": false,
+    "rfAdaptationOrImdQualified": false,
+    "g2AccessedOrChanged": false,
+    "pushedOrDeployed": false
+  }
+}

@@ -55,11 +55,20 @@ jobs:
           # The Bridge locks its receive buffers in memory and does not start without 16 MiB lockable (its service unit sets LimitMEMLOCK=16M); the replay end-to-end tests start the real Bridge.
           # The runner's default is lower, and its user may not raise the hard limit, so lift it for this shell (the runner has passwordless sudo) and so for cargo and the Bridge.
           sudo -n prlimit --pid $$ --memlock=33554432:33554432 || echo "::warning::could not raise the locked-memory limit; the replay end-to-end tests cannot start the Bridge"
-          cargo test --locked 2>&1 | tee "$RUNNER_TEMP/bridge-test.log" || {
-            status=$?
-            grep -E -A6 --no-group-separator '^test .* FAILED$|panicked at' "$RUNNER_TEMP/bridge-test.log" | head -60 | sed 's/^/::error::/'
-            exit "$status"
-          }
+          # Preserve Legacy coverage and also compile/run the explicitly opt-in
+          # managed owner. Matched-native hardware/replay qualification is separate.
+          for bridge_features in default managed-puresignal; do
+            bridge_test_args=(--locked)
+            if [[ "$bridge_features" != default ]]; then
+              bridge_test_args+=(--features "$bridge_features")
+            fi
+            bridge_test_log="$RUNNER_TEMP/bridge-${bridge_features}-test.log"
+            cargo test "${bridge_test_args[@]}" 2>&1 | tee "$bridge_test_log" || {
+              status=$?
+              grep -E -A6 --no-group-separator '^test .* FAILED$|panicked at' "$bridge_test_log" | head -60 | sed 's/^/::error::/'
+              exit "$status"
+            }
+          done
         working-directory: ${{ matrix.crate }}
 
       - name: Test SATP preflight and installer failure recovery

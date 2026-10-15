@@ -1,0 +1,19 @@
+PureSignal milestone 2: ordered settings transactions, 2026-10-13
+
+Read update_manager/docs/puresignal/MILESTONE2_SETTINGS_TRANSACTIONS_20261013.md.
+Two separate settings messages are ordered by exact predecessor-completion
+receipts, with original cancellation context and sealed operator permission.
+Client results explicitly report queued/applied/rejected. Bounded reply overflow
+cancels output and revokes/closes the session; missing terminal means unknown.
+
+9 focused cases; owner stubs 46 + 427; default stubs 24 + 379;
+5 real-WDSP combined tests (both backend fixtures); native controls passed.
+Current transcripts: offline-native/settings-*. Prior evidence is historical.
+Previous package SHA-256:
+99d3402b516efedbf518fdf6f639c5dc264388e0647cd35140b5bf8edbc1cb21
+
+Verify SHA256SUMS and follow the report's reproduction commands.
+Installed startup remains Legacy. SharedReview is disabled by default.
+Opus and split-media TX remain inhibited. No G2/RF/FPGA/driver/polling/deployment
+change; firmware 1.31.002 / 0x53460004 unchanged. GoldMarsh is untouched.
+Bundled WDSP is x86-64 OFFLINE TEST MATERIAL: never install it on G2.

@@ -1,0 +1,37 @@
+Saturn PureSignal milestone 2 — authorized re-arm / output generations, 2026-10-12
+
+Read update_manager/docs/puresignal/MILESTONE2_REARM_GENERATIONS_20261012.md.
+Review package ONLY. No live PureSignal approval, installer or G2 artifacts.
+Firmware 1.31.002 / 0x53460004, FPGA, driver, polling and G2 unchanged.
+Never install the bundled x86-64 WDSP archive on G2.
+
+From extracted root:
+  sha256sum --check SHA256SUMS
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-native.sh offline-native/wdsp-build
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-adapters.sh
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+
+NEW combined runner: real pinned WDSP + shared lifecycle/controller + actual
+P2/direct output adapters, loopback UDP and ordinary files only. No native
+stubs, /dev devices, codec worker, G2 connection or RF. Exercises both backends.
+Sealed role-authorized re-arm, cancellation, stale generations, real correction,
+reconfiguration and Active disconnect. P2 command completion != direct readback;
+neither proves physical RF-off or measured G2 response time.
+
+Owner Cargo runner: native STUBBED; 45 library + 387 binary passed, 2 existing
+ignored, including ten actual-owner cases. Default Cargo: 24 + 377, 2 ignored.
+Standalone native runner: 24 / 32 / 45 and real WDSP replays/canaries pass.
+Cargo uses cached dependencies with --offline; FFTW development files required.
+
+Non-default features only. Normal constructors attach no fences and no live
+socket handler/production TX scheduler uses this handoff. Existing TCI operator
+role authorization is not a new cryptographic authentication scheme. Production
+ingress must stamp actions BEFORE queuing; legacy booleans cannot be relabeled.
+Remaining installed-library/topology/feedback-threshold/timing/RF qualification
+is separate. No FPGA, driver or faster polling work is indicated.
+
+SHA256SUMS covers every other entry. Current evidence is offline-native/rearm-*.
+Older reports/transcripts are historical. Full bridge source is included, not a
+complete Saturn checkout. Base: 861f0fbc79e0e36c68a5c8ddc157e010b8be20df.
+Patches are base-review aids, not to apply on top of already overlaid sources.
+Do not overwrite GoldMarsh's dirty tree. No commit/push/deployment requested.

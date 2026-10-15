@@ -1,0 +1,40 @@
+Saturn PureSignal M2 TX-authority lifecycle — offline review cut, 2026-10-12
+
+Read update_manager/docs/puresignal/MILESTONE2_TX_LIFECYCLE_20261012.md first.
+Prior dated reports are historical context; this report supersedes their missing
+TX-lifecycle boundary for this review. They do not authorize live integration.
+
+NOT a radio installer, TX unlock, live PureSignal qualification or G2 artifact.
+No G2, firmware, driver, polling, RF or production-wiring changes are included.
+Never install the x86-64 WDSP replay archive on G2.
+
+Verify all archive files from extracted root:
+  sha256sum --check SHA256SUMS
+
+Minimal offline replay (x86-64 Linux, rustc, C compiler/binutils, FFTW development files):
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+
+No Cargo dependencies, Git checkout, radio or network connection are needed by
+that runner. It checks the archive/source identities, runs 24 strict, 32 proposal
+and 42 lifecycle unit tests, then real-WDSP combined strict/proposal/lifecycle
+replay for both paired-feedback adapters and standalone numerical fitting.
+Fresh /tmp diagnostic builds are retained. Runtime TX authority is SIMULATED;
+the native fitting/reset pipeline is real. Physical RF-off is NOT tested.
+
+The production-facing interface is compiled only with the explicit non-default
+offline-puresignal-tx-lifecycle feature, which depends on the non-default
+offline-puresignal-policy-proposal feature. No production caller exists.
+Controller::new still selects the strict gate. Fixture feedback-level limits
+and authority/cleanup deadlines are not production defaults.
+
+The source overlay targets Saturn base 861f0fbc79e0e36c68a5c8ddc157e010b8be20df;
+it is not a full checkout. main-native-linkage.patch retains existing binary
+FFI linkage; cargo-offline-policy-feature.patch supplies both opt-in features.
+Do not overwrite GoldMarsh's or another contributor's dirty worktree.
+Nothing requests a commit, merge, push, deployment or live test.
+
+All source files, full built native C/header sources, GPL license, historical
+evidence and new tx-lifecycle-replay-result.txt are checksummed in SHA256SUMS.
+Replay exchange counts vary with native worker scheduling; inspect invariants,
+not an exact block count. Recorded 3/12 ms stop/cleanup responses use fixture
+clock ticks; they are not physical/backend measured latency.

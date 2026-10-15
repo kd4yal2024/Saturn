@@ -178,6 +178,8 @@ fn handle_event(
     smeter_calibration_db: f64,
 ) {
     match event {
+        #[cfg(feature = "managed-puresignal")]
+        P2Event::ManagedFeedback => {}
         P2Event::HighPriorityFromSdr(packet) => {
             let _ = event_tx.send(RxEvent::HighPriority(packet));
         }

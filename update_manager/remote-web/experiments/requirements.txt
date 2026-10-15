@@ -1,0 +1,4 @@
+# Experiment tools only; not installed client/runtime dependencies.
+playwright==1.63.0
+numpy==2.4.6
+scipy==1.17.1

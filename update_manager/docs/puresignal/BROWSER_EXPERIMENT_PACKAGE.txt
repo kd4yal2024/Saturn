@@ -1,0 +1,25 @@
+PureSignal milestone 2: REAL BROWSER experiment, OFFLINE ONLY.
+
+Decision: do not promote four-input / 80 ms banked Opus as proposed. Chrome emits
+five packets per flushed bank; managed client fails closed. Diagnostic omission
+is not a transport fix. Read MILESTONE2_BROWSER_EXPERIMENT_20261013.md.
+
+Additional OPEN finding: ordinary cancellation can latch TxAuthority between
+fence closure and release-mailbox publication. Deterministic reproduction is
+included. Positive browser passes do not close the race; failing run preserved.
+No fault latch was automatically cleared and no production fix was applied.
+
+Installed Legacy / firmware 1.31.002 remains unchanged. No G2, RF, deployment,
+FPGA, driver, polling, commit or push. Never install offline x86 WDSP on G2.
+
+browser-experiment/: raw packets/audio/CSV/JSON and actual owner logs; local user
+speech clip is for this local review only, not a claim of public redistribution
+rights. No recording was uploaded. Keep raw fifth Opus packets when reviewing.
+
+Source and scripts: update_manager/remote-web/experiments and browser capture
+adapter; tests/run-puresignal-browser-experiment.sh in saturn-bridge. Production
+entrypoint does not import them. requirements.txt is for isolated tools only.
+
+Validate SHA256SUMS after extracting. The manifest freezes the whole package;
+earlier offline-native transcripts are historical. Current browser transcripts
+are named browser-*. A passing defect-characterization test is not a fix.

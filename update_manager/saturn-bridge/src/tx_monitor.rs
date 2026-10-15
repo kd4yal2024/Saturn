@@ -227,6 +227,22 @@ pub(crate) struct TxMonitor {
 }
 
 impl TxMonitor {
+    /// File-backed owner tests must never start the codec/hardware worker.
+    #[cfg(all(test, feature = "offline-puresignal-owner-adapters"))]
+    pub(crate) fn offline_disabled() -> Self {
+        let (sender, _) = mpsc::sync_channel(1);
+        let (rx_sender, _) = mpsc::sync_channel(1);
+        Self {
+            sender,
+            rx_sender,
+            enabled: Arc::new(AtomicBool::new(false)),
+            rx_enabled: Arc::new(AtomicBool::new(false)),
+            active: Arc::new(AtomicBool::new(false)),
+            generation: Arc::new(AtomicU64::new(0)),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            worker: None,
+        }
+    }
     pub(crate) fn spawn(model: Arc<Mutex<RadioModel>>) -> Result<Self, XdmaError> {
         {
             let mut m = model.lock_unpoisoned();

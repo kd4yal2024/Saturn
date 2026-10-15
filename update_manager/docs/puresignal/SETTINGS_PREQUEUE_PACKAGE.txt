@@ -1,0 +1,31 @@
+PureSignal milestone 2 — managed PCM pre-queue settings rejection, OFFLINE ONLY.
+
+Read MILESTONE2_SETTINGS_PREQUEUE_20261013.md in update_manager/docs/puresignal.
+Small client/test correction: a current-session pre-queue rejection clears one
+outstanding request and retains the actual Bridge reason. Duplicate, old-session
+and unsolicited results cannot consume fresh pending work. No blind restamping,
+automatic re-arm, fault acknowledgment or wire-protocol change.
+
+Current evidence: offline-native/prequeue-* and settings-prequeue/final-*.
+Original client failure: settings-prequeue/before-fix-P2, prequeue-before-*.
+Interpreter launch error is retained separately as tooling evidence.
+All inherited native/browser/managed-UI evidence remains historical.
+
+742 web tests; 48 library + 452 owner-adapter tests; actual-page/real-Bridge/full
+native replay passed on both offline backend fixtures. Six Active generations
+per backend, invalid proposal rejected before queueing, zero pending and actual
+InvalidConfig reason retained after 5.2 seconds, complete final cleanup.
+
+Rerun existing run-puresignal-managed-pcm-ui.sh with PS_UI_PREQUEUE_REJECTION=1,
+the pinned x86 WDSP build and explicit template/built bundle/interpreter/runner/
+speech/results paths. Use fresh output directories and the matching isolated
+Python dependencies. This is a loopback/file fixture; never install its x86
+binaries on G2. Local speech evidence carries no public redistribution license.
+
+Actual Saturn Go TLS/proxy executable verification remains NEXT, not established
+by this package. Production selection remains inhibited/default Legacy. Tagged
+PCM/SATP retained, banked Opus stopped. No G2/RF, firmware, FPGA, driver, polling,
+deployment, commit, push or GoldMarsh worktree changes.
+
+Validate SHA256SUMS after extraction. Predecessor managed-UI archive SHA256:
+5bf197b905a26e347d5b229a50dfafd7130d2ddb247d36e003b4ecd3cfd14da6

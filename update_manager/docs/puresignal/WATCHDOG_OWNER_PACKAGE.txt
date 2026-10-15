@@ -1,0 +1,37 @@
+Saturn PureSignal M2 watchdog / TX-owner stop adapters — offline review, 2026-10-12
+
+Read update_manager/docs/puresignal/MILESTONE2_WATCHDOG_OWNER_ADAPTERS_20261012.md.
+NOT an installer, live PureSignal approval or G2 artifact. Production wiring,
+G2, FPGA, firmware 1.31.002 / 0x53460004, driver and polling remain unchanged.
+Never install the bundled x86-64 native archive on G2.
+
+From extracted root:
+  sha256sum --check SHA256SUMS
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-adapters.sh
+
+Native runner: rustc, C compiler/binutils, FFTW development files; no Cargo,
+radio or network needed. Runs 24 strict / 32 proposal / 45 lifecycle tests,
+combined real-WDSP replay on both feedback backends including only-tick stream
+loss, plus numerical fitting/capacity canaries. Authority is simulated here.
+
+Owner runner: Cargo with cached dependencies, --offline. Complete bridge source,
+Cargo.toml, Cargo.lock and build.rs are included. Native FFI is STUBBED in these
+tests: 45 library + 383 binary pass, 2 existing ignored. Six owner cases use
+actual production output methods through loopback UDP / ordinary files only.
+No /dev/xdma opens, codec worker, G2 connection or RF. No physical RF-off proof.
+
+The owner feature is non-default; normal constructors do not attach output
+fences. Only test-only loopback/file constructors do. Adapters are stop-only,
+refuse arms and never reopen the fence. The production queue/command handoff,
+authenticated fresh action, normal mic/IQ gates and approved drive are NOT wired.
+No early Unkeyed event supplies stop completion. P2 local-send completion and
+direct file-backed control readback remain explicitly different evidence.
+
+This includes full bridge sources, not a complete Saturn checkout. Overlay
+base is 861f0fbc79e0e36c68a5c8ddc157e010b8be20df. Patch files are review aids;
+do not apply a patch on top of already overlaid full sources. Do not overwrite
+GoldMarsh's dirty tree. No commit, merge, push or deployment is requested.
+
+SHA256SUMS covers every other archive entry, including sources, native build/
+GPL license and transcripts. Prior reports/transcripts are historical evidence.

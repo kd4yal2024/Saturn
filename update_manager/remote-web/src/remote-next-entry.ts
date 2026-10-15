@@ -116,6 +116,8 @@ import {
 } from './audio/tx-opus-encoder';
 
 import { createLegacySocketAdapter } from './transport/legacy-socket-adapter';
+import { ManagedPcmSession, managedSettingsMessage } from './transport/managed-pcm';
+import { microphoneManagedCapture } from './audio/managed-pcm-capture';
 import { createReconnectSupervisor } from './transport/reconnect-supervisor';
 import {
   SPLIT_TRANSPORT_LEGACY_STORAGE_KEY,
@@ -320,6 +322,9 @@ const api = {
   TX_OPUS_OVERRIDE_STORAGE_KEY,
   createReconnectSupervisor,
   createLegacySocketAdapter,
+  ManagedPcmSession,
+  managedSettingsMessage,
+  microphoneManagedCapture,
   SPLIT_TRANSPORT_LEGACY_STORAGE_KEY,
   SPLIT_TRANSPORT_STORAGE_KEY,
   createSplitSessionId,

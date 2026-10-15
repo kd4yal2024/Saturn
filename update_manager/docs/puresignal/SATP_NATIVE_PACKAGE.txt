@@ -1,0 +1,38 @@
+Saturn PureSignal milestone 2 — SATP provenance / full native TX wrapper, 2026-10-13
+
+Read update_manager/docs/puresignal/MILESTONE2_SATP_NATIVE_20261013.md first.
+Offline review package. No live activation, G2, RF, firmware/FPGA/driver/polling,
+service or deployment change. Never install bundled x86-64 WDSP on G2.
+
+Original ages survive partial packet chunks, native FIR history, output ring
+and existing DUC tails. Fresh arrivals do not refresh retained output. Discontinuity
+invalidates the binding; stop receipt/native cleanup precede new matcher generation.
+Full wrapper reuses WdspTxEngine model/DSP, with shared PS controller and cooperative
+cleanup/recreation. One native owner and one exchange per turn; no legacy reset loop.
+Managed channel recreation restores unchanged shared PS settings before completion;
+the replay re-establishes correction after release/re-arm with no new config command.
+Default ports without verified SATP profile stay inhibited; live selector unchanged.
+
+Passed: owner Cargo 46 + 408, 2 ignored; default 24 + 377, 2 ignored; 4 real-native
+serial tests, including full SATP/engine integration on both P2/direct adapters.
+Standalone 24 / 32 / 46 and numerical replays passed. Source changes, fresh re-arm,
+old-generation refusal and discontinuity during native fitting are exercised.
+
+Source observation is supplied bridge ingress time, NOT sender capture/RF time.
+Live SATP jitter/sequence origin wiring and exact full-DSP/delivery age bounds remain
+unqualified. Full-engine recreation/allocations have no established G2 time bound.
+Two-tone/WFM/unknown admission remains inhibited; other modes not newly qualified.
+Installed native library identity, RXC1 topology, live thresholds/RF are still open.
+
+From extracted root:
+  sha256sum --check SHA256SUMS
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-adapters.sh
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-native.sh offline-native/wdsp-build
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+
+Requires cached Cargo dependencies (--offline), Rust, compiler/binutils, FFTW headers.
+Runner verifies 22 native archive/source/header inputs. Loopback/ordinary files only.
+Current transcripts: offline-native/satp-full-*. Earlier reports/evidence historical.
+SHA256SUMS covers every other entry. Full bridge source, not full Saturn checkout.
+Base 861f0fbc79e0e36c68a5c8ddc157e010b8be20df. Patches are base-review aids,
+not to apply over the included source overlay. GoldMarsh untouched; no commit/push.

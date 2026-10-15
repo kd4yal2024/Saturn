@@ -1,0 +1,38 @@
+Saturn PureSignal milestone 2 — gated scheduled owner migration, 2026-10-12
+
+Read update_manager/docs/puresignal/MILESTONE2_SCHEDULED_OWNER_20261012.md first.
+Review package only. No live activation, G2, RF, firmware/FPGA/driver/polling or
+deployment change. Never install the bundled x86-64 WDSP archive on G2.
+
+Shared installed TX scheduling driver + offline lifecycle consumer: bounded
+TCI mic/native IQ, original ingress age, model/source snapshot transactions,
+release/disconnect cancellation and empty/busy watchdog service. One native
+owner, at most one DSP exchange per turn; old generations cannot be restamped.
+Release also cancels staged PS configuration, including during cleanup.
+
+NOT a finished production migration: SATP arming remains safely inhibited until
+rate-matcher provenance is migrated. Real scheduler native fixture supports a
+USB/filter/mic-gain subset, not the full installed speech/EQ/CFC model chain.
+Live selector/socket producers remain unchanged. No RF-off or G2 latency claim.
+Correction can be applied while capture unclipped confidence remains unknown.
+
+Passed: owner Cargo 46 + 396, 2 ignored; default 24 + 377, 2 ignored; two real
+combined tests, each covers P2/direct; standalone 24 / 32 / 46 plus native replays.
+Four new scheduling tests cover multiple empty/busy/cancellation/source cases.
+Execution evidence is SilverForge's, not independent external reviewer execution.
+
+From extracted root:
+  sha256sum --check SHA256SUMS
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-adapters.sh
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-native.sh offline-native/wdsp-build
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+
+Requires cached Cargo dependencies (--offline), Rust, compiler/binutils, FFTW
+development headers. Loopback UDP / ordinary fixture files only, no hardware.
+P2 command completion differs from direct fixture readback; neither proves RF-off.
+Installed-library/topology/threshold qualification is still outstanding.
+
+SHA256SUMS covers every other entry. Current transcripts: offline-native/scheduled-*.
+Older reports/results are historical. Full bridge source, not a full Saturn tree.
+Base 861f0fbc79e0e36c68a5c8ddc157e010b8be20df. Patches are base-review aids,
+not to apply over included sources. GoldMarsh untouched; no commit/push/deployment.

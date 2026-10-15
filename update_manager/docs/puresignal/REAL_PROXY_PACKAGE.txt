@@ -1,0 +1,41 @@
+PureSignal milestone 2 — actual Saturn Go TLS/proxy executable, OFFLINE ONLY.
+
+Read MILESTONE2_REAL_TLS_PROXY_20261013.md in update_manager/docs/puresignal.
+Unchanged real saturn-go source/executable, actual Chrome/template/IIFE, actual
+Bridge ingress and full native WDSP on P2 loopback/Direct XDMA file fixtures.
+No Python mirror in the real-executable path. Only harness/docs/packaging change.
+
+Current evidence: real-proxy/final-default-cookie-{P2,DirectXdma}/.
+Earlier actual-proxy passes: real-proxy/basic-browser-* and earlier-cookie-*.
+Transcripts: offline-native/real-proxy-*.
+154 Go tests (including 34 TLS/proxy), 742 web tests; three real-proxy native
+browser passes covering both backends. Latest pass follows normal entry redirect
+and runs WSS in a fresh context with cookie auth only. Auth denial/origin/session/
+duplicate-lane probes, one-client/two-lane pairing, six Active generations each,
+release/re-arm, deliberate keyed upstream socket reset/reconnect, pre-queue
+InvalidConfig with zero pending after 5.2 seconds, completed owner/native cleanup.
+Both Go processes stop gracefully with exit 0.
+
+Python probes pin/verify the real generated certificate and loopback hostname.
+Chrome ignores the isolated self-signed cert error; deployment CA trust is not
+qualified. Passwords, TLS private keys, cookie secrets/values and all private
+runtime state are outside the archive. No binary deployment payload included.
+Source + lockfile + all five include_str! inputs permit a source rebuild.
+When building/testing outside a Git checkout, supply
+SATURN_BUILD_COMMIT=861f0fbc79e0e36c68a5c8ddc157e010b8be20df to Cargo.
+The initial archive reconstruction's unknown-identity failure is retained;
+the explicit-identity reconstruction passes the unchanged 154-test suite.
+
+Rerun run-puresignal-real-proxy.sh with explicit PS_SATURN_GO_BIN (locally built
+actual executable), verified x86 WDSP and documented browser/template/bundle/
+speech/new-results inputs. Never launch an installed Bridge or access hardware.
+The short local speech clip is private review evidence, not publicly licensed.
+
+Managed startup remains inhibited/default Legacy and UI selection off by default.
+SATP retained; banked Opus stopped; legacy continuous Opus separate. No G2/RF,
+firmware, FPGA, driver, polling, deployment, commit, push or GoldMarsh changes.
+Offline proxy verification is not live TX/PureSignal/RF-off qualification.
+
+Earlier package evidence remains historical. Validate SHA256SUMS after extraction.
+Predecessor settings-prequeue archive SHA256:
+b3d11f6109e480f5ad2fba3a9450b0d01c29f015453a8d87990b24ac0438b3c7

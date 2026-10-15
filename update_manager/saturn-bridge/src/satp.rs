@@ -69,6 +69,7 @@ pub enum PacketError {
 struct SatpPacket {
     header: SatpHeader,
     samples: [f32; SATP_FRAMES_PER_PACKET as usize],
+    observation: crate::tx_audio::SatpObservation,
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {
@@ -147,7 +148,15 @@ fn parse_packet(bytes: &[u8]) -> Result<SatpPacket, PacketError> {
             return Err(PacketError::NonFiniteSample);
         }
     }
-    Ok(SatpPacket { header, samples })
+    Ok(SatpPacket {
+        header,
+        samples,
+        observation: crate::tx_audio::SatpObservation {
+            received_at: Instant::now(),
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            capture: None,
+        },
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -335,6 +344,12 @@ impl PacketRing {
     }
 
     fn pop_or_silence(&mut self) -> Option<([f32; SATP_FRAMES_PER_PACKET as usize], bool)> {
+        self.pop_observed().map(|packet| match packet {
+            Some(p) => (p.samples, false),
+            None => ([0.; SATP_FRAMES_PER_PACKET as usize], true),
+        })
+    }
+    fn pop_observed(&mut self) -> Option<Option<SatpPacket>> {
         if !self.begin_if_ready() {
             return None;
         }
@@ -353,10 +368,7 @@ impl PacketRing {
             self.occupied = self.occupied.saturating_sub(1);
         }
         self.cursor = Some(cursor.wrapping_add(SATP_FRAMES_PER_PACKET as u64));
-        Some(match packet {
-            Some(packet) => (packet.samples, false),
-            None => ([0.0; SATP_FRAMES_PER_PACKET as usize], true),
-        })
+        Some(packet)
     }
 }
 
@@ -527,6 +539,7 @@ pub struct SatpStatus {
     pub tx_flushes_enqueued: u64,
     pub tx_flushes_processed: u64,
     pub tx_pipeline_state: &'static str,
+    pub tx_pipeline_metrics_valid: bool,
     pub tx_pipeline_rf_enabled: bool,
     pub tx_pipeline_mic_frames: u64,
     pub tx_pipeline_duc_packets: u64,
@@ -608,6 +621,7 @@ impl SatpStatus {
             tx_flushes_enqueued: 0,
             tx_flushes_processed: 0,
             tx_pipeline_state: "idle",
+            tx_pipeline_metrics_valid: false,
             tx_pipeline_rf_enabled: false,
             tx_pipeline_mic_frames: 0,
             tx_pipeline_duc_packets: 0,
@@ -722,6 +736,46 @@ fn prepare_bound_socket(
 }
 
 impl SatpRuntime {
+    #[cfg(all(
+        test,
+        feature = "offline-puresignal-owner-native",
+        not(saturn_bridge_stub_native)
+    ))]
+    pub(crate) fn loopback_fixture(
+        socket: UdpSocket,
+        model: Arc<Mutex<RadioModel>>,
+        ingress: TxAudioIngress,
+        target: u32,
+        capacity: u32,
+    ) -> Self {
+        assert!(socket.local_addr().unwrap().ip().is_loopback());
+        socket.set_nonblocking(true).unwrap();
+        let status = Arc::new(Mutex::new(SatpStatus::new(&BridgeConfig::default())));
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_status = status.clone();
+        let worker_stop = stop.clone();
+        let (tx, _) = mpsc::channel(); // no legacy consumer exists in this fixture
+        let worker = thread::spawn(move || {
+            run_receiver(
+                socket,
+                None,
+                target,
+                capacity,
+                Duration::from_millis(500),
+                model,
+                ingress,
+                tx,
+                false,
+                worker_status,
+                worker_stop,
+            )
+        });
+        Self {
+            status,
+            stop,
+            worker: Some(worker),
+        }
+    }
     pub fn start(
         config: &BridgeConfig,
         radio_model: Arc<Mutex<RadioModel>>,
@@ -868,6 +922,9 @@ fn run_receiver(
                     break;
                 }
             };
+            // Stamp immediately after the socket receive, before parsing,
+            // authentication, timeline processing and jitter-buffer insertion.
+            let observation = tx_audio_ingress.observe_satp(Instant::now());
             did_work = true;
             if allowed_source_ip.is_some_and(|allowed| source.ip() != allowed) {
                 status.lock_unpoisoned().invalid += 1;
@@ -877,13 +934,14 @@ fn run_receiver(
                 status.lock_unpoisoned().invalid += 1;
                 continue;
             }
-            let packet = match parse_packet(&receive_buffer[..SATP_DATAGRAM_BYTES]) {
+            let mut packet = match parse_packet(&receive_buffer[..SATP_DATAGRAM_BYTES]) {
                 Ok(packet) => packet,
                 Err(_) => {
                     status.lock_unpoisoned().invalid += 1;
                     continue;
                 }
             };
+            packet.observation = observation;
             {
                 let mut model = radio_model.lock_unpoisoned();
                 if !model
@@ -894,6 +952,8 @@ fn run_receiver(
                     continue;
                 }
                 if lease_generation != model.satp.generation {
+                    tx_audio_ingress
+                        .satp_discontinuity(packet.observation.received_at, "lease-generation");
                     lease_generation = model.satp.generation;
                     ring.clear();
                     playout_clock.reset();
@@ -921,6 +981,10 @@ fn run_receiver(
             let now = Instant::now();
             if session_id != Some(packet.header.session_id) {
                 let changed = session_id.is_some();
+                if changed {
+                    tx_audio_ingress
+                        .satp_discontinuity(packet.observation.received_at, "session-change");
+                }
                 ring.clear();
                 playout_clock.reset();
                 rate_control.reset();
@@ -942,6 +1006,7 @@ fn run_receiver(
             }
 
             let header = packet.header;
+            let arrived = packet.observation.received_at;
             let mut sample_counter_delta = None;
             let mut sample_counter_discontinuity = false;
             if let Some((previous_sequence, previous_counter)) = last_arrival_timeline {
@@ -955,6 +1020,9 @@ fn run_receiver(
                 }
             } else {
                 last_arrival_timeline = Some((header.sequence, header.sample_counter));
+            }
+            if sample_counter_discontinuity {
+                tx_audio_ingress.satp_discontinuity(arrived, "sample-counter");
             }
             let was_timeline_late = ring.is_late(header.sample_counter);
             let mut observed_sequence = None;
@@ -971,6 +1039,7 @@ fn run_receiver(
                     playout_clock.reset();
                     previous_playout_was_silence = false;
                     timeline_resynced = true;
+                    tx_audio_ingress.satp_discontinuity(now, "timeline-resync");
                     ring.insert(packet)
                 } else {
                     InsertResult::Late
@@ -978,6 +1047,9 @@ fn run_receiver(
             } else {
                 ring.insert(packet)
             };
+            if insert_result == InsertResult::Replaced {
+                tx_audio_ingress.satp_discontinuity(arrived, "jitter-ring-overrun");
+            }
             {
                 let mut snapshot = status.lock_unpoisoned();
                 snapshot.packets_rx = snapshot.packets_rx.saturating_add(1);
@@ -1050,7 +1122,12 @@ fn run_receiver(
         if tx_authorized && !previous_tx_authorized {
             radio_model.lock_unpoisoned().satp.begin_tx_epoch();
             ring.clear();
-            let _ = sink.flush();
+            // Shared owner has already completed stop/native cleanup and
+            // prepared new source history before authorizing this generation.
+            // Clear pre-arm jitter packets, not the newly authorized lifecycle.
+            if !tx_audio_ingress.shared_selected() {
+                let _ = sink.flush();
+            }
             playout_clock.reset();
             previous_playout_was_silence = false;
         }
@@ -1094,7 +1171,12 @@ fn run_receiver(
         }
         let mut playout_steps = 0;
         while !audio_lost && playout_clock.is_due(now) && playout_steps < 8 {
-            if let Some((samples, silence)) = ring.pop_or_silence() {
+            if let Some(packet) = ring.pop_observed() {
+                let silence = packet.is_none();
+                if silence {
+                    tx_audio_ingress.satp_discontinuity(now, "playout-gap");
+                }
+                let samples = packet.as_ref().map(|p| p.samples).unwrap_or([0.; 128]);
                 let mut snapshot = status.lock_unpoisoned();
                 snapshot.frames_consumed = snapshot
                     .frames_consumed
@@ -1110,7 +1192,11 @@ fn run_receiver(
                 }
                 previous_playout_was_silence = silence;
                 if tx_authorized {
-                    match sink.write_frames(samples) {
+                    let result = match packet {
+                        Some(packet) => sink.write_observed(samples, &packet.observation),
+                        None => sink.write_frames(samples), // managed route refuses fabricated gap samples
+                    };
+                    match result {
                         Ok(()) => {
                             snapshot.frames_delivered = snapshot
                                 .frames_delivered
@@ -1155,6 +1241,7 @@ fn run_receiver(
             snapshot.tx_flushes_enqueued = ingress.flushes_enqueued;
             snapshot.tx_flushes_processed = ingress.flushes_processed;
             snapshot.tx_pipeline_state = ingress.pipeline_state;
+            snapshot.tx_pipeline_metrics_valid = ingress.pipeline_metrics_valid;
             snapshot.tx_pipeline_rf_enabled = ingress.pipeline_rf_enabled;
             snapshot.tx_pipeline_mic_frames = ingress.pipeline_mic_frames;
             snapshot.tx_pipeline_duc_packets = ingress.pipeline_duc_packets;
@@ -1191,6 +1278,7 @@ fn run_receiver(
             thread::sleep(PLAYOUT_POLL);
         }
     }
+    let _ = sink.flush(); // receiver shutdown cannot leave the managed generation armed
     {
         let mut snapshot = status.lock_unpoisoned();
         snapshot.running = false;
@@ -1272,7 +1360,7 @@ fn status_json(status: &SatpStatus) -> String {
             "  \"tx_frames_accepted\": {},\n  \"tx_samples_accepted\": {},\n",
             "  \"tx_frames_rejected_idle\": {},\n  \"tx_frames_rejected_source\": {},\n",
             "  \"tx_flushes_enqueued\": {},\n  \"tx_flushes_processed\": {},\n",
-            "  \"tx_pipeline_state\": {},\n  \"tx_pipeline_rf_enabled\": {},\n  \"tx_pipeline_mic_frames\": {},\n  \"tx_pipeline_duc_packets\": {},\n",
+            "  \"tx_pipeline_state\": {},\n  \"tx_pipeline_metrics_valid\": {},\n  \"tx_pipeline_rf_enabled\": {},\n  \"tx_pipeline_mic_frames\": {},\n  \"tx_pipeline_duc_packets\": {},\n",
             "  \"tx_pipeline_wdsp_input_samples\": {},\n  \"tx_pipeline_wdsp_output_pairs\": {},\n",
             "  \"tx_pipeline_pending_mic_floats\": {},\n  \"tx_pipeline_pending_iq_floats\": {},\n",
             "  \"tx_pipeline_rmatch_enabled\": {},\n  \"tx_pipeline_rmatch_underflows\": {},\n",
@@ -1340,6 +1428,7 @@ fn status_json(status: &SatpStatus) -> String {
         status.tx_flushes_enqueued,
         status.tx_flushes_processed,
         json_string(status.tx_pipeline_state),
+        status.tx_pipeline_metrics_valid,
         status.tx_pipeline_rf_enabled,
         status.tx_pipeline_mic_frames,
         status.tx_pipeline_duc_packets,
@@ -1602,6 +1691,38 @@ mod tests {
             bytes[offset..offset + 4].copy_from_slice(&fill.to_le_bytes());
         }
         bytes
+    }
+
+    #[test]
+    fn jitter_ring_preserves_receive_age_and_does_not_stamp_missing_audio() {
+        let old = Instant::now() - Duration::from_millis(100);
+        let new = Instant::now();
+        let mut a = parse_packet(&packet(0, 0, 0.25)).unwrap();
+        a.observation.received_at = old;
+        let mut b = parse_packet(&packet(1, 128, 0.5)).unwrap();
+        b.observation.received_at = new;
+        let mut ring = PacketRing::new(256, 4096);
+        ring.insert(a);
+        ring.insert(b);
+        let packet = ring.pop_observed().unwrap().unwrap();
+        assert_eq!(packet.observation.received_at, old);
+        let (ingress, rx, _) = TxAudioIngress::bounded();
+        ingress
+            .write_satp_observed(packet.samples, &packet.observation)
+            .unwrap();
+        let crate::tx_audio::TxAudioMessage::Frames(f) = rx.try_recv().unwrap() else {
+            panic!()
+        };
+        assert_eq!(f.enqueued_at, old);
+        assert_eq!(
+            ring.pop_observed()
+                .unwrap()
+                .unwrap()
+                .observation
+                .received_at,
+            new
+        );
+        assert!(ring.pop_observed().unwrap().is_none());
     }
 
     #[test]

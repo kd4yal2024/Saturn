@@ -1,0 +1,27 @@
+PureSignal milestone 2: coherent cancellation correction — OFFLINE ONLY.
+
+Read update_manager/docs/puresignal/MILESTONE2_CANCELLATION_FIX_20261013.md.
+Atomic fence/revision/cancellation ticket; generation-specific cancellation;
+settings invalidation cannot arrive late; genuine authority faults stay latched.
+Deterministic regressions and real Chrome tagged-PCM/full-WDSP lifecycle passed
+on P2 loopback and Direct XDMA regular-file fixtures. No physical RF-off claim.
+
+Current results: offline-native/cancellation-* and cancellation-fix/audit-*.
+Earlier post-fix Chrome pass: cancellation-fix/final-*.
+Historical browser-experiment/ and browser-* transcripts preserve the ORIGINAL
+extra Opus packet, diagnostic truncation and cancellation failure. Historical
+documents saying the finding is open describe the earlier frozen package.
+Those characterization/pass results are NOT the corrected regression evidence.
+
+Four-packet banked Opus is stopped, not refined or enabled. Tagged PCM is next;
+SATP retained. Legacy continuous Opus unchanged. Shared production stays disabled
+by default; installed Legacy unchanged. No G2, RF, firmware, FPGA, driver,
+polling, deployment, commit or push. GoldMarsh's tree untouched.
+
+Use tests/run-puresignal-cancellation-browser.sh with a verified x86 WDSP build
+and explicit PS_BROWSER_* variables; see the report and prior native-build
+instructions. Never install offline x86 artifacts on G2. Recordings are local
+review evidence, not publicly licensed speech. No upload occurred.
+
+Check SHA256SUMS after extracting. Source and historical evidence are included;
+only cancellation-* transcripts describe this corrected slice.

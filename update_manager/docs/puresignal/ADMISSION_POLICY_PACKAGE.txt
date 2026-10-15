@@ -1,0 +1,32 @@
+Saturn PureSignal M2 admission-policy proposal — 2026-10-12
+
+Read update_manager/docs/puresignal/MILESTONE2_ADMISSION_POLICY_20261012.md.
+UNREVIEWED OFFLINE PACKAGE. Not a radio installer, production unlock or TX approval.
+Keep G2, firmware, driver and polling unchanged. Never install the x86-64 archive on G2.
+Prior dated reports are historical context; the new report defines this review scope.
+
+Verify all entries from extracted root:
+  sha256sum --check SHA256SUMS
+
+Minimal offline replay (x86-64 Linux, rustc, C compiler/binutils, FFTW development files):
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+
+No Cargo dependencies, Git checkout, G2 connection or radio are required for that runner.
+It checks the pinned archive and headers, runs 24 strict and 32 opt-in controller tests,
+then real-native combined replay for both backends (strict and automatic-mode proposal)
+and standalone numerical fitting. Fresh /tmp builds are retained.
+
+The alternative controller is compiled only with the explicit non-default feature
+offline-puresignal-policy-proposal. Controller::new remains strict; only the named
+new_offline_admission_proposal selects the alternative. No production caller exists.
+The minimal rustc runner explicitly selects the feature; this does not enable a radio.
+
+Full built WDSP C/header sources and GPL license accompany the unchanged archive;
+upstream and Linux-port pins are in the report. Prior package's offline build helpers
+are retained for provenance. Different toolchains require a new reviewed archive hash.
+
+Source overlay is for the isolated Saturn base 861f0fbc79e0e36c68a5c8ddc157e010b8be20df,
+not a complete checkout. main-native-linkage.patch is retained from the earlier cut;
+cargo-offline-policy-feature.patch declares the new non-default feature for Cargo use.
+Do not overwrite another contributor's dirty worktree. Nothing here requests merge,
+push or deployment. Archive checks identify only this offline build, not G2 WDSP.

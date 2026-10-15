@@ -37,6 +37,7 @@ function txHarness() {
   let rxRecoveries = 0;
   let rfBlocked = false;
   const context = {
+    managedPcmSelected: () => false,
     state,
     performance: { now: () => 1_000 },
     WebSocket: { OPEN: 1 },

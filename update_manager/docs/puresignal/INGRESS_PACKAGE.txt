@@ -1,0 +1,39 @@
+Saturn PureSignal milestone 2 — actual ingress / exclusive owner review, 2026-10-13
+
+Read update_manager/docs/puresignal/MILESTONE2_INGRESS_20261013.md first.
+LIMITED OFFLINE review, not complete production TCI migration or hardware authorization.
+No G2/RF, firmware 1.31.002, FPGA, driver, polling, deployment or commit/push change.
+GoldMarsh untouched. Never install the bundled x86-64 WDSP on G2.
+
+Actual operator-socket PCM and SATP UDP/HMAC/jitter feed the shared lifecycle/full
+native engine on both fixtures. Original time/generation survives buffering.
+Release bypasses full queues. One startup branch/no legacy tee or fallback; real
+legacy/shared engines share one channel-1 lease, retained across cleanup/recreation.
+SATP waits for real source input before starting destination consumption; discarded
+zero-input DSP advances while waiting. Existing source/key deadlines remain active.
+
+Managed Opus and split-media TCI remain INHIBITED pending age/generation contracts.
+Default legacy TX/transports unchanged. Installed startup stays Legacy: no env/URL
+opt-in. SharedReview is an explicit internal review factory. Production acquisition
+feedback hookup/native identity and hardware activation remain open. Source age is
+bridge ingress, not exact RF output. No G2 timing bound. Shared legacy-counter
+measurements are marked unavailable/invalid, not presented as clear measurements.
+
+Passed: owner Cargo 46 + 418, 2 ignored; default 24 + 379, 2 ignored; five real-native
+combined tests; standalone 24 / 32 / 46 and numerical replays. Actual ingress requires
+three corrected generations on BOTH fixture backends, then an authenticated counter
+fault, stop and cleanup, with no legacy TX mailbox leakage. TCI fixture is intermittent
+PCM, NOT sustained-throughput qualification. Native stub tests own no native channel.
+
+From extracted root:
+  sha256sum --check SHA256SUMS
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-adapters.sh
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-native.sh offline-native/wdsp-build
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+
+Requires Rust/cached Cargo dependencies, compiler/binutils and FFTW development files.
+Runner validates 22 native inputs. Outputs are explicit loopback/ordinary-file only.
+Current transcripts offline-native/ingress-*. Previous reports/evidence are historical.
+SHA256SUMS covers all other entries. Bridge source overlay, not full Saturn checkout.
+Base 861f0fbc79e0e36c68a5c8ddc157e010b8be20df. Patches are base-review aids,
+not to apply over the included source. Review gates remain explicit/fail closed.

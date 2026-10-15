@@ -62,6 +62,7 @@ pub enum TxAudioMessage {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TxAudioIngressSnapshot {
+    pub pipeline_metrics_valid: bool,
     pub queue_depth: usize,
     pub queue_high_water: usize,
     pub satp_frames_enqueued: u64,
@@ -284,6 +285,7 @@ impl TxAudioIngressStats {
             _ => "idle",
         };
         TxAudioIngressSnapshot {
+            pipeline_metrics_valid: true,
             queue_depth: load!(queue_depth),
             queue_high_water: load!(queue_high_water),
             satp_frames_enqueued: load!(satp_frames_enqueued),
@@ -327,6 +329,15 @@ impl TxAudioIngressStats {
 pub struct TxAudioIngress {
     sender: mpsc::SyncSender<TxAudioMessage>,
     stats: Arc<TxAudioIngressStats>,
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    shared: Option<crate::tx_thread::ps_ingress::SharedIngress>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SatpObservation {
+    pub(crate) received_at: Instant,
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) capture: Option<crate::tx_thread::ps_ingress::Capture>,
 }
 
 impl TxAudioIngress {
@@ -341,10 +352,64 @@ impl TxAudioIngress {
             Self {
                 sender,
                 stats: stats.clone(),
+                #[cfg(feature = "offline-puresignal-owner-adapters")]
+                shared: None,
             },
             receiver,
             stats,
         )
+    }
+    /// Mutually exclusive producer route: no legacy receiver is returned.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[allow(dead_code)] // explicit review producer route, no installed opt-in
+    pub(crate) fn shared(ingress: crate::tx_thread::ps_ingress::SharedIngress) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver); // legacy writes fail closed, never a parallel tee
+        Self {
+            sender,
+            stats: Arc::new(TxAudioIngressStats::default()),
+            shared: Some(ingress),
+        }
+    }
+    pub(crate) fn observe_satp(&self, received_at: Instant) -> SatpObservation {
+        SatpObservation {
+            received_at,
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            capture: self.shared.as_ref().and_then(|s| s.capture(received_at)),
+        }
+    }
+    pub(crate) fn satp_discontinuity(&self, at: Instant, reason: &'static str) {
+        #[cfg(not(feature = "offline-puresignal-owner-adapters"))]
+        let _ = (at, reason);
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(shared) = &self.shared {
+            shared.discontinuity(TxAudioSource::Satp, at, reason);
+        }
+    }
+    pub(crate) fn shared_selected(&self) -> bool {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        {
+            self.shared.is_some()
+        }
+        #[cfg(not(feature = "offline-puresignal-owner-adapters"))]
+        {
+            false
+        }
+    }
+    pub(crate) fn write_satp_observed(
+        &self,
+        samples: [f32; 128],
+        observation: &SatpObservation,
+    ) -> io::Result<()> {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(shared) = &self.shared {
+            return shared.satp_packet(
+                observation.capture.as_ref(),
+                samples,
+                observation.received_at,
+            );
+        }
+        self.write_satp_packet_at(samples, observation.received_at)
     }
 
     pub fn write_frame(
@@ -390,11 +455,20 @@ impl TxAudioIngress {
     }
 
     pub fn write_satp_packet(&self, samples: [f32; 128]) -> io::Result<()> {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if self.shared.is_some() {
+            return Err(io::Error::other(
+                "managed SATP requires original arrival evidence",
+            ));
+        }
+        self.write_satp_packet_at(samples, Instant::now())
+    }
+    fn write_satp_packet_at(&self, samples: [f32; 128], received_at: Instant) -> io::Result<()> {
         let source = TxAudioSource::Satp;
         let sample_count = samples.len();
         let depth = self.stats.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
         match self.sender.try_send(TxAudioMessage::Frames(TxAudioFrame {
-            enqueued_at: Instant::now(),
+            enqueued_at: received_at,
             source,
             samples: TxAudioSamples::Satp(samples),
             channels: 1,
@@ -426,6 +500,13 @@ impl TxAudioIngress {
     }
 
     pub fn flush(&self, source: TxAudioSource) -> io::Result<()> {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(shared) = &self.shared {
+            if shared.selected_active(source) {
+                shared.release();
+            }
+            return Ok(());
+        }
         let depth = self.stats.queue_depth.fetch_add(1, Ordering::Relaxed) + 1;
         match self.sender.try_send(TxAudioMessage::Flush(source)) {
             Ok(()) => {
@@ -453,10 +534,24 @@ impl TxAudioIngress {
     }
 
     pub fn stats(&self) -> TxAudioIngressSnapshot {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(shared) = &self.shared {
+            // Legacy atomics are not written by the shared owner. Do not label
+            // their zero values as measured/qualified shared-pipeline metrics.
+            return TxAudioIngressSnapshot {
+                pipeline_state: shared.pipeline_state(),
+                pipeline_metrics_valid: false,
+                ..TxAudioIngressSnapshot::default()
+            };
+        }
         self.stats.snapshot()
     }
 
     pub fn pipeline_accepting_audio(&self) -> bool {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(shared) = &self.shared {
+            return shared.selected_active(TxAudioSource::Satp);
+        }
         self.stats.pipeline_state.load(Ordering::Acquire) != 0
     }
 }
@@ -467,6 +562,14 @@ pub trait TxAudioSink: Send {
     fn write_frames(&mut self, samples: [f32; 128]) -> io::Result<()>;
     fn flush(&mut self) -> io::Result<()>;
     fn name(&self) -> &'static str;
+    fn write_observed(
+        &mut self,
+        samples: [f32; 128],
+        observation: &SatpObservation,
+    ) -> io::Result<()> {
+        let _ = observation;
+        self.write_frames(samples)
+    }
 }
 
 #[derive(Default)]
@@ -514,6 +617,13 @@ impl TxThreadAudioSink {
 }
 
 impl TxAudioSink for TxThreadAudioSink {
+    fn write_observed(
+        &mut self,
+        samples: [f32; 128],
+        observation: &SatpObservation,
+    ) -> io::Result<()> {
+        self.ingress.write_satp_observed(samples, observation)
+    }
     fn write_frames(&mut self, samples: [f32; 128]) -> io::Result<()> {
         self.ingress.write_satp_packet(samples)
     }
@@ -523,7 +633,11 @@ impl TxAudioSink for TxThreadAudioSink {
     }
 
     fn name(&self) -> &'static str {
-        "tx_thread"
+        if self.ingress.shared_selected() {
+            "shared-lifecycle"
+        } else {
+            "tx_thread"
+        }
     }
 }
 

@@ -1,0 +1,44 @@
+Saturn PureSignal M2 review-fixes package — 2026-10-12
+
+Read update_manager/docs/puresignal/MILESTONE2_REVIEW_FIXES_20261012.md first.
+This is an OFFLINE REVIEW/REPLAY package, not a radio installation or TX approval.
+Do not copy the bundled x86-64 archive to G2. No FPGA/driver changes are included.
+
+Independent minimal replay (from the extracted package root):
+
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh \
+    offline-native/wdsp-build
+
+Needs x86-64 Linux, rustc (tested 1.98), C compiler/binutils, coreutils, and FFTW
+development files (tested Ubuntu GCC 11.4.0 / FFTW 3.3.8). No Rust crates, Cargo
+dependency fetch, Git repository, Node modules, G2 connection, or radio device
+is needed for this minimal runner. It checks the pinned archive/header identities,
+runs 24 controller/decoder tests using rustc, then builds and runs the combined
+real-native controller replay for both backends and the standalone native fitter.
+Fresh local /tmp build directories are retained. Both native process timeouts
+are failure limits, not RF safety limits.
+
+The native archive is accompanied by its full built C/header sources and WDSP
+GPL license. Original upstream/port identities and the unmodified Saturn build
+helper (plus its two patch helpers) are included for provenance. Those helpers
+expect freshly checked-out pinned upstream and Linux-port sources, not an
+unidentified installed library. Different compilers can produce different
+archive hashes; a rebuild needs independent review and a new declared identity.
+The runner intentionally refuses an unreviewed hash.
+
+SHA256SUMS lists every other ZIP entry. From extracted root:
+
+  sha256sum --check SHA256SUMS
+
+For full Cargo/browser/source-Git checks, use a separate clean checkout of
+Saturn base 861f0fbc79e0e36c68a5c8ddc157e010b8be20df and apply only reviewed
+package source files and main-native-linkage.patch there. Existing uncommitted
+work must not be overwritten. The package is not a full Saturn checkout or an
+instruction to merge/push/deploy. Full browser tests additionally need the
+base checkout's dependencies; source-Git ABI checks need the pinned upstream
+Git objects. Prior reported full-suite results and exact scope are in the report.
+
+Native observer reads existing IQC run/busy flags only; no archive or algorithm
+was altered. Counter-clear brackets in the combined replay are synthetic model
+evidence, NOT hardware data. Real acquisition owners cannot yet meet the current
+three-bracket admission deadline. Keep live feedback blocked and polling unchanged.

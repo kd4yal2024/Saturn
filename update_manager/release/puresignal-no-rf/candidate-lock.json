@@ -1,0 +1,18 @@
+{
+  "format": "saturn-puresignal-no-rf-preparation-v1",
+  "reviewedSourcePin": "84387da737de7dca6e332739e0dc42b30f4ef5baf1a3db68505326faae14d800",
+  "reviewedBinarySha256": "c462e688fc81842c152a48d8bcebe566f517a461eb48e898d40addb549b19292",
+  "reviewedBundleSha256": "63dbc41286164b882ea47cee73367b55728711a8a6226f8977d56a68268d7616",
+  "gitBase": "cc09c61f91030d4c5a38d6c570a20c28b5d97e03",
+  "nativeArchiveSha256": "f5f21c7cb76df1add17647c15a700f564a7f045e930e84be870333fa6e74973e",
+  "nativeHeaderSha256": "3dde5a9bfafe7e87f76684eeaab7da22fd5d421c08a8a725b0e2ec3cbd5416af",
+  "wdspVersion": 210,
+  "rustToolchain": "1.98.1",
+  "target": "aarch64-unknown-linux-gnu",
+  "cpu": "cortex-a72",
+  "productionOwnerDefault": "legacy",
+  "hardwareExecutionAuthorized": false,
+  "rfTestingAuthorized": false,
+  "benchStatus": "historically LP700 inline ANT1 and 1500W 50ohm dummy load; current confirmation requested",
+  "feedbackDiagnosticStatus": "method proposed separately; not implemented in reviewed candidate"
+}

@@ -20,6 +20,25 @@ use crate::xdma_duc::{
     allowed_cpu_ids, current_scheduler, enable_realtime_fifo, pin_current_thread,
 };
 
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod feedback_owner;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod feedback_stream;
+pub(crate) mod owner_selection;
+#[cfg(feature = "managed-puresignal")]
+pub(crate) mod production_owner;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod ps_ingress;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod ps_media;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod ps_owner_loop;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod ps_owner_queue;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+mod satp_provenance;
+mod scheduler;
+
 const TX_SILENCE_GAP: Duration = Duration::from_millis(250);
 const TX_KEEPALIVE_RESUME_FRAMES: u8 = 3;
 const TX_UNKEY_BURST_COUNT: usize = 12;
@@ -28,7 +47,7 @@ const TX_KEY_IQ_PEAK_THRESHOLD: f32 = 0.001;
 /// Minimum mic input peak (linear) to consider as real operator audio.
 /// Below this, mic frames are treated as silence/noise regardless of what
 /// WDSP outputs (which can include residual filter state).
-const TX_KEY_MIC_PEAK_THRESHOLD: f32 = 0.005;
+pub(crate) const TX_KEY_MIC_PEAK_THRESHOLD: f32 = 0.005;
 /// Maximum age of the last keyable mic frame for the mic gate to be open.
 /// If the operator stops speaking, the gate closes after this window,
 /// preventing stale mic detection from allowing RF keying on WDSP residuals.
@@ -223,18 +242,18 @@ fn duc_iq_packet_can_key_rf(rf_enabled: bool, peak: f32) -> bool {
 /// Compound RF keying predicate. Requires:
 ///  1. RF is enabled and IQ peak exceeds threshold
 ///  2. Recent mic audio above noise floor (or two-tone mode)
-fn can_key_rf(rf_enabled: bool, iq_peak: f32, mic_recent: bool, two_tone: bool) -> bool {
+pub(crate) fn can_key_rf(rf_enabled: bool, iq_peak: f32, mic_recent: bool, two_tone: bool) -> bool {
     duc_iq_packet_can_key_rf(rf_enabled, iq_peak) && (mic_recent || two_tone)
 }
 
 #[derive(Clone, Copy, Debug)]
-struct KeyQualification {
+pub(crate) struct KeyQualification {
     required: usize,
     consecutive: usize,
 }
 
 impl KeyQualification {
-    fn new(required: usize) -> Self {
+    pub(crate) fn new(required: usize) -> Self {
         Self {
             required: required.max(1),
             consecutive: 0,
@@ -245,7 +264,7 @@ impl KeyQualification {
         self.consecutive = 0;
     }
 
-    fn observe(&mut self, eligible: bool) -> bool {
+    pub(crate) fn observe(&mut self, eligible: bool) -> bool {
         if eligible {
             self.consecutive = self.consecutive.saturating_add(1).min(self.required);
         } else {
@@ -272,6 +291,16 @@ pub enum TxCommand {
     Arm {
         rf_enabled: bool,
     },
+    /// Non-default owner-integration envelope. Issued before queuing, never
+    /// reconstructed from a legacy Arm boolean when the consumer dequeues it.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[allow(dead_code)] // no live producer selects the review-only envelope
+    PureSignalAuthorizedArm(ps_owner_queue::AuthorizedArm),
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    MeasurementOnly(ps_owner_queue::AuthorizedMeasurement),
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[allow(dead_code)] // stamped configuration; no live producer selects it
+    PureSignalOwnerConfig(Box<ps_owner_loop::Configuration>),
     /// PTT released — unkey, send stop burst, deactivate WDSP.
     Disarm,
     PureSignalFeedback {
@@ -388,6 +417,39 @@ fn should_defer_model_change(state: TxState, backend_requires_deferral: bool) ->
 }
 
 pub fn spawn(
+    session: Arc<dyn TxRadio>,
+    radio_model: Arc<Mutex<RadioModel>>,
+    cmd_rx: Receiver<TxCommand>,
+    audio_rx: Receiver<TxAudioMessage>,
+    audio_stats: Arc<TxAudioIngressStats>,
+    audio_source: TxAudioSource,
+    event_tx: Sender<TxEvent>,
+    stop_flag: Arc<AtomicBool>,
+) -> Result<JoinHandle<()>, XdmaError> {
+    owner_selection::select(
+        owner_selection::Selection::default(),
+        || {
+            spawn_legacy(
+                session,
+                radio_model,
+                cmd_rx,
+                audio_rx,
+                audio_stats,
+                audio_source,
+                event_tx,
+                stop_flag,
+            )
+        },
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        || {
+            Err(XdmaError::Incompatible(
+                "shared TX requires reviewed native/feedback admission; no runtime opt-in".into(),
+            ))
+        },
+    )
+}
+
+fn spawn_legacy(
     session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
     cmd_rx: Receiver<TxCommand>,
@@ -649,7 +711,7 @@ fn run(
 
     let mut pending_commands: VecDeque<TxCommand> = VecDeque::new();
 
-    while !stop_flag.load(Ordering::Relaxed) {
+    let explicit_exit = scheduler::drive(&stop_flag, || {
         let mut did_work = false;
 
         // Bound command draining so synchronized feedback traffic cannot starve
@@ -766,6 +828,27 @@ fn run(
                         did_work = true;
                     }
                 }
+                #[cfg(feature = "offline-puresignal-owner-adapters")]
+                Ok(TxCommand::PureSignalAuthorizedArm(_))
+                | Ok(TxCommand::MeasurementOnly(_))
+                | Ok(TxCommand::PureSignalOwnerConfig(_)) => {
+                    // This legacy native owner has NOT been migrated. Never
+                    // fall back to Arm, create a second native owner or key on
+                    // an envelope accidentally routed to the wrong consumer.
+                    if state != TxState::Idle {
+                        do_unkey(
+                            session.as_ref(),
+                            &radio_model,
+                            &mut wdsp_tx,
+                            &event_tx,
+                            state,
+                        );
+                    }
+                    pending_mic_samples.clear();
+                    wdsp_tx.pending_iq.clear();
+                    eprintln!("saturn-bridge: authorized PureSignal arm sent to unmigrated TX owner; stopped");
+                    return scheduler::Turn::Exit;
+                }
                 Ok(TxCommand::Disarm) => {
                     if state != TxState::Idle {
                         do_unkey(
@@ -877,7 +960,7 @@ fn run(
                         );
                     }
                     println!("saturn-bridge: TX thread shutting down");
-                    return;
+                    return scheduler::Turn::Exit;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -891,7 +974,7 @@ fn run(
                         );
                     }
                     println!("saturn-bridge: TX thread: command channel closed");
-                    return;
+                    return scheduler::Turn::Exit;
                 }
             }
         }
@@ -1462,13 +1545,13 @@ fn run(
             audio_stats.mark_pipeline_idle();
         }
 
-        if !did_work {
-            thread::sleep(if state == TxState::Idle {
-                Duration::from_millis(1)
-            } else {
-                TX_ACTIVE_IDLE_SLEEP
-            });
+        scheduler::Turn::Continue {
+            worked: did_work,
+            active: state != TxState::Idle,
         }
+    });
+    if explicit_exit {
+        return;
     }
 
     if state != TxState::Idle {

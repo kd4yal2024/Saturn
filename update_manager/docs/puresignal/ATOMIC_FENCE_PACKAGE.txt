@@ -1,0 +1,38 @@
+Saturn PureSignal milestone 2 — atomic fence / existing owner arm queue, 2026-10-12
+
+Read update_manager/docs/puresignal/MILESTONE2_ATOMIC_FENCE_20261012.md first.
+Supersedes the earlier re-arm report's separate flag/revision fence implementation.
+Review package only. No live activation, installer, G2 or RF artifacts.
+Firmware 1.31.002 / 0x53460004, FPGA, driver and polling remain unchanged.
+Never install the bundled x86-64 WDSP archive on G2.
+
+New closed+revision single atomic state; conditional reopen CAS on that same word.
+Cancellation never takes the DMA writer lock. Already-permitted writes drain;
+new output stays denied. Five deterministic regressions and authorized positive
+control; all 15 actual-owner tests passed. Owner Cargo: 45 + 392, 2 ignored.
+Default Cargo: 24 + 377, 2 ignored. Combined real-WDSP/P2/direct replay passed.
+Standalone strict/proposal/lifecycle native: 24 / 32 / 45 and replays passed.
+
+Continued OFFLINE owner migration: sealed arm credential through existing
+TxCommand type/channel and shared-lifecycle consumer; out-of-band release before
+dequeue, reject old queued/legacy boolean arms, closed command channel faults
+without a second DSP exchange in one turn. Legacy owner refuses the new envelope.
+Live socket producers, installed scheduler, mic/rmatch/source/model paths remain
+unmigrated. Existing TCI role authorization is not new cryptographic authentication.
+
+From extracted root:
+  sha256sum --check SHA256SUMS
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-adapters.sh
+  bash update_manager/saturn-bridge/tests/run-puresignal-owner-native.sh offline-native/wdsp-build
+  bash update_manager/saturn-bridge/tests/run-puresignal-offline-native.sh offline-native/wdsp-build
+
+Cargo requires cached dependencies (--offline); native requires Rust, compiler,
+binutils and FFTW development files. Loopback/regular-file fixtures only, no /dev
+or radio connection. P2 command completion != direct readback; neither proves
+physical RF-off or G2 timing. No installed-library/topology/threshold qualification.
+
+SHA256SUMS covers every other file. Current evidence: offline-native/fence-*.
+Earlier reports/transcripts are historical. Full bridge source included, not a
+full Saturn checkout. Base: 861f0fbc79e0e36c68a5c8ddc157e010b8be20df.
+Patches are base-review aids, not for applying over the included source overlay.
+GoldMarsh's worktree untouched. No commit/push/deployment.

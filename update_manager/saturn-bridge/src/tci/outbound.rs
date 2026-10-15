@@ -21,6 +21,8 @@ use super::*;
 pub(crate) enum OutboundMessage {
     Text(String),
     SafetyText(String),
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    TransactionText(String),
     Close,
     IqFrame {
         receiver: u32,
@@ -90,6 +92,8 @@ impl OutboundMessage {
             Self::Close => OutboundClass::Safety,
             Self::SafetyText(_) => OutboundClass::Safety,
             Self::Text(_) => OutboundClass::Control,
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            Self::TransactionText(_) => OutboundClass::Control,
             Self::AudioFrame { .. } | Self::OpusAudioFrame { .. } => OutboundClass::Audio,
             Self::FullRateIqFrame { .. } => OutboundClass::FullRateIq,
             Self::IqFrame { .. } | Self::TxIqFrame { .. } | Self::SpectrumRow { .. } => {
@@ -102,6 +106,8 @@ impl OutboundMessage {
         match self {
             Self::Close => 0,
             Self::Text(text) | Self::SafetyText(text) => text.len(),
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            Self::TransactionText(text) => text.len(),
             Self::IqFrame { iq_samples, .. }
             | Self::FullRateIqFrame { iq_samples, .. }
             | Self::TxIqFrame { iq_samples, .. } => {
@@ -538,6 +544,8 @@ impl SpectrumCredit {
 
 #[derive(Debug)]
 pub(crate) struct OutboundQueues {
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) transactions: VecDeque<QueuedOutbound>,
     pub(crate) safety: VecDeque<QueuedOutbound>,
     pub(crate) control: VecDeque<QueuedOutbound>,
     pub(crate) audio: VecDeque<QueuedOutbound>,
@@ -553,6 +561,8 @@ pub(crate) struct OutboundQueues {
 impl Default for OutboundQueues {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            transactions: VecDeque::new(),
             safety: VecDeque::new(),
             control: VecDeque::new(),
             audio: VecDeque::new(),
@@ -576,6 +586,19 @@ pub(crate) struct ClientOutbound {
 }
 
 impl ClientOutbound {
+    /// Dedicated bounded FIFO. Never latest-wins/coalesced or evicted by
+    /// telemetry/safety churn. Full means explicit session revocation/close.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn enqueue_transaction_reply(&self, text: String) -> bool {
+        let mut queues = self.queues.lock_unpoisoned();
+        if queues.transactions.len() >= 64 {
+            return false;
+        }
+        let item = QueuedOutbound::new(OutboundMessage::TransactionText(text));
+        queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+        queues.transactions.push_back(item);
+        true
+    }
     #[cfg(test)]
     pub(crate) fn new() -> Arc<Self> {
         Self::new_with_full_rate_iq_stats(Arc::new(FullRateIqTransportStats::default()))
@@ -789,6 +812,8 @@ impl ClientOutbound {
         let mut queues = self.queues.lock_unpoisoned();
         let item = if let Some(item) = queues.safety.pop_front() {
             Some(item)
+        } else if let Some(item) = take_transaction_reply(&mut queues) {
+            Some(item)
         } else if let Some(item) = queues.control.pop_front() {
             Some(item)
         } else if allow_bulk {
@@ -884,6 +909,14 @@ impl ClientOutbound {
 
     pub(crate) fn requeue_front(&self, item: QueuedOutbound) {
         let mut queues = self.queues.lock_unpoisoned();
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if matches!(item.message, OutboundMessage::TransactionText(_)) {
+            // One writer may have a permitted reply in flight while producers
+            // fill all 64 slots. Retain that one extra in-flight item on retry.
+            queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+            queues.transactions.push_front(item);
+            return;
+        }
         if let OutboundMessage::SpectrumRow { sequence, .. } = &item.message {
             // The codec refused the row before writing it: return its credit
             // and never let an older row displace a newer queued one.
@@ -999,6 +1032,17 @@ impl Drop for ClientOutbound {
     }
 }
 
+fn take_transaction_reply(queues: &mut OutboundQueues) -> Option<QueuedOutbound> {
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    {
+        queues.transactions.pop_front()
+    }
+    #[cfg(not(feature = "offline-puresignal-owner-adapters"))]
+    {
+        let _ = queues;
+        None
+    }
+}
 pub(crate) const MAX_SAFETY_QUEUE_MESSAGES: usize = 16;
 pub(crate) const MAX_CONTROL_QUEUE_MESSAGES: usize = 256;
 pub(crate) const MAX_CONTROL_QUEUE_BYTES: usize = 256 * 1024;
@@ -1216,6 +1260,8 @@ pub(crate) fn client_wants_outbound_message(
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
             lane != Some(SplitSocketKind::Media)
         }
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        OutboundMessage::TransactionText(_) => lane != Some(SplitSocketKind::Media),
         OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
             lane != Some(SplitSocketKind::Control)
                 && client.state.iq_stream_enabled
@@ -1447,6 +1493,10 @@ pub(crate) fn send_outbound<S: io::Read + io::Write>(
     match message {
         OutboundMessage::Close => websocket.send(Message::Close(None)),
         OutboundMessage::Text(text) | OutboundMessage::SafetyText(text) => {
+            websocket.send(Message::Text(text.clone().into()))
+        }
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        OutboundMessage::TransactionText(text) => {
             websocket.send(Message::Text(text.clone().into()))
         }
         OutboundMessage::IqFrame {

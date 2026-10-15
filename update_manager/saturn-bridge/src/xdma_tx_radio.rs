@@ -28,6 +28,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
+#[cfg(all(test, feature = "offline-puresignal-owner-adapters"))]
+#[path = "xdma_tx_radio/offline_fixture.rs"]
+pub(crate) mod offline_fixture;
 const DEFAULT_USER_DEVICE: &str = "/dev/xdma0_user";
 const DIRECT_RUNTIME_MIN_FIRMWARE_MINOR: u16 = 27;
 const DIRECT_RUNTIME_MAX_FIRMWARE_MINOR: u16 = 30;
@@ -895,9 +898,23 @@ pub(crate) struct DirectXdmaTxRadio {
     // Stop/join the codec worker before releasing hardware ownership.
     monitor: crate::tx_monitor::TxMonitor,
     state: Mutex<DirectTxState>,
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    offline_output_fence: Option<std::sync::Arc<crate::tx_owner_stop::OutputFence>>,
 }
 
 impl DirectXdmaTxRadio {
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn open_shared(
+        power_meter_scale: f32,
+        model: std::sync::Arc<Mutex<RadioModel>>,
+    ) -> Result<Self, XdmaError> {
+        let mut radio = Self::open(power_meter_scale, model)?;
+        let fence =
+            std::sync::Arc::new(crate::tx_owner_stop::OutputFence::new_open_for_offline_trial());
+        fence.close();
+        radio.offline_output_fence = Some(fence);
+        Ok(radio)
+    }
     pub(crate) fn open(
         power_meter_scale: f32,
         model: std::sync::Arc<Mutex<RadioModel>>,
@@ -907,6 +924,8 @@ impl DirectXdmaTxRadio {
         Ok(Self {
             state: Mutex::new(state),
             monitor,
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            offline_output_fence: None,
         })
     }
 
@@ -932,11 +951,149 @@ impl DirectXdmaTxRadio {
         &self,
         operation: impl FnOnce(&mut DirectTxState) -> Result<T, XdmaError>,
     ) -> Result<T, String> {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let _permit = self
+            .offline_output_fence
+            .as_ref()
+            .map(|f| f.enter())
+            .transpose()
+            .map_err(|error| error.to_string())?;
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         operation(&mut state).map_err(|error| error.to_string())
+    }
+
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_output_fence(
+        &self,
+    ) -> Option<std::sync::Arc<crate::tx_owner_stop::OutputFence>> {
+        self.offline_output_fence.clone()
+    }
+    /// Cooperative offline handoff: one stage per call; no FIFO pacing loop,
+    /// sleep, blocking mutex or prefill wait. Actual configure/write/key/readback
+    /// functions run against the explicitly attached ordinary-file fixture.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_key_generation(
+        &self,
+        generation: u64,
+        model: &RadioModel,
+        stage: &mut u8,
+        iq: &[f32],
+    ) -> Result<bool, saturn_bridge::puresignal::Fault> {
+        use saturn_bridge::puresignal::Fault;
+        let fence = self
+            .offline_output_fence
+            .as_ref()
+            .ok_or(Fault::TxAuthority)?;
+        let Some(_permit) = fence.enter_key_generation(generation)? else {
+            return Ok(false);
+        };
+        let mut state = match self.state.try_lock() {
+            Ok(s) => s,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(_) => return Err(Fault::TxAuthority),
+        };
+        let result = (|| match *stage {
+            0 => {
+                state.configure_stream(model)?;
+                state.write_zero_frames(DUC_MAX_DMA_BATCH_FRAMES)?;
+                *stage = 1;
+                Ok(false)
+            }
+            1 => {
+                let fifo = state.observe_fifo(false)?;
+                if fifo.occupied_words < DUC_PREFILL_TARGET_WORDS {
+                    return Ok(false);
+                }
+                state.write_frame_batch(iq)?;
+                *stage = 2;
+                Ok(false)
+            }
+            _ => {
+                state.key_with_frame(model, iq)?;
+                Ok(true)
+            }
+        })();
+        result.map_err(|_: XdmaError| Fault::TxAuthority)
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_iq_generation(
+        &self,
+        generation: u64,
+        iq: &[f32],
+    ) -> Result<bool, saturn_bridge::puresignal::Fault> {
+        use saturn_bridge::puresignal::Fault;
+        let fence = self
+            .offline_output_fence
+            .as_ref()
+            .ok_or(Fault::TxAuthority)?;
+        let Some(_permit) = fence
+            .enter_generation(generation)
+            .map_err(|_| Fault::TxAuthority)?
+        else {
+            return Ok(false);
+        };
+        let mut state = match self.state.try_lock() {
+            Ok(s) => s,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(_) => return Err(Fault::TxAuthority),
+        };
+        if !state.keyed || !state.stream_active {
+            return Err(Fault::TxAuthority);
+        }
+        let fifo = state.observe_fifo(false).map_err(|_| Fault::TxAuthority)?;
+        if state.fifo_depth_words.saturating_sub(fifo.occupied_words) < DUC_FIFO_WORDS_PER_FRAME {
+            return Ok(false);
+        }
+        state
+            .write_frame_batch(iq)
+            .map_err(|_| Fault::TxAuthority)?;
+        Ok(true)
+    }
+
+    /// Stop adapter holds the closed, drained output permit. Never waits on the
+    /// state lock. Uses the actual shutdown sequence, followed by off readback.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_stop_and_readback(
+        &self,
+    ) -> Result<bool, saturn_bridge::puresignal::Fault> {
+        use saturn_bridge::puresignal::Fault;
+        if !self
+            .offline_output_fence
+            .as_ref()
+            .is_some_and(|f| f.is_closed())
+        {
+            return Err(Fault::TxAuthority);
+        }
+        let mut state = match self.state.try_lock() {
+            Ok(state) => state,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(Fault::TxAuthority),
+        };
+        state.shutdown().map_err(|_| Fault::TxAuthority)?;
+        let read = |offset| {
+            state
+                .registers
+                .read_register(offset)
+                .map_err(|_| Fault::TxAuthority)
+        };
+        if read(DAC_CONTROL_REGISTER)? != dac_control_word(0)
+            || read(TX_CONFIG_REGISTER)?
+                & (TX_AMPLITUDE_MASK
+                    | TX_OUTPUT_GATE_BIT
+                    | DUC_STREAM_ENABLE_BIT
+                    | DUC_MUX_RESET_BIT)
+                != 0
+            || read(RF_GPIO_REGISTER)? & (MOX_BIT | TX_ENABLE_BIT | TX_RELAY_DISABLE_BIT)
+                != TX_RELAY_DISABLE_BIT
+            || read(ALEX_TX_FILTER_TX_ANTENNA_REGISTER)? & u32::from(ALEX_TX_RELAY_BIT) != 0
+            || read(FIFO_RESET_REGISTER)? & DUC_FIFO_RESET_BIT == 0
+        {
+            return Err(Fault::TxAuthority);
+        }
+        Ok(true)
     }
 }
 

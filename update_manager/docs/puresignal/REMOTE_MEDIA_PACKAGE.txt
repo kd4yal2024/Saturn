@@ -1,0 +1,21 @@
+PureSignal milestone 2: offline PSG1 split-media / Opus-history review, 2026-10-13
+
+Read update_manager/docs/puresignal/MILESTONE2_REMOTE_MEDIA_20261013.md.
+Tagged split PCM and four-packet independent Opus banks now reach the SAME
+shared owner in explicit offline review mode. Original ages/generations remain
+sealed; old-lane packets and faults cannot acquire a new output generation.
+Client reference: fresh-source acknowledgement, frozen async encoder authority,
+bounded bank flushing and ordered output. It is NOT installed UI integration.
+
+15 focused Rust cases; owner 46+442; default 24+379; 7 real-WDSP combined tests.
+38 targeted web tests (12 new); full worktree web suite 711; typecheck passed.
+Current transcripts: offline-native/media-*. Previous evidence is historical.
+Previous ZIP SHA-256:
+b418cfb2bec2cdad66e6092c9aa5e1ab8bd5ba5a123efe7a10963da4b8673c39
+
+Verify SHA256SUMS and follow the report's reproduction commands.
+Production/default SharedReview still inhibit these paths. No installed selector,
+G2/RF/deployment/FPGA/driver/polling change; firmware 1.31.002/0x53460004 unchanged.
+GoldMarsh untouched. Bundled WDSP is x86-64 OFFLINE material, NEVER install on G2.
+Real capture-worklet integration, real WebCodecs execution, bank-reset voice/IMD
+quality, live feedback thresholds/identity and G2 timing remain unqualified.

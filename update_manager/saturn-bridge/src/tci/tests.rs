@@ -130,6 +130,8 @@ fn handshake_probe(pieces: &[(&[u8], u64)], close_after_writing: bool) -> Handsh
             TxCodecRuntimeFlags::default(),
             (false, 50100),
             &DisplayTransport::default(),
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            &Arc::new(Mutex::new(None)),
         );
         started.elapsed()
     });
@@ -2856,6 +2858,47 @@ fn a_viewer_session_declared_before_the_first_write_ends_up_holding_the_viewer_r
 }
 
 #[test]
+fn managed_announcements_preserve_role_order_and_ready_boundary() {
+    let (tx, _rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 161, true);
+    let operator_client_id = Arc::new(AtomicU64::new(161));
+    let operator_control_at = Arc::new(Mutex::new(None));
+    let outbound = clients
+        .lock_unpoisoned()
+        .get(&161)
+        .unwrap()
+        .outbound
+        .clone();
+    let mut snapshot = snapshot_for(161, TciClientRole::Operator);
+    let before_ready = snapshot.len() - 1;
+    let capabilities = "managed-caps-test;".to_string();
+    let owner = "managed-owner-test;".to_string();
+    snapshot.splice(
+        before_ready..before_ready,
+        [capabilities.clone(), owner.clone()],
+    );
+    assert_eq!(enqueue_initial_snapshot(&outbound, snapshot), 0);
+    assert!(handle_incoming_message(
+        text_message("session_open:merged-review,viewer;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        161,
+    ));
+    let sent = drain_all_text(&clients, 161);
+    assert_eq!(
+        last_role_notice(&sent),
+        Some("remote_client_role:0,viewer,161;")
+    );
+    assert_eq!(sent.last().map(String::as_str), Some("ready;"));
+    let caps_at = sent.iter().position(|s| s == &capabilities).unwrap();
+    let owner_at = sent.iter().position(|s| s == &owner).unwrap();
+    assert!(caps_at < owner_at && owner_at < sent.len() - 1);
+}
+
+#[test]
 fn a_client_promoted_before_its_first_write_ends_up_holding_the_operator_role() {
     // The same ordering from the other side: client 72 registered as a viewer and was promoted by 71's release before its snapshot was written.
     let (tx, _rx) = mpsc::channel();
@@ -5304,6 +5347,8 @@ fn the_production_accept_path_sets_tcp_nodelay_on_the_accepted_socket() {
             TxCodecRuntimeFlags::default(),
             (false, 50100),
             &DisplayTransport::default(),
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            &Arc::new(Mutex::new(None)),
         );
     });
     let deadline = Instant::now() + Duration::from_secs(3);
@@ -5382,6 +5427,8 @@ fn the_production_accept_path_counts_a_confirmed_socket() {
             TxCodecRuntimeFlags::default(),
             (false, 50100),
             &DisplayTransport::default(),
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            &Arc::new(Mutex::new(None)),
         );
     });
     let deadline = Instant::now() + Duration::from_secs(3);

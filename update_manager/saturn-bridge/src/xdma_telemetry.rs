@@ -215,6 +215,21 @@ pub(crate) fn record_runtime_performance(
     record_runtime_readiness(path, status, None, metrics)
 }
 
+/// Review-only selected owner marker. Never reuse a Legacy "ready"/RF-safe
+/// snapshot for a different owner, or invent normal performance histograms.
+#[cfg(feature = "managed-puresignal")]
+pub(crate) fn record_shared_review_status(
+    path: &Path,
+    backend: &str,
+    phase: &str,
+    counter_json: Option<String>,
+) -> io::Result<()> {
+    let document=format!("{{\"schema_version\":1,\"updated_at_ms\":{},\"source\":\"saturn-bridge\",\"backend\":{},\"status\":\"review-only\",\"tx_owner\":\"shared\",\"rf_safe\":null,\"rf_qualified\":false,\"phase\":{},\"metrics\":{{\"pid\":{},\"build_git_sha\":{},\"source_pin\":{},\"legacy_performance_available\":false,\"rx_counter_v31\":{}}}}}\n",
+        unix_time_ms(),json_string(backend),json_string(phase),std::process::id(),json_string(env!("SATURN_BRIDGE_GIT_SHA")),
+        json_string(env!("SATURN_BRIDGE_SOURCE_PIN")),counter_json.unwrap_or_else(||"null".into()));
+    write_snapshot_atomic(path, document.as_bytes(), false)
+}
+
 fn snapshot_path() -> PathBuf {
     env::var_os(SNAPSHOT_PATH_ENV)
         .map(PathBuf::from)
@@ -336,6 +351,30 @@ mod tests {
     use super::{serialize_snapshot, write_snapshot_atomic, LatencyHistogram, TelemetryValue};
     use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    #[cfg(feature = "managed-puresignal")]
+    #[test]
+    fn selected_review_owner_cannot_leave_stale_legacy_ready_or_fake_rf_safe_metrics() {
+        let directory = std::env::temp_dir().join(format!(
+            "saturn-shared-status-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("ready.json");
+        fs::write(&path, b"{\"status\":\"ready\",\"rf_safe\":true}").unwrap();
+        super::record_shared_review_status(&path, "xdma", "shared-keyed", None).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("\"status\":\"review-only\""));
+        assert!(contents.contains("\"rf_safe\":null"));
+        assert!(contents.contains("\"rf_qualified\":false"));
+        assert!(contents.contains("\"legacy_performance_available\":false"));
+        assert!(!contents.contains("\"status\":\"ready\""));
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn latency_histogram_reports_bounded_p99_and_exact_rounded_max() {

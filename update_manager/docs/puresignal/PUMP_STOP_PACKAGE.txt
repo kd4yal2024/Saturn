@@ -1,0 +1,33 @@
+Saturn PureSignal milestone 2 — post-pump stop correction, 2026-10-13
+
+Read update_manager/docs/puresignal/MILESTONE2_PUMP_STOP_20261013.md first.
+Review-only offline correction; no production/G2/RF/firmware/FPGA/driver/polling
+or deployment change. Never install bundled x86-64 WDSP on G2.
+
+Recheck phase after pump before rendering/sending. No output-authority unwrap.
+Preserve original native/overdrive fault or ordinary release; subsequent scheduled
+turns must obtain a complete stop receipt and finish cooperative native cleanup.
+The closed fence alone is NOT completed unkeying or physical RF-off evidence.
+
+Five deterministic native-failure/overdrive/release/missing-authority/healthy
+tests passed. Rendering is due in all cases. Stop cases assert no render/output
+or actual fixture DMA-write increments and continued receipt/cleanup progression.
+Owner Cargo: 46 + 401 passed, 2 ignored; default: 24 + 377, 2 ignored.
+Two combined real-native tests passed on P2/direct fixtures; standalone tests
+24 / 32 / 46 and native replays passed. No installed-radio qualification.
+
+From extracted root:
+  sha256sum --check SHA256SUMS
+  cd update_manager/saturn-bridge
+  SATURN_BRIDGE_STUB_NATIVE=1 cargo test --offline --features offline-puresignal-owner-adapters scheduled_pump -- --nocapture --test-threads=1
+
+Full-suite runner commands remain in the previous scheduled-owner report.
+Requires cached Cargo dependencies, Rust, compiler/binutils, FFTW development
+files. Current evidence: offline-native/pump-stop-*. Earlier evidence historical.
+All archive entries except SHA256SUMS are manifested. Full bridge source, not a
+full Saturn checkout. Base 861f0fbc79e0e36c68a5c8ddc157e010b8be20df.
+Patches are base-review aids, not to apply over included source overlays.
+GoldMarsh untouched; no commit/push/deployment.
+
+Remaining: SATP retained-sample provenance first, full installed native DSP wrapper
+second. SATP arming stays inhibited; production selection stays unchanged.

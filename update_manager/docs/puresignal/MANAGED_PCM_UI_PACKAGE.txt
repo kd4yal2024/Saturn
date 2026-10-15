@@ -1,0 +1,28 @@
+PureSignal milestone 2 — actual Saturn Remote managed tagged-PCM UI, OFFLINE ONLY.
+
+Read MILESTONE2_MANAGED_PCM_UI_20261013.md in update_manager/docs/puresignal.
+Actual template/IIFE, PCM-only negotiated controller, fresh microphone/worklet,
+generation fences, ordered settings results and matching clean-stop readiness.
+Default selection is Legacy; choice is per-page and disconnected-only. Host
+startup remains inhibited/default Legacy. Browser cannot enable the host owner.
+
+Full-page Chrome/native replay: six Active generations on each backend fixture,
+actual gain/EQ/PTT/MOX gestures, keyed socket loss, reconnect and completed cleanup.
+No parallel legacy TX path. SATP and legacy Opus retained; banked Opus stopped.
+No G2, RF, firmware, FPGA, driver, polling, deployment, commit or push.
+
+Current results: offline-native/managed-pcm-* and managed-pcm-ui/final-*.
+Earlier audited pass: managed-pcm-ui/audit-*.
+Relevant failed UI runs: managed-pcm-ui/failed-* (not current passing evidence).
+All earlier browser-experiment/cancellation-fix evidence remains historical.
+Older READMEs/documents describe those earlier source slices, not this one.
+
+Rerun tests/run-puresignal-managed-pcm-ui.sh using the pinned x86 WDSP build,
+explicit PS_REMOTE_TEMPLATE, PS_REMOTE_BUNDLE, PS_BROWSER_PYTHON/RUNNER/SPEECH/
+RESULTS variables. Build the actual web bundle first. requirements.txt describes
+isolated browser tools. Only the fixture enables shared PCM; never install the
+offline x86 binaries on G2. Physical microphone/TLS runtime/RF remain unqualified.
+
+Source, web tests/assets/styles, actual template, compiled page evidence, native
+inputs and transcripts included. Validate SHA256SUMS after extraction. Short
+user speech clip is local review evidence, not publicly licensed. No upload.

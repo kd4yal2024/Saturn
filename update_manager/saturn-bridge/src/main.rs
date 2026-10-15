@@ -1,6 +1,7 @@
 mod config;
 mod display_spectrum;
 mod fftw_wisdom;
+mod native_build_info;
 mod p2;
 mod radio_model;
 mod rx_counter_v31;
@@ -8,11 +9,28 @@ mod rx_state;
 mod rx_thread;
 mod satp;
 mod satp_control;
+#[cfg(feature = "managed-puresignal")]
+mod shared_backend;
 mod sync_ext;
 mod tci;
 mod tx_audio;
 mod tx_codec;
 mod tx_monitor;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+mod tx_owner_stop;
+#[cfg(all(
+    test,
+    feature = "offline-puresignal-owner-native",
+    not(saturn_bridge_stub_native)
+))]
+use saturn_bridge::puresignal;
+#[cfg(all(
+    test,
+    feature = "offline-puresignal-owner-native",
+    not(saturn_bridge_stub_native)
+))]
+#[path = "../tests/support/native_port.rs"]
+mod ps_native_port;
 mod tx_thread;
 mod wdsp;
 mod xdma;
@@ -23,6 +41,11 @@ mod xdma_rx;
 mod xdma_telemetry;
 mod xdma_tx;
 mod xdma_tx_radio;
+
+// Cargo attaches build.rs native-link metadata to the package library once a
+// library target exists. Retain that dependency for the existing binary FFI.
+// This does not construct or enable the offline PureSignal controller.
+use saturn_bridge as _;
 
 use std::env;
 use std::error::Error;
@@ -379,6 +402,10 @@ fn finish_xdma_probe_command(
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = env::args().skip(1).collect::<Vec<_>>();
+    if args.iter().any(|arg| arg == "--native-build-info") {
+        native_build_info::print();
+        return Ok(());
+    }
     if let Some(result) = fftw_wisdom::handle_cli(&args) {
         return result.map_err(|message| {
             Box::<dyn Error>::from(std::io::Error::new(
@@ -411,6 +438,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = RadioBackend::from_env()
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
     let mut config = BridgeConfig::from_env()?;
+    let owner_value = match std::env::var("SATURN_BRIDGE_TX_OWNER") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(error) => return Err(format!("invalid SATURN_BRIDGE_TX_OWNER: {error}").into()),
+    };
+    let selection = tx_thread::owner_selection::Selection::parse(owner_value.as_deref())?;
+    #[cfg(feature = "managed-puresignal")]
+    if selection == tx_thread::owner_selection::Selection::Shared {
+        let options = tx_thread::production_owner::Options::from_env()?;
+        return shared_backend::run(config, backend, options);
+    }
+    let _ = selection;
     if backend == RadioBackend::Xdma {
         config.rx_ddc_index = xdma_rx::DIRECT_DDC_INDEX as u8;
         config.ddc0_adc = 0;

@@ -13,6 +13,10 @@ use crate::radio_model::{
     AgcMode, DemodMode, NoiseBlankerMode, NoiseReductionMode, Nr2GainMethod, Nr2NpeMethod,
     PureSignalState, RadioModel, WbfmDeemphasis,
 };
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+mod native_owner;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod ps_native;
 
 const WDSP_RX_CHANNEL: i32 = 0;
 const WDSP_TX_CHANNEL: i32 = 1;
@@ -1429,6 +1433,9 @@ const CFC_FREQS: [f64; 10] = [
 pub struct WdspTxEngine {
     channel_id: i32,
     channel_open: bool,
+    lifecycle_managed: bool,
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    owner_lease: Option<native_owner::Lease>,
     mode: DemodMode,
     mic_gain_db: f64,
     filter_low_hz: i32,
@@ -1505,10 +1512,96 @@ pub struct PureSignalDiagnostics {
 }
 
 impl WdspTxEngine {
+    /// Gated shared-owner exchange: exactly one block, with errors propagated
+    /// instead of the legacy queue loop. Reuses the full installed DSP chain.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_render_block(
+        &mut self,
+        samples: &[f32],
+    ) -> Result<Vec<f32>, saturn_bridge::puresignal::Fault> {
+        use saturn_bridge::puresignal::Fault;
+        if !self.tx_active
+            || samples.len() != TX_MIC_SAMPLES_PER_DSP_BLOCK
+            || samples.iter().any(|s| !s.is_finite())
+        {
+            return Err(Fault::InvalidConfig);
+        }
+        self.pending_mic.clear();
+        self.pending_iq.clear();
+        self.last_input_peak = samples.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+        self.total_input_samples = self.total_input_samples.saturating_add(512);
+        for (pair, sample) in self.input_buffer.chunks_exact_mut(2).zip(samples) {
+            pair[0] = f64::from(*sample);
+            pair[1] = 0.;
+        }
+        if self.dexp_initialized && self.dexp_active() {
+            unsafe {
+                xdexp(WDSP_DEXP_ID);
+            }
+        }
+        let mut error = 0;
+        unsafe {
+            fexchange0(
+                self.channel_id,
+                self.input_buffer.as_ptr(),
+                self.output_buffer.as_mut_ptr(),
+                &mut error,
+            );
+        }
+        if error != 0 || self.output_buffer.iter().any(|s| !s.is_finite()) {
+            return Err(Fault::NativeFailure);
+        }
+        self.last_output_peak = self
+            .output_buffer
+            .iter()
+            .fold(0.0f32, |p, s| p.max((*s as f32).abs()));
+        self.total_output_pairs = self
+            .total_output_pairs
+            .saturating_add(WDSP_TX_OUTPUT_SAMPLES as u64);
+        Ok(self.output_buffer.iter().map(|s| *s as f32).collect())
+    }
     pub fn new(model: &RadioModel) -> Self {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        {
+            Self::try_new(model).expect("native TX owner already selected")
+        }
+        #[cfg(not(feature = "offline-puresignal-owner-adapters"))]
+        {
+            Self::new_inner(model, false)
+        }
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn try_new(model: &RadioModel) -> Result<Self, saturn_bridge::puresignal::Fault> {
+        Self::claimed_inner(model, false)
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn new_shared_owner(
+        model: &RadioModel,
+    ) -> Result<Self, saturn_bridge::puresignal::Fault> {
+        Self::claimed_inner(model, true)
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    fn claimed_inner(
+        model: &RadioModel,
+        managed: bool,
+    ) -> Result<Self, saturn_bridge::puresignal::Fault> {
+        // Stubs own no native channel; parallel unit fixtures can remain
+        // independent. Real legacy and managed constructors share ONE lease.
+        #[cfg(not(saturn_bridge_stub_native))]
+        let lease = Some(native_owner::Lease::acquire()?);
+        #[cfg(saturn_bridge_stub_native)]
+        let lease = None;
+        let mut engine = Self::new_inner(model, managed);
+        engine.owner_lease = lease;
+        Ok(engine)
+    }
+    fn new_inner(model: &RadioModel, lifecycle_managed: bool) -> Self {
         let mut engine = Self {
             channel_id: WDSP_TX_CHANNEL,
             channel_open: false,
+            lifecycle_managed,
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            owner_lease: None,
             mode: model.desired.mode,
             mic_gain_db: model.desired.tx_mic_gain_db,
             filter_low_hz: model.desired.tx_filter_low_hz,
@@ -1657,17 +1750,21 @@ impl WdspTxEngine {
             SetTXAPostGenTTFreq(self.channel_id, 700.0, 1900.0);
             SetTXAPostGenRun(self.channel_id, 0);
 
-            SetPSFeedbackRate(self.channel_id, WDSP_TX_IQ_RATE_HZ as i32);
-            SetPSHWPeak(self.channel_id, WDSP_PS_SATURN_HW_PEAK);
-            SetPSMoxDelay(self.channel_id, 0.2);
-            SetPSTXDelay(self.channel_id, 150.0e-9);
-            SetPSLoopDelay(self.channel_id, 0.0);
             SetPSMox(self.channel_id, 0);
-            SetPSControl(self.channel_id, 1, 0, 0, 0);
+            if !self.lifecycle_managed {
+                SetPSFeedbackRate(self.channel_id, WDSP_TX_IQ_RATE_HZ as i32);
+                SetPSHWPeak(self.channel_id, WDSP_PS_SATURN_HW_PEAK);
+                SetPSMoxDelay(self.channel_id, 0.2);
+                SetPSTXDelay(self.channel_id, 150.0e-9);
+                SetPSLoopDelay(self.channel_id, 0.0);
+                SetPSControl(self.channel_id, 1, 0, 0, 0);
+            }
         }
         self.channel_open = true;
         self.apply_dexp();
-        self.apply_pure_signal_enabled(self.pure_signal_enabled);
+        if !self.lifecycle_managed {
+            self.apply_pure_signal_enabled(self.pure_signal_enabled);
+        }
     }
 
     /// Fully close and recreate the native TX channel. This is stronger than
@@ -1690,7 +1787,16 @@ impl WdspTxEngine {
         }
         // `channel_open` is false before assignment, so dropping the old Rust
         // value cannot close the newly opened replacement channel.
-        *self = Self::new(model);
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let lease = self.owner_lease.take();
+        let replacement = Self::new_inner(model, self.lifecycle_managed);
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let replacement = {
+            let mut replacement = replacement;
+            replacement.owner_lease = lease;
+            replacement
+        };
+        *self = replacement;
     }
 
     pub fn sync_model(&mut self, model: &RadioModel) {
@@ -1778,7 +1884,8 @@ impl WdspTxEngine {
             }
         }
 
-        if model.desired.pure_signal_enabled != self.pure_signal_enabled {
+        if !self.lifecycle_managed && model.desired.pure_signal_enabled != self.pure_signal_enabled
+        {
             self.apply_pure_signal_enabled(model.desired.pure_signal_enabled);
         }
 

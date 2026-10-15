@@ -20,6 +20,9 @@ const DISCOVERY_STATE_IDLE: u8 = 2;
 
 /// Socket read timeout; bounds RX-thread latency for stop/discovery checks.
 const RECV_TIMEOUT: Duration = Duration::from_millis(20);
+#[cfg(feature = "managed-puresignal")]
+#[path = "managed_feedback.rs"]
+pub(crate) mod managed_feedback;
 fn discovery_allows_controller(reply: &DiscoveryReply) -> bool {
     reply.state_code == DISCOVERY_STATE_IDLE
 }
@@ -30,6 +33,8 @@ const ALEX_TX_RELAY_BIT: u16 = 0x0800;
 pub enum P2Event {
     HighPriorityFromSdr(HighPriorityFromSdr),
     DdcIq(DdcIqFrame),
+    #[cfg(feature = "managed-puresignal")]
+    ManagedFeedback,
 }
 
 pub struct P2Session {
@@ -45,6 +50,12 @@ pub struct P2Session {
     /// socket. This keeps the RX thread from repeatedly contending for
     /// `receive_lock` while discovery is waiting for a reply.
     discovery_exclusive: AtomicBool,
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    offline_output_fence: Option<Arc<crate::tx_owner_stop::OutputFence>>,
+    #[cfg(feature = "managed-puresignal")]
+    managed_feedback: Mutex<Option<managed_feedback::Managed>>,
+    #[cfg(feature = "managed-puresignal")]
+    managed_acquisition: AtomicBool,
 }
 
 /// Clears `discovery_exclusive` on every exit path of a discovery exchange.
@@ -70,11 +81,106 @@ impl P2Session {
             duc_specific_sequence: AtomicU32::new(0),
             receive_lock: Mutex::new(()),
             discovery_exclusive: AtomicBool::new(false),
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            offline_output_fence: None,
+            #[cfg(feature = "managed-puresignal")]
+            managed_feedback: Mutex::new(None),
+            #[cfg(feature = "managed-puresignal")]
+            managed_acquisition: AtomicBool::new(false),
         })
     }
 
     pub fn client_bind_addr(&self) -> SocketAddr {
         self.config.client_bind_addr
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn bind_shared(
+        config: BridgeConfig,
+        model: &Arc<Mutex<RadioModel>>,
+    ) -> io::Result<Self> {
+        if model.lock_unpoisoned().desired.tx_enabled {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        let mut session = Self::bind(config)?;
+        // Receive-only bootstrap before any client/owner can arm. These are
+        // general/DDC/DUC-specific setup commands, never RF/HP/IQ writes.
+        if !session.bootstrap(model)? {
+            return Err(io::Error::other(
+                "P2 controller lease refused; no shared fallback",
+            ));
+        }
+        let fence = Arc::new(crate::tx_owner_stop::OutputFence::new_open_for_offline_trial());
+        fence.close();
+        session.offline_output_fence = Some(fence);
+        Ok(session)
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn shared_stop_run(&self, model: &RadioModel) -> io::Result<()> {
+        let mut stopped = model.clone();
+        stopped.desired.running = false;
+        self.shared_receive_keepalive(&stopped)
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn shared_receive_keepalive(&self, model: &RadioModel) -> io::Result<()> {
+        let fence = self
+            .offline_output_fence
+            .as_ref()
+            .ok_or(io::ErrorKind::PermissionDenied)?;
+        // A closed-state writer guard serializes this receive-only heartbeat
+        // with conditional reopen. A stale off-model may not unkey a fresh arm.
+        let _closed = match fence.drained() {
+            Ok(Some(guard)) => guard,
+            Ok(None) => return Ok(()),
+            Err(_) if !fence.is_closed() => return Ok(()),
+            Err(_) => return Err(io::Error::other("closed heartbeat fence unavailable")),
+        };
+        let mut receive_model = model.clone();
+        receive_model.desired.tx_enabled = false;
+        receive_model.desired.tx_drive = 0;
+        let mut state =
+            build_high_priority_state(&receive_model, self.config.remote_tx_100w_drive_byte);
+        state.tx = false;
+        state.tx_drive = 0;
+        state.alex_tx_word &= !ALEX_TX_RELAY_BIT;
+        let packet = build_high_priority_to_sdr(&state);
+        let written = self.socket.send_to(
+            &packet,
+            self.target_addr(self.config.port_map.high_priority_to_sdr),
+        )?;
+        if written != packet.len() {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        Ok(())
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn shared_keyed_keepalive(
+        &self,
+        generation: u64,
+        model: &RadioModel,
+    ) -> Result<(), saturn_bridge::puresignal::Fault> {
+        use saturn_bridge::puresignal::Fault;
+        let fence = self
+            .offline_output_fence
+            .as_ref()
+            .ok_or(Fault::TxAuthority)?;
+        let Some(_permit) = fence.enter_key_generation(generation)? else {
+            return Ok(());
+        };
+        let mut state = build_high_priority_state(model, self.config.remote_tx_100w_drive_byte);
+        state.ddc_phase_words[0] = frequency_to_phase_word(model.desired.tx_frequency_hz);
+        state.ddc_phase_words[1] = state.ddc_phase_words[0];
+        let packet = build_high_priority_to_sdr(&state);
+        let written = self
+            .socket
+            .send_to(
+                &packet,
+                self.target_addr(self.config.port_map.high_priority_to_sdr),
+            )
+            .map_err(|_| Fault::TxAuthority)?;
+        if written != packet.len() {
+            return Err(Fault::TxAuthority);
+        }
+        Ok(())
     }
 
     pub fn configure_rx_ddc(
@@ -191,6 +297,8 @@ impl P2Session {
         let rx_period = self.config.high_priority_period;
         let tx_period = rx_period.min(Duration::from_millis(10));
         let tx_100w_drive_byte = self.config.remote_tx_100w_drive_byte;
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let output_fence = self.offline_output_fence.clone();
 
         Ok(thread::spawn(move || {
             let mut prev_tx = false;
@@ -211,7 +319,18 @@ impl P2Session {
 
                 if state.run {
                     let packet = build_high_priority_to_sdr(&state);
+                    #[cfg(feature = "offline-puresignal-owner-adapters")]
+                    let permit = match output_fence.as_ref().map(|f| f.enter()).transpose() {
+                        Ok(permit) => permit,
+                        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                            thread::sleep(tx_period);
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
                     socket.send_to(&packet, target)?;
+                    #[cfg(feature = "offline-puresignal-owner-adapters")]
+                    drop(permit);
                 }
                 thread::sleep(if state.tx { tx_period } else { rx_period });
             }
@@ -220,10 +339,8 @@ impl P2Session {
     }
 
     pub fn send_high_priority(&self, model: &RadioModel) -> io::Result<()> {
-        let packet = build_high_priority_to_sdr(&build_high_priority_state(
-            model,
-            self.config.remote_tx_100w_drive_byte,
-        ));
+        let state = build_high_priority_state(model, self.config.remote_tx_100w_drive_byte);
+        let packet = build_high_priority_to_sdr(&state);
         self.send_packet(
             self.target_addr(self.config.port_map.high_priority_to_sdr),
             &packet,
@@ -233,10 +350,49 @@ impl P2Session {
 
     pub fn recv_event(&self) -> io::Result<Option<P2Event>> {
         let _receive = self.receive_lock.lock_unpoisoned();
+        #[cfg(feature = "managed-puresignal")]
+        let mut managed = self.managed_feedback.lock_unpoisoned();
+        #[cfg(feature = "managed-puresignal")]
+        if let Some(m) = managed.as_mut() {
+            if let Err(error) = self.service_managed_layout(m) {
+                m.fault(saturn_bridge::puresignal::Fault::WrongFormat);
+                return Err(error);
+            }
+        }
+        #[cfg(feature = "managed-puresignal")]
+        let token = managed.as_ref().and_then(|m| m.token());
         let mut buffer = [0u8; 2048];
 
         match self.socket.recv_from(&mut buffer) {
-            Ok((size, source)) => Ok(self.decode_event(&buffer[..size], source.port())),
+            Ok((size, source)) => {
+                #[cfg(feature = "managed-puresignal")]
+                if let Some(m) = managed.as_mut() {
+                    let observed = Instant::now(); // observation before decode/queue
+                    if source.ip() != self.config.radio_command_addr.ip() {
+                        return Ok(None);
+                    }
+                    if self
+                        .config
+                        .port_map
+                        .ddc_index_from_source_port(source.port())
+                        == Some(0)
+                    {
+                        if m.link.desired().scope != token {
+                            return Ok(Some(P2Event::ManagedFeedback));
+                        }
+                        if let Some(stream) = m.stream.as_mut() {
+                            if let Err(fault) = stream.p2(token, &buffer[..size], observed) {
+                                if let Some(scope) = token {
+                                    m.ingress.stop_feedback(scope.output, fault);
+                                }
+                                m.stream = None;
+                            }
+                        }
+                        return Ok(Some(P2Event::ManagedFeedback));
+                    }
+                }
+                Ok(self.decode_event(&buffer[..size], source.port()))
+            }
             Err(error)
                 if error.kind() == io::ErrorKind::WouldBlock
                     || error.kind() == io::ErrorKind::TimedOut =>
@@ -306,7 +462,128 @@ impl P2Session {
     }
 
     fn send_packet(&self, target: SocketAddr, packet: &[u8]) -> io::Result<usize> {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let _permit = self
+            .offline_output_fence
+            .as_ref()
+            .map(|f| f.enter())
+            .transpose()?;
         self.socket.send_to(packet, target)
+    }
+
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_output_fence(&self) -> Option<Arc<crate::tx_owner_stop::OutputFence>> {
+        self.offline_output_fence.clone()
+    }
+    /// Tagged owner output uses the same packet builders, sequence counter and
+    /// socket as normal P2. Untagged HP loop/queued sends remain inhibited.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_iq_generation(&self, generation: u64, iq: &[f32]) -> io::Result<bool> {
+        let fence = self
+            .offline_output_fence
+            .as_ref()
+            .ok_or(io::ErrorKind::PermissionDenied)?;
+        let Some(_permit) = fence.enter_generation(generation)? else {
+            return Ok(false);
+        };
+        self.offline_send_iq_permitted(iq)?;
+        Ok(true)
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    fn offline_send_iq_permitted(&self, iq: &[f32]) -> io::Result<()> {
+        if iq.len() != DUC_IQ_SAMPLES * 2 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let seq = self.duc_iq_sequence.fetch_add(1, Ordering::Relaxed);
+        let packet = build_duc_iq_packet(seq, iq);
+        if self
+            .socket
+            .send_to(&packet, self.target_addr(self.config.port_map.duc_iq))?
+            != packet.len()
+        {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        Ok(())
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_key_generation(
+        &self,
+        generation: u64,
+        model: &RadioModel,
+        iq: &[f32],
+    ) -> Result<bool, saturn_bridge::puresignal::Fault> {
+        use saturn_bridge::puresignal::Fault;
+        let fence = self
+            .offline_output_fence
+            .as_ref()
+            .ok_or(Fault::TxAuthority)?;
+        let Some(_permit) = fence.enter_key_generation(generation)? else {
+            return Ok(false);
+        };
+        let mut state = build_high_priority_state(model, self.config.remote_tx_100w_drive_byte);
+        #[cfg(feature = "managed-puresignal")]
+        if self.managed_acquisition.load(Ordering::Acquire) {
+            state.ddc_phase_words[0] = frequency_to_phase_word(model.desired.tx_frequency_hz);
+            state.ddc_phase_words[1] = state.ddc_phase_words[0];
+        }
+        let packet = build_high_priority_to_sdr(&state);
+        if self
+            .socket
+            .send_to(
+                &packet,
+                self.target_addr(self.config.port_map.high_priority_to_sdr),
+            )
+            .map_err(|_| Fault::TxAuthority)?
+            != packet.len()
+        {
+            return Err(Fault::TxAuthority);
+        }
+        self.offline_send_iq_permitted(iq)
+            .map_err(|_| Fault::TxAuthority)?;
+        Ok(true)
+    }
+
+    /// Stop adapter already holds a drained, closed output permit. No ordinary
+    /// producer uses this bypass; completion proves local UDP sends only.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_unkey_command(&self, model: &RadioModel) -> io::Result<()> {
+        if !self
+            .offline_output_fence
+            .as_ref()
+            .is_some_and(|f| f.is_closed())
+        {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        let mut state = build_high_priority_state(model, self.config.remote_tx_100w_drive_byte);
+        state.tx = false;
+        state.tx_drive = 0;
+        state.alex_tx_word &= !ALEX_TX_RELAY_BIT;
+        let packet = build_high_priority_to_sdr(&state);
+        let written = self.socket.send_to(
+            &packet,
+            self.target_addr(self.config.port_map.high_priority_to_sdr),
+        )?;
+        if written != packet.len() {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        Ok(())
+    }
+
+    /// Only tests may attach a fence; only loopback destinations are accepted.
+    /// Normal bind() never attaches one, even when the feature is compiled.
+    #[cfg(all(test, feature = "offline-puresignal-owner-adapters"))]
+    pub(crate) fn bind_offline_fenced(config: BridgeConfig) -> io::Result<Self> {
+        if !config.radio_command_addr.ip().is_loopback()
+            || !config.client_bind_addr.ip().is_loopback()
+        {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        let mut session = Self::bind(config)?;
+        session.socket.set_nonblocking(true)?;
+        session.offline_output_fence = Some(Arc::new(
+            crate::tx_owner_stop::OutputFence::new_open_for_offline_trial(),
+        ));
+        Ok(session)
     }
 
     pub fn discovery_exclusive_active(&self) -> bool {

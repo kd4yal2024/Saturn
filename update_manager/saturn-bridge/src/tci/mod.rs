@@ -18,6 +18,16 @@ mod client;
 mod command_queue;
 mod outbound;
 mod protocol;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod ps_authorization;
+#[cfg(all(
+    test,
+    feature = "offline-puresignal-owner-native",
+    not(saturn_bridge_stub_native)
+))]
+pub(crate) mod ps_ingress_fixture;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) use crate::tx_thread::ps_media;
 mod rx_codec;
 mod session_pair;
 
@@ -32,9 +42,14 @@ pub(crate) use rx_codec::*;
 pub(crate) use session_pair::*;
 
 pub struct TciFrontend {
+    accept_ready: Arc<AtomicBool>,
+    accept_stop: Arc<AtomicBool>,
     clients: ClientRegistry,
     operator_client_id: Arc<AtomicU64>,
     operator_control_at: Arc<Mutex<Option<Instant>>>,
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[allow(dead_code)] // held for explicit pre-client review installation
+    shared_tx: Arc<Mutex<Option<crate::tx_thread::ps_ingress::SharedIngress>>>,
     drop_count: Arc<AtomicU64>,
     command_queue: TciCommandMailboxReceiver,
     active_connections: Arc<AtomicU64>,
@@ -200,6 +215,22 @@ impl TciFrontend {
         radio_model: Arc<Mutex<RadioModel>>,
         display_spectrum_supported: bool,
     ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
+        Self::bind_inner(config, radio_model, display_spectrum_supported, true)
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn reserve_shared_startup(
+        config: &BridgeConfig,
+        model: Arc<Mutex<RadioModel>>,
+        spectrum: bool,
+    ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
+        Self::bind_inner(config, model, spectrum, false)
+    }
+    fn bind_inner(
+        config: &BridgeConfig,
+        radio_model: Arc<Mutex<RadioModel>>,
+        display_spectrum_supported: bool,
+        accept_clients: bool,
+    ) -> io::Result<(Self, TciCommandMailboxReceiver)> {
         {
             let mut model = radio_model.lock_unpoisoned();
             model.satp.enabled = config.satp_enabled;
@@ -223,6 +254,8 @@ impl TciFrontend {
         let next_client_id = Arc::new(AtomicU64::new(0));
         let operator_client_id = Arc::new(AtomicU64::new(0));
         let operator_control_at = Arc::new(Mutex::new(None));
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let shared_tx = Arc::new(Mutex::new(None));
         let drop_count = Arc::new(AtomicU64::new(0));
         let active_connections = Arc::new(AtomicU64::new(0));
         let rejected_connections = Arc::new(AtomicU64::new(0));
@@ -240,9 +273,15 @@ impl TciFrontend {
         };
 
         let client_registry = clients.clone();
+        let accept_ready = Arc::new(AtomicBool::new(accept_clients));
+        let accept_gate = accept_ready.clone();
+        let accept_stop = Arc::new(AtomicBool::new(false));
+        let accept_ended = accept_stop.clone();
         let next_client = next_client_id.clone();
         let operator_client = operator_client_id.clone();
         let operator_control = operator_control_at.clone();
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let shared_tx_accept = shared_tx.clone();
         let drop_counter = drop_count.clone();
         let active_connection_counter = active_connections.clone();
         let rejected_connection_counter = rejected_connections.clone();
@@ -250,6 +289,13 @@ impl TciFrontend {
         let full_rate_iq_transport_stats = Arc::clone(&full_rate_iq_stats);
         let radio_model = radio_model.clone();
         let handle = thread::spawn(move || loop {
+            if accept_ended.load(Ordering::Acquire) {
+                break;
+            }
+            if !accept_gate.load(Ordering::Acquire) {
+                thread::sleep(Duration::from_millis(2));
+                continue;
+            }
             let mut accepted_connection = false;
             for listener in &listeners {
                 match listener.accept() {
@@ -276,6 +322,8 @@ impl TciFrontend {
                         let clients = client_registry.clone();
                         let operator_client_id = operator_client.clone();
                         let operator_control_at = operator_control.clone();
+                        #[cfg(feature = "offline-puresignal-owner-adapters")]
+                        let shared_tx = shared_tx_accept.clone();
                         let drop_count = drop_counter.clone();
                         let radio_model = radio_model.clone();
                         let tx_codec_runtime_flags = tx_codec_runtime_flags;
@@ -300,6 +348,8 @@ impl TciFrontend {
                                 tx_codec_runtime_flags,
                                 satp_advertisement,
                                 &display,
+                                #[cfg(feature = "offline-puresignal-owner-adapters")]
+                                &shared_tx,
                             );
                             active_connections.fetch_sub(1, Ordering::AcqRel);
                         });
@@ -317,9 +367,13 @@ impl TciFrontend {
         });
 
         let frontend = Self {
+            accept_ready,
+            accept_stop,
             clients,
             operator_client_id,
             operator_control_at,
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            shared_tx,
             drop_count,
             command_queue: command_rx.clone(),
             active_connections,
@@ -338,6 +392,49 @@ impl TciFrontend {
             _accept_thread: JoinGuard { handle },
         };
         Ok((frontend, command_rx))
+    }
+    /// One-time installation before clients. Only explicit shared startup or
+    /// offline fixtures call this; the installed default remains Legacy.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[allow(dead_code)] // not activated by installed startup
+    pub(crate) fn install_shared_tx(
+        &self,
+        ingress: crate::tx_thread::ps_ingress::SharedIngress,
+    ) -> io::Result<()> {
+        if self.accept_ready.load(Ordering::Acquire) {
+            return Err(io::Error::other(
+                "shared owner requires reserved startup before accepting clients",
+            ));
+        }
+        let clients = self
+            .clients
+            .try_lock()
+            .map_err(|_| io::Error::other("TCI registry busy"))?;
+        if !clients.is_empty() {
+            return Err(io::Error::other("TX owner must be selected before clients"));
+        }
+        let mut slot = self.shared_tx.lock_unpoisoned();
+        if slot.is_some() {
+            return Err(io::Error::other("TX owner already selected"));
+        }
+        *slot = Some(ingress);
+        Ok(())
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn admit_shared_clients(&self) -> io::Result<()> {
+        let slot = self.shared_tx.lock_unpoisoned();
+        if slot.as_ref().is_none_or(|s| !s.startup_ready()) {
+            return Err(io::Error::other("shared owner is not configured and clean"));
+        }
+        self.accept_ready.store(true, Ordering::Release);
+        Ok(())
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn shared_operator_ingress(&self) -> ps_authorization::OperatorIngress {
+        ps_authorization::OperatorIngress::from_registry(
+            self.clients.clone(),
+            self.operator_client_id.clone(),
+        )
     }
 
     /// Set the bridge's authoritative TX media-priority state.
@@ -1261,6 +1358,10 @@ impl TciFrontend {
     fn send_text(&self, text: String) {
         self.send_message(OutboundMessage::Text(text));
     }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn publish_shared_control_unavailable(&self, reason: &str) {
+        self.send_text(format!("saturn_shared_control_reject:{reason};"));
+    }
 
     fn send_safety_text(&self, text: String) {
         self.send_message(OutboundMessage::SafetyText(text));
@@ -1312,6 +1413,15 @@ impl TciFrontend {
             self.drop_count.fetch_add(drops, Ordering::Relaxed);
         }
         recipients
+    }
+}
+impl Drop for TciFrontend {
+    fn drop(&mut self) {
+        self.accept_stop.store(true, Ordering::Release);
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(ingress) = self.shared_tx.lock_unpoisoned().as_ref() {
+            ingress.release();
+        }
     }
 }
 

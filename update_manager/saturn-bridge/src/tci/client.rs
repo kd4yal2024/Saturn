@@ -77,6 +77,8 @@ pub(crate) struct DisplayTransport {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ClientState {
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) authorization_live: Arc<std::sync::atomic::AtomicBool>,
     /// Only trusted loopback clients may become the radio operator. Raw TCI
     /// sessions accepted from the LAN are accessory/viewer sessions: they can
     /// observe frequency, mode, meters, and TX state but cannot control RF.
@@ -130,6 +132,8 @@ impl Default for ClientState {
 impl ClientState {
     pub(crate) fn with_tx_codec_runtime_flags(tx_codec_runtime_flags: TxCodecRuntimeFlags) -> Self {
         Self {
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            authorization_live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             operator_eligible: true,
             iq_stream_enabled: false,
             audio_stream_enabled: false,
@@ -397,7 +401,18 @@ pub(crate) fn handle_client(
     tx_codec_runtime_flags: TxCodecRuntimeFlags,
     satp_advertisement: (bool, u16),
     display: &DisplayTransport,
+    #[cfg(feature = "offline-puresignal-owner-adapters")] shared_tx: &Arc<
+        Mutex<Option<crate::tx_thread::ps_ingress::SharedIngress>>,
+    >,
 ) {
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    let tx_codec_runtime_flags = shared_tx
+        .lock_unpoisoned()
+        .as_ref()
+        .map(|s| TxCodecRuntimeFlags {
+            opus_decode_enabled: s.managed_opus_available(),
+        })
+        .unwrap_or(tx_codec_runtime_flags);
     apply_nodelay(&stream, addr, tci_nodelay_enabled(), &NODELAY_STATS);
     // Without nonblocking mode the handshake could block with no deadline, so
     // a socket that cannot be switched is dropped rather than served.
@@ -467,6 +482,21 @@ pub(crate) fn handle_client(
                         .unwrap_or(snapshot.len());
                     snapshot.insert(ready_at, DISPLAY_SPECTRUM_CAPS_MESSAGE.to_string());
                 }
+                #[cfg(feature = "offline-puresignal-owner-adapters")]
+                if let Some(s) = shared_tx
+                    .lock_unpoisoned()
+                    .as_ref()
+                    .filter(|s| s.remote_media_review())
+                {
+                    let ready_at = snapshot
+                        .iter()
+                        .position(|m| m == "ready;")
+                        .unwrap_or(snapshot.len());
+                    snapshot.insert(ready_at, s.remote_media_caps().into());
+                    if let Some(owner) = s.owner_status_message() {
+                        snapshot.insert(ready_at + 1, owner);
+                    }
+                }
                 let drops = enqueue_initial_snapshot(&outbound, snapshot);
                 drop_count.fetch_add(drops, Ordering::Relaxed);
             }
@@ -513,14 +543,28 @@ pub(crate) fn handle_client(
                 for _ in 0..64 {
                     match websocket.read() {
                         Ok(message) => {
-                            if !handle_incoming_message(
+                            #[cfg(feature = "offline-puresignal-owner-adapters")]
+                            let shared = shared_tx.lock_unpoisoned().clone();
+                            #[cfg(feature = "offline-puresignal-owner-adapters")]
+                            let keep = handle_incoming_message_shared(
                                 message,
                                 command_tx,
                                 clients,
                                 operator_client_id,
                                 operator_control_at,
                                 client_id,
-                            ) {
+                                shared.as_ref(),
+                            );
+                            #[cfg(not(feature = "offline-puresignal-owner-adapters"))]
+                            let keep = handle_incoming_message(
+                                message,
+                                command_tx,
+                                clients,
+                                operator_client_id,
+                                operator_control_at,
+                                client_id,
+                            );
+                            if !keep {
                                 client_closed = true;
                                 break;
                             }
@@ -613,6 +657,17 @@ pub(crate) fn handle_client(
 
             drop(sender);
 
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            let shared_disconnect_selected = {
+                let shared = shared_tx.lock_unpoisoned().clone();
+                if let Some(shared) = &shared {
+                    cancel_shared_disconnect(shared, clients, operator_client_id, client_id);
+                }
+                shared.is_some()
+            };
+            #[cfg(not(feature = "offline-puresignal-owner-adapters"))]
+            let shared_disconnect_selected = false;
+
             let disconnect = unregister_client(clients, operator_client_id, client_id);
             if disconnect.was_operator {
                 {
@@ -624,10 +679,14 @@ pub(crate) fn handle_client(
                     model.desired.rx_headphones_enabled = false;
                 }
                 *operator_control_at.lock_unpoisoned() = None;
-                let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+                if !shared_disconnect_selected {
+                    let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+                }
             }
             if disconnect.split_media_loss_forces_rx {
-                let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+                if !shared_disconnect_selected {
+                    let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+                }
             }
             if let Some(peer_id) = disconnect.split_closed_peer {
                 println!(
@@ -703,6 +762,13 @@ pub(crate) fn unregister_client(
         split_media_client_paired_with_operator_in_clients(&clients, current_operator, client_id);
     let split_closed_peer =
         queue_split_media_peer_close_for_control_in_clients(&clients, client_id);
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    if let Some(client) = clients.get(&client_id) {
+        client
+            .state
+            .authorization_live
+            .store(false, Ordering::SeqCst);
+    }
     clients.remove(&client_id);
 
     let was_operator = current_operator == client_id;
@@ -1023,6 +1089,254 @@ pub(crate) fn initial_snapshot_messages(
 }
 
 pub(crate) fn handle_incoming_message(
+    message: Message,
+    command_tx: &impl TciCommandSink,
+    clients: &ClientRegistry,
+    operator_client_id: &Arc<AtomicU64>,
+    operator_control_at: &Arc<Mutex<Option<Instant>>>,
+    client_id: u64,
+) -> bool {
+    handle_incoming_message_inner(
+        message,
+        command_tx,
+        clients,
+        operator_client_id,
+        operator_control_at,
+        client_id,
+    )
+}
+
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) fn cancel_shared_disconnect(
+    shared: &crate::tx_thread::ps_ingress::SharedIngress,
+    clients: &ClientRegistry,
+    operator: &Arc<AtomicU64>,
+    client: u64,
+) {
+    let owner = operator.load(Ordering::SeqCst);
+    if owner == client
+        || split_media_client_paired_with_operator_in_clients(
+            &clients.lock_unpoisoned(),
+            owner,
+            client,
+        )
+    {
+        shared.release();
+    }
+}
+
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) fn handle_incoming_message_shared(
+    message: Message,
+    legacy: &impl TciCommandSink,
+    clients: &ClientRegistry,
+    operator: &Arc<AtomicU64>,
+    control_at: &Arc<Mutex<Option<Instant>>>,
+    client: u64,
+    shared: Option<&crate::tx_thread::ps_ingress::SharedIngress>,
+) -> bool {
+    let Some(shared) = shared else {
+        return handle_incoming_message_inner(
+            message, legacy, clients, operator, control_at, client,
+        );
+    };
+    // Capture once, BEFORE role parsing, decoder work or any mailbox enqueue.
+    let received_at = Instant::now();
+    let capture = shared.capture(received_at);
+    if shared.remote_media_review() {
+        let owner = operator.load(Ordering::SeqCst);
+        let (authorized, permitted_lane, codec) = {
+            let registry = clients.lock_unpoisoned();
+            let live = |id| {
+                registry
+                    .get(&id)
+                    .is_some_and(|c| c.state.authorization_live.load(Ordering::SeqCst))
+            };
+            let paired =
+                split_media_client_paired_with_operator_in_clients(&registry, owner, client);
+            let permitted = split_session_pair_for_client_in_clients(&registry, owner)
+                .map_or(owner == client, |p| p.media_client_id == client);
+            (
+                owner != 0 && live(owner) && live(client) && (owner == client || paired),
+                permitted,
+                // Control owner is authoritative. Codec negotiation may
+                // precede the other lane's handshake; legacy mirrored decoder
+                // state is not this review path's decoder/permission source.
+                registry.get(&owner).map(|c| c.state.tx_codec_active),
+            )
+        };
+        if let Message::Binary(ref bytes) = message {
+            if !authorized {
+                return true;
+            }
+            let result = if capture
+                .as_ref()
+                .is_none_or(|c| !shared.remote_frame_current(c, bytes))
+            {
+                Err(saturn_bridge::puresignal::Fault::GenerationMismatch)
+            } else if !permitted_lane {
+                Err(saturn_bridge::puresignal::Fault::WrongRoute)
+            } else if parse_tci_mic_frame_parts(bytes).is_ok_and(|p| Some(p.codec) != codec) {
+                Err(saturn_bridge::puresignal::Fault::WrongFormat)
+            } else {
+                capture
+                    .as_ref()
+                    .ok_or(saturn_bridge::puresignal::Fault::GenerationMismatch)
+                    .and_then(|c| shared.remote_mic(c, client, bytes))
+            };
+            if let Err(fault) = result {
+                if fault != saturn_bridge::puresignal::Fault::GenerationMismatch {
+                    eprintln!(
+                        "PSG1 media rejected client={client} selected={codec:?} fault={fault:?}"
+                    );
+                }
+                if fault != saturn_bridge::puresignal::Fault::GenerationMismatch
+                    && shared.selected_active(crate::tx_audio::TxAudioSource::Tci)
+                {
+                    if let Some(c) = &capture {
+                        shared.stop_remote(c, fault);
+                    }
+                }
+                send_safety_text_to_client_or_control(
+                    clients,
+                    client,
+                    format!("tx_fault:0,psg1,{fault:?};"),
+                );
+            }
+            return true; // neither legacy decoder nor legacy mic mailbox runs
+        }
+        if let Message::Text(ref text) = message {
+            if authorized
+                && shared.selected_active(crate::tx_audio::TxAudioSource::Tci)
+                && text.split(';').any(|c| {
+                    let name = c
+                        .trim()
+                        .split(':')
+                        .next()
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    matches!(
+                        name.as_str(),
+                        "session_open" | "session_lane" | "tx_codec" | "tx_codec_caps"
+                    )
+                })
+            {
+                shared.stop(saturn_bridge::puresignal::Fault::WrongRoute);
+            }
+        }
+    }
+    if matches!(message, Message::Close(_)) {
+        cancel_shared_disconnect(shared, clients, operator, client);
+    }
+    if !shared.remote_media_review() {
+        if let Message::Binary(ref bytes) = message {
+            let owner = operator.load(Ordering::SeqCst);
+            if owner != client
+                && split_media_client_can_supply_mic(clients, owner, client, received_at)
+            {
+                // Separate TCP lanes have no ordered arm/media generation barrier
+                // in the existing wire format. Do not relabel delayed old media.
+                if shared.selected_active(crate::tx_audio::TxAudioSource::Tci) {
+                    shared.stop(saturn_bridge::puresignal::Fault::WrongRoute);
+                }
+                send_safety_text_to_client_or_control(
+                    clients,
+                    client,
+                    "tx_fault:0,shared_split_media_unqualified;".into(),
+                );
+                return true;
+            }
+            if owner == client
+                || split_media_client_can_supply_mic(clients, owner, client, received_at)
+            {
+                if parse_tci_mic_frame_parts(bytes).is_ok_and(|p| p.codec != TxMicCodec::Pcm) {
+                    if shared.selected_active(crate::tx_audio::TxAudioSource::Tci) {
+                        shared.stop(saturn_bridge::puresignal::Fault::WrongFormat);
+                    }
+                    send_safety_text_to_client_or_control(
+                        clients,
+                        client,
+                        "tx_fault:0,shared_opus_unqualified;".into(),
+                    );
+                    return true;
+                }
+            }
+        }
+    }
+    struct Sink<'a, S> {
+        shared: &'a crate::tx_thread::ps_ingress::SharedIngress,
+        capture: Option<crate::tx_thread::ps_ingress::Capture>,
+        legacy: &'a S,
+        client: u64,
+        configs: std::cell::RefCell<Vec<TciCommand>>,
+        clients: &'a ClientRegistry,
+    }
+    impl<S: TciCommandSink> TciCommandSink for Sink<'_, S> {
+        fn send(&self, command: TciCommand) -> Result<(), std::sync::mpsc::SendError<TciCommand>> {
+            if crate::tx_thread::ps_ingress::is_tx_configuration(&command) {
+                let mut configs = self.configs.borrow_mut();
+                if configs.len() == 64 {
+                    self.shared
+                        .stop(saturn_bridge::puresignal::Fault::QueueOverrun);
+                    // Rejection is reported for the entire retained batch at
+                    // message end, after cancellation invalidated its epoch.
+                    return Err(std::sync::mpsc::SendError(command));
+                }
+                configs.push(command);
+                return Ok(());
+            }
+            if matches!(command, TciCommand::SetTxEnabled(true))
+                && !self.configs.borrow().is_empty()
+            {
+                let batch = self.configs.take();
+                if self
+                    .shared
+                    .configure_batch(self.client, self.capture.as_ref(), &batch)
+                    .is_err()
+                {
+                    return Err(std::sync::mpsc::SendError(command));
+                }
+            }
+            match self
+                .shared
+                .tci(self.client, self.capture.as_ref(), &command)
+            {
+                Ok(true) => Ok(()),
+                Ok(false) => self.legacy.send(command),
+                Err(fault) => {
+                    if !matches!(command, TciCommand::MicAudioFrame(_)) {
+                        send_safety_text_to_client_or_control(
+                            self.clients,
+                            self.client,
+                            format!("tx_fault:0,shared_ingress,{fault:?};"),
+                        );
+                    }
+                    Err(std::sync::mpsc::SendError(command))
+                }
+            }
+        }
+    }
+    let sink = Sink {
+        shared,
+        capture,
+        legacy,
+        client,
+        configs: std::cell::RefCell::new(Vec::new()),
+        clients,
+    };
+    let keep = handle_incoming_message_inner(message, &sink, clients, operator, control_at, client);
+    if let Err(fault) = shared.configure_batch(client, sink.capture.as_ref(), &sink.configs.take())
+    {
+        send_safety_text_to_client_or_control(
+            clients,
+            client,
+            format!("tx_fault:0,shared_config,{fault:?};"),
+        );
+    }
+    keep
+}
+
+fn handle_incoming_message_inner(
     message: Message,
     command_tx: &impl TciCommandSink,
     clients: &ClientRegistry,

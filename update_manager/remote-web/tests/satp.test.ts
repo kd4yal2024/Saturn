@@ -16,6 +16,7 @@ function pttHarness(source: 'tci' | 'satp', ready = true) {
     ws:{readyState:1},moxRequested:false,txEnabled:false,pttRequestId:0,audioStreaming:true};
   const commands: string[]=[]; let micCalls=0;
   const context: any={state,performance:{now:()=>100},satpSourceRequestAt:0,WebSocket:{OPEN:1},TX_LOCAL_REQUEST_PERMIT_MS:1000,
+    managedPcmSelected:()=>false,
     _next:{txUsesBrowserMic,satpTxBlockReason:(s:any)=>satpTxBlockReason(s,100)},
     rfDisabledBlocksTx:()=>false,clientRoleBlocksTx:()=>false,normalizeTxReadyState:()=>true,
     generatedTxSourceActive:()=>false,sendTci:(s:string)=>commands.push(s),

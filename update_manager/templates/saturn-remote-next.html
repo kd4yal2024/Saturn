@@ -7444,6 +7444,16 @@
                       </div>
                       <div class="setup-section" id="setup-tx-puresignal-section">
                         <div class="setup-section-title">PureSignal</div>
+                        <div class="setup-row">
+                          <label class="label" for="managed-pcm-select">TX owner path (review)</label>
+                          <select class="field" id="managed-pcm-select">
+                            <option value="legacy" selected>Legacy — default</option>
+                            <option value="managed">Managed tagged PCM / SATP — opt-in</option>
+                          </select>
+                        </div>
+                        <p class="small">Change while disconnected. Requires a selectable shared-owner Bridge; this browser cannot enable the host owner. Banked Opus is not supported.</p>
+                        <div class="setup-readout" id="managed-pcm-status" role="status" aria-live="polite">Legacy TX selected</div>
+                        <div class="setup-readout" id="managed-pcm-transaction" role="status">No managed settings result</div>
                         <div class="setup-inline-fields">
                           <label class="toggle-field"><span>PureSignal</span><input id="setup-tx-puresignal-enabled" type="checkbox" /></label>
                           <label class="toggle-field"><span>Auto Attenuation</span><input id="setup-tx-puresignal-auto-attenuate" type="checkbox" checked /></label>
@@ -14297,16 +14307,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("setup-tx-puresignal-attenuation-readout").textContent = `${radio.pureSignalAttenuationDb} dB`;
       }
       if ($("setup-tx-puresignal-state")) {
-        $("setup-tx-puresignal-state").textContent = `${state.pureSignalState || "off"}`.toUpperCase();
+        $("setup-tx-puresignal-state").textContent = managedPcmSelected() ? "Native telemetry unavailable" : `${state.pureSignalState || "off"}`.toUpperCase();
       }
       if ($("setup-tx-puresignal-feedback")) {
-        $("setup-tx-puresignal-feedback").textContent = `${state.pureSignalFeedbackLevel || 0}`;
+        $("setup-tx-puresignal-feedback").textContent = managedPcmSelected() ? "Unavailable" : `${state.pureSignalFeedbackLevel || 0}`;
       }
       if ($("setup-tx-puresignal-calibrations")) {
-        $("setup-tx-puresignal-calibrations").textContent = `${state.pureSignalCalibrationCount || 0}`;
+        $("setup-tx-puresignal-calibrations").textContent = managedPcmSelected() ? "Unavailable" : `${state.pureSignalCalibrationCount || 0}`;
       }
       if ($("setup-tx-puresignal-correcting")) {
-        $("setup-tx-puresignal-correcting").textContent = state.pureSignalCorrecting ? "Correcting" : "Bypassed";
+        $("setup-tx-puresignal-correcting").textContent = managedPcmSelected() ? "Unqualified" : state.pureSignalCorrecting ? "Correcting" : "Bypassed";
       }
       const pureSignalTxBusy = state.txPhase !== "rx" || state.moxRequested || state.txEnabled;
       if ($("setup-tx-puresignal-enabled")) {
@@ -17487,7 +17497,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ? (state.txPhase === "keyed" ? "PTT ON AIR" : "PTT HOLD")
           : (txDiagnostic ? "HOLD PTT DIAG" : "HOLD PTT");
         ptt.classList.toggle("active", active && source === "ptt");
-        ptt.disabled = !actions.ptt;
+        ptt.disabled = !actions.ptt || (managedPcmSelected() && !active && managedPcm.status().phase !== "ready");
         ptt.setAttribute("aria-pressed", active && source === "ptt" ? "true" : "false");
         ptt.title = actions.ptt ? "Hold to transmit; release to return to receive" : "Arm TX before holding PTT";
       }
@@ -17498,7 +17508,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ? (moxActive ? "MOX DIAG" : "MOX DIAG")
           : (moxActive ? (state.txPhase === "keyed" ? "MOX ON" : "MOX ARM") : "MOX");
         mox.classList.toggle("active", moxActive);
-        mox.disabled = !actions.mox;
+        mox.disabled = !actions.mox || (managedPcmSelected() && !active && managedPcm.status().phase !== "ready");
         mox.setAttribute("aria-pressed", moxActive ? "true" : "false");
       }
       const lockButton = $("tx-lock-btn");
@@ -18048,11 +18058,33 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       syncMainPinProxies();
     }
 
+    let managedPcmEpoch = 0;
+    const managedPcm = new _next.ManagedPcmSession({
+      now: () => performance.now(),
+      capture: _next.microphoneManagedCapture(() => state.audioInputDeviceId || "", samples => {
+        let peak = 0;
+        for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
+        state.txMicLevel = peak; state.txMicLevelAt = performance.now();
+      }),
+      changed: status => {
+        const label = $("managed-pcm-status"), result = $("managed-pcm-transaction");
+        if (label) { label.textContent = `${status.phase}: ${status.reason}`; label.dataset.phase = status.phase; }
+        if (result) result.textContent = `${status.lastTransaction} · ${status.pendingSettings} pending`;
+        scheduleUiRefresh();
+        if (status.selected && ["fault", "unsupported", "unavailable"].includes(status.phase) && state.moxRequested) {
+          void setPtt(false, { lockAfter: "tx-fault" });
+        }
+      },
+    });
+    function managedPcmSelected() { return managedPcm.status().selected; }
+    window.setInterval(() => managedPcm.tick(), 100);
+
     function sendTci(text) {
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return;
       }
-      state.ws.send(text);
+      if (managedPcmSelected()) managedPcm.sendControl(text);
+      else state.ws.send(text);
     }
 
     function sendBridgeRttPing() {
@@ -18223,6 +18255,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function effectiveTxCodecAdvertisedCaps(caps = state.txCodecAdvertisedCaps) {
+      if (managedPcmSelected()) return ["pcm"];
       if (state.txCodecForcePcmThisSession) {
         return ["pcm"];
       }
@@ -18230,6 +18263,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function sendTxCodecCaps() {
+      if (managedPcmSelected()) return; // negotiated once by the managed controller
       const advertised = effectiveTxCodecAdvertisedCaps();
       state.txCodecRequested = advertised.includes("opus_wb")
         ? "opus_wb"
@@ -18392,7 +18426,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (generatedTxSourceActive()) {
         sendTci("tx_two_tone:0,false;");
       }
-      sendTci(_next.buildAllRadioPrefsCommands(prefs).join(""));
+      const commands = _next.buildAllRadioPrefsCommands(prefs);
+      // Managed TX reads committed host settings; reconnect must not replay
+      // stale TX preferences or an unreviewed generated-source configuration.
+      sendTci((managedPcmSelected() ? commands.filter(c => !_next.managedSettingsMessage(c)) : commands).join(""));
     }
 
     function rxAudioStartCommand() {
@@ -18488,7 +18525,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.sampleRate = restoreSampleRate;
         sendCurrentRadioPrefsToBridge(restorePrefs);
         if (restoreVfoA > 0) {
-          sendTci(`vfo:0,0,${restoreVfoA};dds:0,${restoreVfoA};`);
+          sendTci(managedPcmSelected() ? `dds:0,${restoreVfoA};` : `vfo:0,0,${restoreVfoA};dds:0,${restoreVfoA};`);
         }
         sendTci(`iq_samplerate:${effectiveIqSampleRate()};`);
         if (restoreIq) {
@@ -19412,6 +19449,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function sendEncodedTxOpusFrame(frame, metadata) {
+      if (managedPcmSelected()) return; // old legacy encoder callbacks have no managed authority
       const pending = state.txOpusPendingTimings?.get(metadata.sequence);
       if (!pending) {
         return;
@@ -19585,6 +19623,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function sendTxMicSamples(monoSamples, timing = {}) {
+      if (managedPcmSelected()) return; // no untagged writer beside the sole managed capture
       const receivedAt = Number.isFinite(timing.receivedAt) ? timing.receivedAt : performance.now();
       const txActive = txMicSendAllowed();
       const attemptLogIndex = state.txMicAttemptLogCount || 0;
@@ -19779,6 +19818,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function startMicCapture(requestId) {
+      if (managedPcmSelected()) return false;
       if (state.micCapturing) { return true; }
       resetTxUplinkStats(true);
       const generatedTxSource = generatedTxSourceActive();
@@ -19807,7 +19847,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             recordOperatorFault("Mic worklet failed", "warn");
           }
         }
-        if (state.pttRequestId !== requestId) {
+        if (state.pttRequestId !== requestId || managedPcmSelected()) {
           await micCtx.close();
           if (micStream) {
             micStream.getTracks().forEach((track) => track.stop());
@@ -19949,6 +19989,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function sendTxShutdownIfPossible(clearTwoTone = false) {
+      if (managedPcmSelected()) { managedPcm.release(); return; }
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return;
       }
@@ -19976,7 +20017,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (hadPointerPtt) {
           clearPointerPttTracking();
         }
-        if (!state.moxRequested && !state.txEnabled && !state.micCapturing) {
+        if (!state.moxRequested && !state.txEnabled && !state.micCapturing && !managedPcmSelected()) {
           if (hadKeyboardPtt || hadPointerPtt) updateUi();
           return true;
         }
@@ -20007,6 +20048,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (active === state.moxRequested) { return true; }
       if (active) {
+        if (managedPcmSelected() && (managedPcm.status().phase !== "ready" || generatedTxSourceActive()
+          || (!voiceRequested && state.satp?.source !== "satp"))) {
+          logEvent(`Managed TX blocked: ${managedPcm.status().reason}; generated/two-tone sources are unavailable in this slice`);
+          return false;
+        }
         if (rfDisabledBlocksTx()) {
           logEvent("TX blocked because bridge RF output is disabled");
           recordOperatorFault("RF disabled", "warn");
@@ -20057,6 +20103,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (voiceRequested && generatedTxSourceActive()) {
           sendTci("tx_two_tone:0,false;");
         }
+        if (managedPcmSelected()) {
+          if (!managedPcm.arm(state.satp?.source === "satp" ? "satp" : "tci")) {
+            state.moxRequested = false; state.txLocalRequestActive = false;
+            state.txLocalRequestPermitExpiresAt = 0; recoverRxAfterMox(); updateUi();
+            return false;
+          }
+          logEvent("Managed TX fresh authorized request sent");
+          return true; // capture starts ONLY after the matching fresh generation
+        }
         sendTci("trx:0,true,tci;");
         logEvent("TX MOX command sent");
         if (useMic) {
@@ -20088,6 +20143,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     async function setTwoToneEnabled(enabled) {
+      if (enabled && managedPcmSelected()) {
+        logEvent("Managed two-tone generation is unavailable in this PCM/SATP review slice");
+        updateUi(); return;
+      }
       if (enabled && generatedTxSourceActive()) {
         state.twoToneEnabled = false;
         state.twoTonePttOwned = false;
@@ -20424,6 +20483,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.bridgeReady = false;
         state.remoteClientRole = null;
         state.remoteClientId = null;
+        if (managedPcmSelected()) {
+          managedPcmEpoch = managedPcm.connect(text => ws.send(text), frame => {
+            if (ws !== state.ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 4096) {
+              throw new Error("Managed media transport unavailable/backlogged");
+            }
+            if (ws.client) {
+              const result = ws.client.sendMedia(frame);
+              if (!result.sent) throw new Error("Managed media send refused");
+            } else ws.send(frame);
+          });
+        }
         resetRxAudioCodecTransport();
         lockTx("reconnect", false);
         resetDisplayHistory();
@@ -20432,7 +20502,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         void requestRxAudioCodec(ws);
         requestFullState();
         sendTxCodecCaps();
-        sendTxOpusLabTxAudioToBridgeOnce("socket open");
+        if (!managedPcmSelected()) sendTxOpusLabTxAudioToBridgeOnce("socket open");
         void refreshTxCodecCapabilities();
         startBridgeRttPings();
         void syncWakeLock(true);
@@ -20449,6 +20519,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       ws.onclose = (event) => {
         if (ws !== state.ws) return;
+        managedPcm.disconnect();
         resetRxAudioCodecTransport();
         const closedAt = performance.now();
         const wasTxActive = state.moxRequested || state.txEnabled || state.micCapturing;
@@ -20533,6 +20604,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     window.saturnConnectBridgeDiagnostic = beginBridgeSession;
 
     async function disconnectBridge() {
+      if (managedPcmSelected()) managedPcm.release();
       resetRxAudioCodecTransport();
       state.intentionalDisconnect = true;
       reconnectSupervisor.stop("manual disconnect");
@@ -20555,6 +20627,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.rxHeadphonesEnabled = false;
       state.iqStreaming = false;
       state.ws = null;
+      managedPcm.disconnect();
       state.wsMediaBacklogBytes = 0;
       state.remoteClientRole = null;
       state.remoteClientId = null;
@@ -20582,6 +20655,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function handleTciText(text) {
+      if (managedPcmSelected()) {
+        managedPcm.text(text, managedPcmEpoch);
+        // A rejected old token is not an owner fault. Do not feed that
+        // diagnostic into the legacy fault-to-lock path for current output.
+        text = text.split(";").filter(c => c.trim() !== "tx_fault:0,psg1,GenerationMismatch").join(";");
+        if (text.includes("saturn_tx_owner:shared,")) {
+          const phase = managedPcm.status().ownerPhase;
+          if (phase) text += `;tx_state:0,${phase === "Active" ? "keyed" : phase === "AwaitingKey" ? "armed" : "rx"};`;
+        }
+      }
       handleRxAudioCodecEcho(text);
       // Pairing material stays out of application state, diagnostics and logs.
       text = text.split(";").filter(command => {
@@ -20606,6 +20689,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       const result = _next.applyTciText(text, state);
       syncTciUiSideEffects(previous, result.state, result);
+      if (managedPcmSelected()) managedPcm.setOperator(state.remoteClientRole === "operator");
       if (state.satp && !state.satp.pending && state.satp.source === satpRequestedSource) satpSourceRequestAt = 0;
       if (!previous.satp?.paired && state.satp?.paired) scheduleNextBridgeRttPing();
       if (previous.satp?.source !== "satp" && state.satp?.source === "satp") stopMicCapture();
@@ -20649,7 +20733,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         restoreRxSessionAfterReady(state.connectionGeneration);
       }
-      if (applyTxOpusLabCfcGuard("bridge state")) {
+      if (!managedPcmSelected() && applyTxOpusLabCfcGuard("bridge state")) {
         if (sendTxOpusLabCleanTxAudioToBridge()) {
           persistLocalSettingsFallback(currentRemoteSettings());
           scheduleRemoteSettingsSave();
@@ -22745,6 +22829,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       });
       bindPttButton();
+      $("managed-pcm-select").addEventListener("change", () => {
+        if (state.connected || state.connectPending || state.moxRequested) {
+          $("managed-pcm-select").value = managedPcmSelected() ? "managed" : "legacy";
+          logEvent("Disconnect before changing the TX owner path"); return;
+        }
+        stopMicCapture(); resetTxOpusProducer("TX owner selection");
+        state.pttRequestId += 1; // invalidate unresolved legacy microphone acquisition
+        managedPcm.select($("managed-pcm-select").value === "managed");
+        logEvent(managedPcm.status().reason);
+      });
       bindOperatorStateDetail();
       bindShortcutHelp();
       bindKeyboardTuneControls();

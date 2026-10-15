@@ -27,6 +27,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(feature = "managed-puresignal")]
+pub(crate) mod managed_feedback;
 
 const DEFAULT_DDC_DEVICE: &str = "/dev/xdma0_c2h_0";
 const DEFAULT_FREQUENCY_HZ: u32 = 14_200_000;
@@ -646,6 +648,12 @@ struct FilledRxBuffer {
     len: usize,
     sequence: u64,
     completed_at: Instant,
+    #[cfg(feature = "managed-puresignal")]
+    observed_at: Instant,
+    #[cfg(feature = "managed-puresignal")]
+    feedback_scope: Option<crate::tx_thread::feedback_owner::Scope>,
+    #[cfg(feature = "managed-puresignal")]
+    host_loss_before: bool,
 }
 
 struct OperationalRxBufferPoolState {
@@ -727,6 +735,13 @@ impl OperationalRxBufferPool {
             .ready
             .len()
     }
+    #[cfg(feature = "managed-puresignal")]
+    fn clear_ready(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        while let Some(filled) = state.ready.pop_front() {
+            state.free.push(filled.buffer);
+        }
+    }
 }
 
 fn configure_operational_reader_scheduling() -> Result<(usize, &'static str, i32), XdmaError> {
@@ -757,10 +772,16 @@ fn run_operational_reader(
     pool: Arc<OperationalRxBufferPool>,
     stats: Arc<Mutex<RxCaptureStats>>,
     stop: Arc<AtomicBool>,
+    #[cfg(feature = "managed-puresignal")] gate: Arc<managed_feedback::ReaderGate>,
 ) -> Result<(), XdmaError> {
     let mut sequence = 0u64;
     let mut last_completion = None;
     while !stop.load(Ordering::Relaxed) {
+        #[cfg(feature = "managed-puresignal")]
+        if gate.service_pause() {
+            thread::sleep(FIFO_POLL_INTERVAL);
+            continue;
+        }
         // This non-owning register handle reads only 0x9000. It does not share
         // the control/snapshot mutex, and does not perform RF cleanup on drop.
         let fifo_value = registers.read_register(DDC_FIFO_MONITOR_REGISTER)?;
@@ -800,6 +821,8 @@ fn run_operational_reader(
         };
         let target = buffer.as_mut_slice(read_bytes);
         let read_started = Instant::now();
+        #[cfg(feature = "managed-puresignal")]
+        let feedback_scope = gate.scope();
         let read = dma.read_at(target, 0).map_err(|source| XdmaError::Io {
             action: "could not read operational XDMA DDC receive stream",
             source,
@@ -819,6 +842,12 @@ fn run_operational_reader(
             len: read,
             sequence,
             completed_at,
+            #[cfg(feature = "managed-puresignal")]
+            observed_at: read_started,
+            #[cfg(feature = "managed-puresignal")]
+            feedback_scope,
+            #[cfg(feature = "managed-puresignal")]
+            host_loss_before: dropped_bytes != 0,
         });
         sequence = sequence.wrapping_add(1);
         let mut reader_stats = stats
@@ -852,6 +881,7 @@ fn spawn_operational_reader(
     pool: Arc<OperationalRxBufferPool>,
     stats: Arc<Mutex<RxCaptureStats>>,
     stop: Arc<AtomicBool>,
+    #[cfg(feature = "managed-puresignal")] gate: Arc<managed_feedback::ReaderGate>,
 ) -> Result<(JoinHandle<()>, Receiver<Result<(), XdmaError>>), XdmaError> {
     let (startup_tx, startup_rx) = mpsc::sync_channel(1);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
@@ -869,6 +899,8 @@ fn spawn_operational_reader(
                     pool,
                     stats,
                     thread_stop,
+                    #[cfg(feature = "managed-puresignal")]
+                    gate,
                 );
                 let _ = result_tx.send(result);
             }
@@ -1219,6 +1251,10 @@ pub(crate) struct OperationalRxSession {
     rx_antenna: u8,
     rx_attenuation_db: u8,
     stopped: bool,
+    #[cfg(feature = "managed-puresignal")]
+    reader_gate: Arc<managed_feedback::ReaderGate>,
+    #[cfg(feature = "managed-puresignal")]
+    managed_feedback: Option<managed_feedback::ManagedFeedback>,
 }
 
 pub(crate) struct OperationalRxRead {
@@ -1300,6 +1336,10 @@ impl OperationalRxSession {
             rx_antenna: rx_antenna.clamp(1, 3),
             rx_attenuation_db: rx_attenuation_db.min(31),
             stopped: false,
+            #[cfg(feature = "managed-puresignal")]
+            reader_gate: Arc::new(managed_feedback::ReaderGate::new()),
+            #[cfg(feature = "managed-puresignal")]
+            managed_feedback: None,
         };
         if let Err(error) = session.configure(frequency_hz) {
             let _ = session.stop();
@@ -1313,6 +1353,8 @@ impl OperationalRxSession {
             session.pool.clone(),
             session.reader_stats.clone(),
             session.reader_stop.clone(),
+            #[cfg(feature = "managed-puresignal")]
+            session.reader_gate.clone(),
         ) {
             Ok((reader, result)) => {
                 session.reader = Some(reader);
@@ -1488,6 +1530,8 @@ impl OperationalRxSession {
         &mut self,
         mut iq_samples: Option<&mut Vec<f32>>,
     ) -> Result<OperationalRxRead, XdmaError> {
+        #[cfg(feature = "managed-puresignal")]
+        self.service_managed_feedback()?;
         if let Some(output) = iq_samples.as_deref_mut() {
             output.clear();
         }
@@ -1504,17 +1548,92 @@ impl OperationalRxSession {
             .host_queue_age
             .record(filled.completed_at.elapsed());
 
-        let discontinuity = self
-            .last_dma_sequence
-            .map_or(filled.sequence != 0, |previous| {
-                filled.sequence != previous.wrapping_add(1)
-            });
+        let discontinuity = self.last_dma_sequence.map_or(
+            {
+                #[cfg(feature = "managed-puresignal")]
+                if self.managed_feedback.is_some() {
+                    false
+                } else {
+                    filled.sequence != 0
+                }
+                #[cfg(not(feature = "managed-puresignal"))]
+                {
+                    filled.sequence != 0
+                }
+            },
+            |previous| filled.sequence != previous.wrapping_add(1),
+        );
         if discontinuity {
             self.parser.mark_host_discontinuity();
         }
         self.last_dma_sequence = Some(filled.sequence);
         let samples_before = self.parser.stats.samples;
         let parse_started = Instant::now();
+        #[cfg(feature = "managed-puresignal")]
+        if let Some(managed) = &mut self.managed_feedback {
+            if managed.stream.is_none() && managed.saved.is_some() {
+                self.pool.recycle(filled.buffer);
+                return Ok(OperationalRxRead {
+                    samples_ready: false,
+                    sample_pairs: 0,
+                    requires_drain: self.pool.ready_len() != 0,
+                });
+            }
+            let requested = managed
+                .stream
+                .as_ref()
+                .map(|s| s.scope())
+                .is_some_and(|s| managed.accepts(s));
+            if let Some(stream) = &mut managed.stream {
+                if !requested {
+                    self.pool.recycle(filled.buffer);
+                    return Ok(OperationalRxRead {
+                        samples_ready: false,
+                        sample_pairs: 0,
+                        requires_drain: self.pool.ready_len() != 0,
+                    });
+                }
+                let scope = stream.scope();
+                managed.discarded_iq.clear();
+                let output = iq_samples
+                    .as_deref_mut()
+                    .unwrap_or(&mut managed.discarded_iq);
+                let result = if (discontinuity || filled.host_loss_before)
+                    && filled.feedback_scope == Some(stream.scope())
+                {
+                    Err(saturn_bridge::puresignal::Fault::SequenceGap)
+                } else {
+                    stream.direct(
+                        filled.feedback_scope,
+                        filled.buffer.as_slice(filled.len),
+                        filled.observed_at,
+                        output,
+                    )
+                };
+                let samples = output.len() as u64 / 2;
+                self.parser.stats.samples += samples;
+                self.parser.stats.frames += samples / 8;
+                self.parser
+                    .stats
+                    .parser_latency
+                    .record(parse_started.elapsed());
+                self.pool.recycle(filled.buffer);
+                if let Err(fault) = result {
+                    managed.data_fault(scope, fault);
+                    managed.stream = None; // retain restoration service after a data fault
+                    return Ok(OperationalRxRead {
+                        samples_ready: false,
+                        sample_pairs: 0,
+                        requires_drain: self.pool.ready_len() != 0,
+                    });
+                }
+                return Ok(OperationalRxRead {
+                    samples_ready: samples != 0,
+                    sample_pairs: samples,
+                    requires_drain: self.pool.ready_len() != 0,
+                });
+            }
+        }
         let parse_result = if let Some(output) = iq_samples.as_deref_mut() {
             self.parser.feed(filled.buffer.as_slice(filled.len), output)
         } else {
@@ -2396,6 +2515,12 @@ mod tests {
             len: 4096,
             sequence: 0,
             completed_at: Instant::now(),
+            #[cfg(feature = "managed-puresignal")]
+            observed_at: Instant::now(),
+            #[cfg(feature = "managed-puresignal")]
+            feedback_scope: None,
+            #[cfg(feature = "managed-puresignal")]
+            host_loss_before: false,
         });
         let (second, dropped) = pool.acquire_for_reader().unwrap();
         assert_eq!(dropped, 0);
@@ -2404,6 +2529,12 @@ mod tests {
             len: 8192,
             sequence: 1,
             completed_at: Instant::now(),
+            #[cfg(feature = "managed-puresignal")]
+            observed_at: Instant::now(),
+            #[cfg(feature = "managed-puresignal")]
+            feedback_scope: None,
+            #[cfg(feature = "managed-puresignal")]
+            host_loss_before: false,
         });
 
         let (reclaimed, dropped) = pool.acquire_for_reader().unwrap();
@@ -2413,6 +2544,12 @@ mod tests {
             len: 16_384,
             sequence: 2,
             completed_at: Instant::now(),
+            #[cfg(feature = "managed-puresignal")]
+            observed_at: Instant::now(),
+            #[cfg(feature = "managed-puresignal")]
+            feedback_scope: None,
+            #[cfg(feature = "managed-puresignal")]
+            host_loss_before: false,
         });
         assert_eq!(pool.ready_len(), 2);
         assert_eq!(pool.try_take_ready().unwrap().sequence, 1);

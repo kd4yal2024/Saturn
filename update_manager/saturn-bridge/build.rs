@@ -4,6 +4,25 @@ use std::process::Command;
 
 fn main() {
     emit_build_provenance();
+    println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_SOURCE_PIN");
+    let source_pin = env::var("SATURN_BRIDGE_SOURCE_PIN")
+        .ok()
+        .filter(|value| {
+            value.len() == 64
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+        .unwrap_or_else(|| "unverified".into());
+    println!("cargo:rustc-env=SATURN_BRIDGE_SOURCE_PIN={source_pin}");
+    println!(
+        "cargo:rustc-env=SATURN_BRIDGE_WDSP_ARCHIVE_SHA256={}",
+        native_digest("libwdsp.a")
+    );
+    println!(
+        "cargo:rustc-env=SATURN_BRIDGE_WDSP_HEADER_SHA256={}",
+        native_digest("wdsp.h")
+    );
     println!("cargo:rerun-if-env-changed=SATURN_BRIDGE_STUB_NATIVE");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_rnnr_sbnr)");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_phrot_auto)");
@@ -22,9 +41,16 @@ fn main() {
         PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"));
     println!("cargo:rerun-if-env-changed=SATURN_WDSP_DIR");
     if let Ok(wdsp_dir) = env::var("SATURN_WDSP_DIR") {
+        if env::var_os("CARGO_FEATURE_MANAGED_PURESIGNAL").is_some() {
+            build_ps_observer(Path::new(&wdsp_dir));
+        }
         link_wdsp_dir(PathBuf::from(wdsp_dir));
         return;
     }
+    assert!(
+        env::var_os("CARGO_FEATURE_MANAGED_PURESIGNAL").is_none(),
+        "managed-puresignal requires an explicit reviewed SATURN_WDSP_DIR; no native fallback"
+    );
 
     println!("cargo:rerun-if-env-changed=SATURN_PIHPSDR_DIR");
     let pihpsdr_dir = env::var("SATURN_PIHPSDR_DIR")
@@ -87,6 +113,116 @@ fn main() {
     println!("cargo:rustc-link-lib=fftw3f");
     println!("cargo:rustc-link-lib=m");
     println!("cargo:rustc-link-lib=pthread");
+}
+
+fn build_ps_observer(wdsp: &Path) {
+    println!("cargo:rerun-if-changed=src/wdsp/ps-native-header-pins.txt");
+    for line in include_str!("src/wdsp/ps-native-header-pins.txt").lines() {
+        let (expected, name) = line.split_once("  ").expect("header pin syntax");
+        assert_eq!(
+            native_digest(name),
+            expected,
+            "unreviewed private PS header {name}"
+        );
+    }
+    assert_eq!(
+        native_digest("wdsp.h"),
+        "3dde5a9bfafe7e87f76684eeaab7da22fd5d421c08a8a725b0e2ec3cbd5416af",
+        "unreviewed PS header"
+    );
+    let digest = native_digest("libwdsp.a");
+    assert!(
+        matches!(
+            digest.as_str(),
+            "8b75784e63e1c3c9baba993dc866db0002cee0037d42b0d80b88c059d58bb248"
+                | "f5f21c7cb76df1add17647c15a700f564a7f045e930e84be870333fa6e74973e"
+        ),
+        "unreviewed PS archive"
+    );
+    let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    // CALCC's controls are opaque in public wdsp.h. Derive the layout from the
+    // exact linked source, never an independently hand-maintained offset table.
+    assert_eq!(
+        native_digest("calcc.c"),
+        "1aa8470294640e7109824db7cc41786a02e21a5f0b9cf54bbbcfaf2df190ab66",
+        "unreviewed native measurement control layout"
+    );
+    println!("cargo:rerun-if-changed={}", wdsp.join("calcc.c").display());
+    let calcc = std::fs::read_to_string(wdsp.join("calcc.c")).expect("pinned CALCC source");
+    let begin = calcc
+        .find("typedef struct _psCollection* PSCOLLECTION;")
+        .expect("CALCC prelude");
+    let terminator = "} calcc, * CALCC;";
+    let end = calcc[begin..]
+        .find(terminator)
+        .expect("CALCC declaration end")
+        + begin
+        + terminator.len();
+    std::fs::write(out.join("saturn-calcc-layout.h"), &calcc[begin..end])
+        .expect("CALCC layout extraction");
+    let source = "src/wdsp/ps_observer.c";
+    println!("cargo:rerun-if-changed={source}");
+    println!("cargo:rerun-if-changed=../docs/puresignal/native-abi.h");
+    println!("cargo:rerun-if-env-changed=SATURN_ARM_SYSROOT");
+    let mut compiler = Command::new("cc");
+    if env::var("TARGET") != env::var("HOST") {
+        assert_eq!(env::var("TARGET").unwrap(), "aarch64-unknown-linux-gnu");
+        let sysroot = PathBuf::from(
+            env::var_os("SATURN_ARM_SYSROOT").expect("explicit ARM sysroot required"),
+        );
+        compiler = Command::new("/usr/bin/clang");
+        compiler
+            .arg("--target=aarch64-linux-gnu")
+            .arg(format!("--sysroot={}", sysroot.display()))
+            .arg("-isystem")
+            .arg(sysroot.join("usr/include/aarch64-linux-gnu"));
+    }
+    let status = compiler
+        .args(["-std=gnu11", "-O2", "-Werror", "-I"])
+        .arg(wdsp)
+        .arg("-I")
+        .arg(&out)
+        .args(["-c", source, "-o"])
+        .arg(out.join("observer.o"))
+        .status()
+        .expect("PS observer compiler");
+    assert!(status.success(), "matched PS observer compile failed");
+    assert!(Command::new("ar")
+        .arg("rcs")
+        .arg(out.join("libsaturn_ps_observer.a"))
+        .arg(out.join("observer.o"))
+        .status()
+        .unwrap()
+        .success());
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=saturn_ps_observer");
+}
+
+fn native_digest(name: &str) -> String {
+    // A stub build must never inherit the identity of a real archive merely
+    // because SATURN_WDSP_DIR was left in the environment.
+    if env::var("SATURN_BRIDGE_STUB_NATIVE")
+        .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+    {
+        return "stub".into();
+    }
+    let Some(directory) = env::var_os("SATURN_WDSP_DIR") else {
+        return "unverified".into();
+    };
+    let path = PathBuf::from(directory).join(name);
+    let Ok(output) = Command::new("sha256sum").arg(&path).output() else {
+        return "unverified".into();
+    };
+    if !output.status.success() {
+        return "unverified".into();
+    }
+    println!("cargo:rerun-if-changed={}", path.display());
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .unwrap_or("unverified")
+        .into()
 }
 
 fn emit_build_provenance() {

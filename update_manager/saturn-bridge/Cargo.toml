@@ -4,6 +4,17 @@ version = "0.1.0"
 edition = "2021"
 build = "build.rs"
 
+[features]
+# Review-only offline experiment. No production caller selects this policy.
+offline-puresignal-policy-proposal = []
+offline-puresignal-tx-lifecycle = ["offline-puresignal-policy-proposal"]
+# Stop-boundary review against real UDP/file-backed output methods. No live wiring.
+offline-puresignal-owner-adapters = ["offline-puresignal-tx-lifecycle"]
+offline-puresignal-owner-native = ["offline-puresignal-owner-adapters"]
+# Explicit host integration; never selected by default. Requires the pinned
+# native observer/archive and an explicit acquisition/admission contract.
+managed-puresignal = ["offline-puresignal-owner-native"]
+
 [dependencies]
 libc = "0.2"
 hmac = "0.12"
