@@ -1044,6 +1044,7 @@ write_config 1
   validation_stop_record
   # Two validations of the same commit with the same label in the same second must not share a control directory: the second would
   # read the first one's finished status instead of its own.
+  # shellcheck disable=SC2317,SC2329  # called by validation_start, not here
   date(){ printf '20990101T000000Z\n'; }
   export SATURN_TEST_VALIDATOR_FAIL_COMMITS="$NEW_COMMIT"
   validation_start reconcile "$NEW_COMMIT"
