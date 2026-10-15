@@ -373,7 +373,12 @@ mod measurement_tests {
         };
         assert_eq!(request.duration_ns, 300_000_000);
         assert!(request.credential.valid());
-        while client.diagnostics.iter().all(|s| !s.contains(",queued;")) {
+        while !client.diagnostics.iter().any(|s| s.contains(",queued;"))
+            || !client
+                .diagnostics
+                .iter()
+                .any(|s| s.starts_with("saturn_ps_measurement_caps:0,true,1000,rx-bypass,"))
+        {
             client.drain();
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(1));
@@ -382,6 +387,12 @@ mod measurement_tests {
             .diagnostics
             .iter()
             .any(|s| s.starts_with("saturn_ps_measurement_caps:0,true,1000,rx-bypass,")));
+        // Connection bookkeeping still uses the ordinary control mailbox;
+        // the diagnostic must not enqueue a legacy TX command there.
+        assert!(matches!(
+            socket.legacy.try_recv(),
+            Ok(TciCommand::ClientConnected)
+        ));
         assert!(socket.legacy.try_recv().is_err());
         drop(request);
         client.close();

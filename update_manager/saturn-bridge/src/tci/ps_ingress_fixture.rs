@@ -252,21 +252,25 @@ impl SocketClient {
         self.socket.get_mut().set_nonblocking(true).unwrap();
         for _ in 0..128 {
             match self.socket.read() {
-                Ok(Message::Text(text)) if text.starts_with("saturn_ps_measurement") => {
-                    self.diagnostics.push(text.to_string());
-                }
-                Ok(Message::Text(text)) if text.starts_with("saturn_tx_generation:psg1,") => {
-                    let value = text.trim_end_matches(';').split(',').nth(1).unwrap();
-                    self.media_token = if value == "off" {
-                        None
-                    } else {
-                        Some(std::array::from_fn(|i| {
-                            u8::from_str_radix(&value[i * 2..i * 2 + 2], 16).unwrap()
-                        }))
-                    };
-                }
-                Ok(Message::Text(text)) if text.starts_with("tx_config:") => {
-                    self.transactions.push(text.to_string());
+                Ok(Message::Text(text)) => {
+                    // The real snapshot may batch multiple TCI commands in
+                    // one WebSocket message. Observe each command, as clients do.
+                    for command in text.split(';').filter(|s| !s.is_empty()) {
+                        if command.starts_with("saturn_ps_measurement") {
+                            self.diagnostics.push(format!("{command};"));
+                        } else if command.starts_with("saturn_tx_generation:psg1,") {
+                            let value = command.split(',').nth(1).unwrap();
+                            self.media_token = if value == "off" {
+                                None
+                            } else {
+                                Some(std::array::from_fn(|i| {
+                                    u8::from_str_radix(&value[i * 2..i * 2 + 2], 16).unwrap()
+                                }))
+                            };
+                        } else if command.starts_with("tx_config:") {
+                            self.transactions.push(format!("{command};"));
+                        }
+                    }
                 }
                 Ok(_) => {}
                 Err(tungstenite::Error::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {
