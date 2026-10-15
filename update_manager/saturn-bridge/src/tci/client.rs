@@ -496,6 +496,17 @@ pub(crate) fn handle_client(
                     if let Some(owner) = s.owner_status_message() {
                         snapshot.insert(ready_at + 1, owner);
                     }
+                    snapshot.insert(
+                        ready_at + 1,
+                        format!(
+                            "saturn_ps_measurement_caps:0,{},{},rx-bypass,{},{},{};",
+                            s.measurement_only_mode(),
+                            crate::tx_thread::ps_measurement::MAX_DURATION_MS,
+                            env!("SATURN_BRIDGE_SOURCE_PIN"),
+                            env!("SATURN_BRIDGE_WDSP_ARCHIVE_SHA256"),
+                            s.measurement_frequency_hz()
+                        ),
+                    );
                 }
                 let drops = enqueue_initial_snapshot(&outbound, snapshot);
                 drop_count.fetch_add(drops, Ordering::Relaxed);
@@ -1143,6 +1154,11 @@ pub(crate) fn handle_incoming_message_shared(
     // Capture once, BEFORE role parsing, decoder work or any mailbox enqueue.
     let received_at = Instant::now();
     let capture = shared.capture(received_at);
+    if let Message::Text(ref text) = message {
+        if shared.measurement_message(client, text.as_ref(), capture.as_ref()) {
+            return true;
+        }
+    }
     if shared.remote_media_review() {
         let owner = operator.load(Ordering::SeqCst);
         let (authorized, permitted_lane, codec) = {

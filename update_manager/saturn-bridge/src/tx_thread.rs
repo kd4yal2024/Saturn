@@ -30,6 +30,8 @@ pub(crate) mod production_owner;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod ps_ingress;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod ps_measurement;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod ps_media;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod ps_owner_loop;

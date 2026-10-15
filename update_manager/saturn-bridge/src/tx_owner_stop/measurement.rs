@@ -41,6 +41,16 @@ fn recorder(capacity: usize) -> MeasurementRecorder {
 #[test]
 #[ignore = "serial matched-native synthetic diagnostic; loopback/ordinary files only"]
 fn measurement_only_actual_acquisition_owner_native_both_backends() {
+    run_measurement_only(false);
+}
+
+#[test]
+#[ignore = "serial real-native explicit control-handler diagnostic; loopback/files only"]
+fn measurement_only_actual_control_handler_native_both_backends() {
+    run_measurement_only(true);
+}
+
+fn run_measurement_only(wire: bool) {
     unsafe extern "C" {
         fn fftw_set_timelimit(seconds: f64);
     }
@@ -61,6 +71,11 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
             "cancel-queued",
             "disconnect-queued",
         ] {
+            // Recorder-capacity injection remains in the typed fixture. The
+            // live entry uses a fixed bounded capacity, never a client value.
+            if wire && case == "queue" {
+                continue;
+            }
             let p2 = (backend == Backend::P2).then(P2Fixture::new);
             let direct = (backend == Backend::DirectXdma).then(DirectFixture::new);
             let mut rx = direct.as_ref().map(|f| {
@@ -127,6 +142,32 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
                 },
             )
             .unwrap();
+            let export_directory = wire.then(crate::tx_thread::ps_measurement::tests::directory);
+            if let Some(directory) = &export_directory {
+                ingress
+                    .enable_measurement_only(
+                        crate::tx_thread::ps_measurement::Host::open(
+                            directory,
+                            m.desired.tx_frequency_hz,
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+            let (legacy, legacy_rx) = std::sync::mpsc::channel();
+            let control_at = Arc::new(Mutex::new(None));
+            let dispatch_as = |client, text: &str| {
+                assert!(crate::tci::handle_incoming_message_shared(
+                    tungstenite::Message::Text(text.into()),
+                    &legacy,
+                    &clients,
+                    &operator,
+                    &control_at,
+                    client,
+                    Some(&ingress)
+                ));
+            };
+            let dispatch = |text: &str| dispatch_as(7, text);
             if let Some(p) = &p2 {
                 p.session
                     .attach_managed_feedback(
@@ -167,6 +208,7 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
             let mut fresh_rearm = false;
             let mut snapshot_json = None;
             let mut queued_at = None;
+            let mut capture_id = 1;
             r.run(&AtomicBool::new(false), |r, now| {
                 assert!(now < 8_000_000_000, "diagnostic timeout {backend:?} {case} {:?}", r.life.status());
                 if let Some(p) = &p2 { p.service().unwrap(); p.drain_output(); }
@@ -189,8 +231,14 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
                     }
                     // Ordinary trx is not sufficient with PS disabled.
                     assert!(!m.desired.pure_signal_enabled);
-                    ingress.measurement_only(7, &capture, 600_000_000,
-                        recorder(if case == "queue" { 1 } else { 256 })).unwrap();
+                    if wire {
+                        dispatch("trx:0,true;");
+                        assert!(legacy_rx.try_recv().is_err(), "diagnostic PTT escaped to legacy");
+                        dispatch("saturn_ps_measurement:0,start,600;");
+                    } else {
+                        ingress.measurement_only(7, &capture, 600_000_000,
+                            recorder(if case == "queue" { 1 } else { 256 })).unwrap();
+                    }
                     queued_at = Some(now);
                     match case {
                         "delayed-request" => std::thread::sleep(Duration::from_millis(180)),
@@ -223,6 +271,10 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
                         next_mic = now + 10_000_000;
                     }
                     if s.phase == Phase::Active {
+                        if let Some(files) = &direct {
+                            assert_eq!(files.read(crate::xdma::ALEX_RX_FILTER_REGISTER) & 0xffff,
+                                0x1800, "actual MeasurementOnly key must select external RX BYPASS");
+                        }
                         let start = *active_at.get_or_insert(now);
                         records = r.life.measurement_records().unwrap().records().len();
                         if case != "missing" && now >= next_feedback && !injected {
@@ -282,16 +334,28 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
                     assert_eq!(s.primary_fault, expected_fault, "wrong stop reason for {case}");
                     assert!(link.restored().unwrap());
                     assert!(s.cleanup_completed_ns.is_some());
-                    let evidence = r.life.take_measurement_records().unwrap().unwrap();
-                    if case != "missing" { assert!(!evidence.records().is_empty()); }
-                    assert!(evidence.records().iter().all(|b| b.native_state.disabled_verified()
-                        && b.overload == OverloadQualification::Unknown));
+                    let exported = if wire {
+                        assert!(r.life.measurement_records().is_none(), "completed evidence not handed off");
+                        dispatch_as(if case == "disconnect" { 8 } else { 7 },
+                            &format!("saturn_ps_measurement:0,export,{capture_id};"));
+                        let path=export_directory.as_ref().unwrap().join(format!("measurement-{capture_id}-1.json"));
+                        let json=std::fs::read_to_string(path).unwrap();
+                        if case != "missing" { assert!(!json.contains("\"captures\":[]")); }
+                        assert!(json.contains("\"externalCouplingDb\":null"));
+                        json
+                    } else {
+                        let evidence = r.life.take_measurement_records().unwrap().unwrap();
+                        if case != "missing" { assert!(!evidence.records().is_empty()); }
+                        assert!(evidence.records().iter().all(|b| b.native_state.disabled_verified()
+                            && b.overload == OverloadQualification::Unknown));
+                        if case == "queue" { assert!(evidence.overflow_record().is_some()); }
+                        evidence.export_json()
+                    };
                     let audit = r.life.offline_native_snapshot(|n| n.audit());
                     assert_eq!(audit.feedback_blocks, 0, "diagnostic called pscc fitting");
                     assert!(audit.exchanges > 0 && audit.recreations >= 2);
                     assert!(r.counters.iq_packets > 0, "no actual backend output control");
-                    if case == "queue" { assert!(evidence.overflow_record().is_some()); }
-                    snapshot_json = Some(evidence.export_json());
+                    snapshot_json = Some(exported);
                     let exported = snapshot_json.as_ref().unwrap();
                     assert!(exported.contains("\"captureFinished\":true"));
                     assert!(!exported.contains("\"cleanupCompletedNs\":null"));
@@ -303,7 +367,12 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
                     if case == "release" && !fresh_rearm {
                         assert_eq!(s.primary_fault, None);
                         let capture = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
-                        ingress.measurement_only(7, &capture, 200_000_000, recorder(256)).unwrap();
+                        if wire {
+                            capture_id += 1;
+                            dispatch("saturn_ps_measurement:0,start,200;");
+                        } else {
+                            ingress.measurement_only(7, &capture, 200_000_000, recorder(256)).unwrap();
+                        }
                         fresh_rearm = true; active_at = None; injected = false;
                         next_mic = now; next_feedback = now; wave = Wave::new();
                     } else {
@@ -323,7 +392,8 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
             }
             // Optional preserved synthetic evidence, after completed cleanup.
             // Never overwrite an earlier run or write from an active TX turn.
-            if let (Some(directory), Some(json)) = (
+            if let (false, Some(directory), Some(json)) = (
+                wire,
                 std::env::var_os("SATURN_MEASUREMENT_EVIDENCE_DIR"),
                 snapshot_json,
             ) {
@@ -337,7 +407,7 @@ fn measurement_only_actual_acquisition_owner_native_both_backends() {
                     .unwrap();
                 file.write_all(json.as_bytes()).unwrap();
             }
-            println!("MeasurementOnly {backend:?} case={case} records={records} fit_calls=0 correction=false cleanup=complete fresh_rearm={fresh_rearm} unknown_overload=true synthetic_not_RF_IMD=true");
+            println!("MeasurementOnly {backend:?} control_handler={wire} case={case} records={records} fit_calls=0 correction=false cleanup=complete fresh_rearm={fresh_rearm} unknown_overload=true synthetic_not_RF_IMD=true");
         }
     }
 }

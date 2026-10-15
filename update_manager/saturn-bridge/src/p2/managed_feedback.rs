@@ -193,9 +193,16 @@ pub(crate) mod tests {
         }
         pub(crate) fn drain_output(&self) {
             let mut bytes = [0; 2048];
-            for socket in [&self.hp, &self.duc] {
-                while socket.recv(&mut bytes).is_ok() {}
+            while let Ok(n) = self.hp.recv(&mut bytes) {
+                if n == 1444 && bytes[4] & 2 != 0 {
+                    assert_eq!(
+                        &bytes[1434..1436],
+                        &[0x18, 0x00],
+                        "actual shared key/keepalive must select external RX BYPASS"
+                    );
+                }
             }
+            while self.duc.recv(&mut bytes).is_ok() {}
         }
     }
     #[test]

@@ -52,6 +52,7 @@ pub(super) struct Saved {
     phase0: u32,
     phase1: u32,
     adc_control: u32,
+    rx_filter: u32,
 }
 pub(crate) struct ManagedFeedback {
     link: Link,
@@ -136,6 +137,7 @@ impl OperationalRxSession {
                         phase0: regs.read_register(0)?,
                         phase1: regs.read_register(4)?,
                         adc_control: regs.read_register(ADC_ATTENUATION_REGISTER)?,
+                        rx_filter: regs.read_register(ALEX_RX_FILTER_REGISTER)?,
                     };
                     if desired.scope.is_some() && saved.rate != direct_ddc_rate_word() {
                         return Err(XdmaError::Incompatible(
@@ -173,6 +175,15 @@ impl OperationalRxSession {
                 (saved.adc_control & !(31 << 5)) | (u32::from(scope.attenuation_db) << 5)
             });
             regs.write_register(ADC_ATTENUATION_REGISTER, adc_control)?;
+            // This host path supports external feedback on RX BYPASS only.
+            // AXILite_Alex_SPI.v / saturnregisters.c define RX1 bit 11 as
+            // PS sample select and bit 12 as BPF bypass. Preserve RX2, but
+            // remove RX1 band filters, LNA, EXT1 and transverter selection.
+            // Selecting DDC0's ADC alone does NOT select this physical input.
+            let rx_filter = desired.scope.map_or(saved.rx_filter, |_| {
+                (saved.rx_filter & 0xffff_0000) | 0x1800
+            });
+            regs.write_register(ALEX_RX_FILTER_REGISTER, rx_filter)?;
             regs.write_register(DDC_INPUT_SELECT_REGISTER, input)?;
             #[cfg(test)]
             if let Some(hook) = managed.before_readback.take() {
@@ -183,6 +194,7 @@ impl OperationalRxSession {
                 || regs.read_register(0)? != phase0
                 || regs.read_register(4)? != phase1
                 || regs.read_register(ADC_ATTENUATION_REGISTER)? != adc_control
+                || regs.read_register(ALEX_RX_FILTER_REGISTER)? != rx_filter
             {
                 return Err(XdmaError::Incompatible(
                     "managed feedback layout readback mismatch".into(),
@@ -216,6 +228,7 @@ impl OperationalRxSession {
                     (0, saved.phase0),
                     (4, saved.phase1),
                     (ADC_ATTENUATION_REGISTER, saved.adc_control),
+                    (ALEX_RX_FILTER_REGISTER, saved.rx_filter),
                     (DDC_RATE_REGISTER, saved.rate),
                     (DDC_INPUT_SELECT_REGISTER, saved.input),
                 ] {
@@ -372,6 +385,7 @@ pub(crate) mod tests {
         files.write(0, initial.1);
         files.write(4, initial.2);
         files.write(ADC_ATTENUATION_REGISTER, 0xabcde);
+        files.write(ALEX_RX_FILTER_REGISTER, 0x1234_4218);
         let mut rx = session(&files.register_path());
         let link = Link::new();
         let (ingress, deliveries) = collector();
@@ -401,6 +415,7 @@ pub(crate) mod tests {
             files.read(ADC_ATTENUATION_REGISTER),
             (0xabcde & !(31 << 5)) | (9 << 5)
         );
+        assert_eq!(files.read(ALEX_RX_FILTER_REGISTER), 0x1234_1800);
         // Partial data cannot refresh its age when the rest of a DMA read arrives.
         let bytes = direct_frames(256);
         let mut iq = Vec::new();
@@ -445,6 +460,7 @@ pub(crate) mod tests {
             initial
         );
         assert_eq!(files.read(ADC_ATTENUATION_REGISTER), 0xabcde);
+        assert_eq!(files.read(ALEX_RX_FILTER_REGISTER), 0x1234_4218);
         // A fresh scope accepts no old scope buffered bytes or partial state.
         let fresh = scope(2);
         link.request(Some(fresh)).unwrap();
@@ -498,6 +514,38 @@ pub(crate) mod tests {
         assert!(rx.reader_gate.service_pause());
         assert!(link.restored().is_err());
     }
+    #[test]
+    fn external_bypass_readback_failure_blocks_key_and_restores_original_route() {
+        use crate::{
+            tx_thread::feedback_owner::tests::{collector, scope},
+            xdma_tx_radio::offline_fixture::DirectFixture,
+        };
+        let files = DirectFixture::new();
+        files.write(DDC_RATE_REGISTER, direct_ddc_rate_word());
+        files.write(DDC_INPUT_SELECT_REGISTER, DDC_STREAM_ENABLE_BIT);
+        files.write(ALEX_RX_FILTER_REGISTER, 0x1234_4218);
+        let mut rx = session(&files.register_path());
+        let link = Link::new();
+        let (ingress, _) = collector();
+        rx.attach_managed_feedback(link.clone(), ingress, Instant::now())
+            .unwrap();
+        let file = OpenOptions::new()
+            .write(true)
+            .open(files.register_path())
+            .unwrap();
+        rx.managed_feedback.as_mut().unwrap().before_readback = Some(Box::new(move || {
+            file.write_all_at(&0x1234_1000u32.to_le_bytes(), ALEX_RX_FILTER_REGISTER)
+                .unwrap();
+        }));
+        link.request(Some(scope(1))).unwrap();
+        assert!(service(&mut rx).is_err());
+        assert!(link.prepared(scope(1).output).is_err());
+        assert!(link.restored().is_err());
+        assert!(rx.reader_gate.service_pause());
+        assert_eq!(files.read(ALEX_RX_FILTER_REGISTER), 0x1234_4218);
+        assert_eq!(files.read(DDC_RATE_REGISTER), direct_ddc_rate_word());
+    }
+
     #[test]
     fn operational_readback_mismatch_best_effort_restore_is_not_completion() {
         use crate::{

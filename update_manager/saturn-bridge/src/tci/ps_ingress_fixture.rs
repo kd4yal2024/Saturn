@@ -16,6 +16,7 @@ pub(crate) struct SocketClient {
     worker: Option<JoinHandle<()>>,
     pub(crate) transactions: Vec<String>,
     pub(crate) media_token: Option<[u8; 16]>,
+    pub(crate) diagnostics: Vec<String>,
 }
 impl SocketFixture {
     /// Real external browser ingress, test-only and loopback-only. No service,
@@ -218,6 +219,7 @@ impl SocketFixture {
             worker: Some(worker),
             transactions: Vec::new(),
             media_token: None,
+            diagnostics: Vec::new(),
         }
     }
 }
@@ -250,6 +252,9 @@ impl SocketClient {
         self.socket.get_mut().set_nonblocking(true).unwrap();
         for _ in 0..128 {
             match self.socket.read() {
+                Ok(Message::Text(text)) if text.starts_with("saturn_ps_measurement") => {
+                    self.diagnostics.push(text.to_string());
+                }
                 Ok(Message::Text(text)) if text.starts_with("saturn_tx_generation:psg1,") => {
                     let value = text.trim_end_matches(';').split(',').nth(1).unwrap();
                     self.media_token = if value == "off" {

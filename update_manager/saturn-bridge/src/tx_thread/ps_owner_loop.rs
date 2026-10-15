@@ -216,6 +216,7 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     ingress: Option<super::ps_ingress::SharedIngress>,
     installed: Option<(RadioModel, Config)>,
     settings_epoch: Arc<SettingsEpoch>,
+    measurement_ticket: Option<super::ps_measurement::Ticket>,
 }
 impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
     /// Exclusive channel construction for the selected shared owner. No
@@ -281,6 +282,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             ingress: None,
             installed: None,
             settings_epoch,
+            measurement_ticket: None,
         })
     }
     pub(crate) fn cancel_handle(&mut self) -> Cancel {
@@ -304,6 +306,13 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 self.installed.clone(),
                 self.selected,
             );
+        }
+        if self
+            .measurement_ticket
+            .as_ref()
+            .is_some_and(|t| t.service(&mut self.life))
+        {
+            self.measurement_ticket = None;
         }
     }
     #[cfg(test)]
@@ -388,6 +397,13 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
     fn command(&mut self, command: TxCommand, now: u64) -> Result<(), Fault> {
         match command {
             TxCommand::PureSignalAuthorizedArm(arm) => {
+                if self
+                    .ingress
+                    .as_ref()
+                    .is_some_and(|i| i.measurement_only_mode())
+                {
+                    return Err(Fault::InvalidConfig);
+                }
                 if !self.configured
                     || self.pending_config.is_some()
                     || (self.selected == TxAudioSource::Satp
@@ -417,53 +433,90 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 self.next_mic = now;
                 self.next_iq = now;
             }
-            TxCommand::MeasurementOnly(request) => {
-                if !self.configured
-                    || self.pending_config.is_some()
-                    || self.life.status().phase != Phase::ReadyOff
-                    || (self.selected == TxAudioSource::Satp
-                        && self.satp_prepared != Some(self.life.status().stop_id))
-                {
-                    return Err(Fault::CleanupPending);
-                }
-                let requested_ns = request
-                    .requested_at
-                    .checked_duration_since(self.origin)
-                    .and_then(|d| u64::try_from(d.as_nanos()).ok())
-                    .ok_or(Fault::FutureObservation)?;
-                if requested_ns > now || now - requested_ns > self.timing.mic_age_ns {
-                    return Err(Fault::Stale);
-                }
-                let deadline = requested_ns
-                    .checked_add(request.duration_ns)
-                    .ok_or(Fault::InvalidConfig)?;
-                let remaining = deadline
-                    .checked_sub(now)
-                    .filter(|d| *d != 0)
-                    .ok_or(Fault::Stale)?;
-                let action = self.life.offline_owner().authorize(request.credential)?;
-                self.life
-                    .fresh_measurement_action(action, remaining, request.recorder, now)?;
-                self.cancel_handle().invalidate_settings();
-                self.discard_local();
-                if self.selected == TxAudioSource::Satp {
-                    let stamp = self.life.offline_owner().output_stamp()?;
-                    if let Err(fault) = self
-                        .satp
-                        .as_mut()
-                        .ok_or(Fault::NativeUnverified)?
-                        .bind(stamp)
+            TxCommand::MeasurementOnly(mut request) => {
+                let ticket = request.diagnostic.take();
+                let result = (|| {
+                    if !self.configured
+                        || self.pending_config.is_some()
+                        || self.life.status().phase != Phase::ReadyOff
+                        || (self.selected == TxAudioSource::Satp
+                            && self.satp_prepared != Some(self.life.status().stop_id))
                     {
-                        self.fault(fault, now);
+                        return Err(Fault::CleanupPending);
+                    }
+                    let requested_ns = request
+                        .requested_at
+                        .checked_duration_since(self.origin)
+                        .and_then(|d| u64::try_from(d.as_nanos()).ok())
+                        .ok_or(Fault::FutureObservation)?;
+                    if requested_ns > now || now - requested_ns > self.timing.mic_age_ns {
+                        return Err(Fault::Stale);
+                    }
+                    let deadline = requested_ns
+                        .checked_add(request.duration_ns)
+                        .ok_or(Fault::InvalidConfig)?;
+                    let remaining = deadline
+                        .checked_sub(now)
+                        .filter(|d| *d != 0)
+                        .ok_or(Fault::Stale)?;
+                    let action = self.life.offline_owner().authorize(request.credential)?;
+                    self.life
+                        .fresh_measurement_action(action, remaining, request.recorder, now)?;
+                    self.cancel_handle().invalidate_settings();
+                    self.discard_local();
+                    if self.selected == TxAudioSource::Satp {
+                        let stamp = self.life.offline_owner().output_stamp()?;
+                        if let Err(fault) = self
+                            .satp
+                            .as_mut()
+                            .ok_or(Fault::NativeUnverified)?
+                            .bind(stamp)
+                        {
+                            self.fault(fault, now);
+                            return Err(fault);
+                        }
+                    }
+                    self.armed = Some(now);
+                    self.last_arrival = Some(now);
+                    self.next_mic = now;
+                    self.next_iq = now;
+                    Ok(())
+                })();
+                match result {
+                    Ok(()) => {
+                        if let Some(ticket) = ticket {
+                            ticket.running();
+                            self.measurement_ticket = Some(ticket);
+                        }
+                    }
+                    Err(fault) => {
+                        if let Some(ticket) = ticket {
+                            if self.life.measurement_records().is_some() {
+                                // A source bind can fail AFTER native admission.
+                                // Retain that run's ticket through stop/cleanup
+                                // so its incomplete evidence is still exportable.
+                                ticket.running();
+                                self.measurement_ticket = Some(ticket);
+                            } else {
+                                ticket.reject(fault);
+                            }
+                        }
                         return Err(fault);
                     }
                 }
-                self.armed = Some(now);
-                self.last_arrival = Some(now);
-                self.next_mic = now;
-                self.next_iq = now;
             }
             TxCommand::PureSignalOwnerConfig(config) => {
+                if self
+                    .ingress
+                    .as_ref()
+                    .is_some_and(|i| i.measurement_only_mode())
+                    && (config.config.enabled || config.config.automatic)
+                {
+                    if let Some(t) = &config.transaction {
+                        t.reject(Fault::InvalidConfig);
+                    }
+                    return Err(Fault::InvalidConfig);
+                }
                 let current = self.snapshot();
                 let eligible = if let Some(t) = &config.transaction {
                     t.admit(config.stamp, current)

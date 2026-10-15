@@ -169,6 +169,7 @@ impl P2Session {
         let mut state = build_high_priority_state(model, self.config.remote_tx_100w_drive_byte);
         state.ddc_phase_words[0] = frequency_to_phase_word(model.desired.tx_frequency_hz);
         state.ddc_phase_words[1] = state.ddc_phase_words[0];
+        select_managed_external_feedback(&mut state);
         let packet = build_high_priority_to_sdr(&state);
         let written = self
             .socket
@@ -525,6 +526,7 @@ impl P2Session {
         if self.managed_acquisition.load(Ordering::Acquire) {
             state.ddc_phase_words[0] = frequency_to_phase_word(model.desired.tx_frequency_hz);
             state.ddc_phase_words[1] = state.ddc_phase_words[0];
+            select_managed_external_feedback(&mut state);
         }
         let packet = build_high_priority_to_sdr(&state);
         if self
@@ -689,6 +691,15 @@ fn tx_drive_watts_to_p2_byte(watts: u8, drive_byte_at_100w: u8) -> u8 {
     let drive_at_68 = lower.1 + ((upper.1 - lower.1) * fraction);
     let drive = drive_at_68 * (calibrated_full_scale / 68.0);
     drive.round().clamp(1.0, calibrated_full_scale) as u8
+}
+
+#[cfg(feature = "managed-puresignal")]
+fn select_managed_external_feedback(state: &mut HighPriorityToSdr) {
+    // Existing P2_app forwards this RX1 filter word to Alex. Match the direct
+    // acquisition owner: PS sample select (11), BPF bypass (12), LNA/EXT1 off.
+    // Only the explicit shared key/keepalive path calls this; unkey restores
+    // the normal model-derived word via the existing complete stop burst.
+    state.alex_rx1_filter_word = 0x1800;
 }
 
 fn build_high_priority_state(model: &RadioModel, drive_byte_at_100w: u8) -> HighPriorityToSdr {
@@ -889,5 +900,29 @@ mod tests {
         assert_eq!(state.ddc_phase_words[0], tx_phase);
         assert_eq!(state.ddc_phase_words[1], tx_phase);
         assert_eq!(state.rx2_attenuation_db, 12);
+    }
+
+    #[cfg(feature = "managed-puresignal")]
+    #[test]
+    fn managed_external_feedback_selects_bypass_without_changing_legacy_or_unkey() {
+        for frequency in [1_900_000, 7_200_000, 14_200_000, 27_385_000, 29_000_000] {
+            let mut model = RadioModel::new(6, frequency, 0, 384, 24, 2048, true, 4096, true);
+            model.desired.tx_frequency_hz = frequency;
+            model.desired.tx_enabled = true;
+            let legacy = build_high_priority_state(&model, 68);
+            let mut managed = legacy.clone();
+            select_managed_external_feedback(&mut managed);
+            let packet = build_high_priority_to_sdr(&managed);
+            assert_eq!(&packet[1434..1436], &[0x18, 0x00]);
+            assert_eq!(managed.alex_rx2_filter_word, legacy.alex_rx2_filter_word);
+            assert_eq!(managed.alex_rx_word, legacy.alex_rx_word);
+            assert_eq!(managed.alex_tx_word, legacy.alex_tx_word);
+            assert_eq!(managed.tx_drive, legacy.tx_drive);
+            assert_eq!(legacy.alex_rx1_filter_word & 0x1800, 0);
+            model.desired.tx_enabled = false;
+            let unkey = build_high_priority_to_sdr(&build_high_priority_state(&model, 68));
+            assert_eq!(u16::from_be_bytes([unkey[1434], unkey[1435]]) & 0x1800, 0);
+            assert_eq!(unkey[4] & 2, 0);
+        }
     }
 }

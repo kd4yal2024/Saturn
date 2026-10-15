@@ -246,6 +246,7 @@ fn production_combined_listener_pcm_acquisition_matched_native_release_rearm() {
             managed_rf_permitted: true,
             startup_timeout_ns: 10_000_000_000,
             feedback_attenuation_db: 9,
+            measurement_only: false,
             // Explicit synthetic-waveform fixture policy. NOT production defaults.
             operational_policy: Some(DraftLimits {
                 active_reference_fraction: 0.1,

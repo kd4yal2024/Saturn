@@ -30,6 +30,7 @@ enum Case {
     SatpBindFailure,
     AttachmentFailure,
     RestoreFailure,
+    MeasurementClient,
 }
 struct Io {
     direct: bool,
@@ -52,6 +53,7 @@ struct Io {
     received_turns: usize,
     injected: bool,
     expected_rx: Option<crate::rx_state::RxSettings>,
+    measurement_last_receive: Instant,
 }
 fn options() -> Options {
     Options {
@@ -81,6 +83,7 @@ fn options() -> Options {
         managed_rf_permitted: true,
         startup_timeout_ns: 10_000_000_000,
         feedback_attenuation_db: 9,
+        measurement_only: false,
         // Synthetic fixture only. These are NOT approved G2 feedback limits.
         operational_policy: Some(DraftLimits {
             active_reference_fraction: 0.1,
@@ -166,6 +169,60 @@ impl RuntimeIo for Io {
             let mut wave = Wave::new();
             let mut next_mic = Instant::now();
             let mut next_feedback = Instant::now();
+            if case == Case::MeasurementClient {
+                while !ingress.startup_ready() {
+                    assert!(Instant::now() < end, "diagnostic startup timeout");
+                    thread::sleep(Duration::from_millis(1));
+                }
+                let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("scripts/ps-measurement-client.mjs");
+                let mut child = std::process::Command::new("node")
+                    .arg(script)
+                    .args([
+                        "--run",
+                        "--confirm-ant1-dummy-load-lp700-attended",
+                        "--duration-ms=500",
+                    ])
+                    .arg(format!("--url=ws://{address}/tci"))
+                    .arg(format!("--source-pin={}", env!("SATURN_BRIDGE_SOURCE_PIN")))
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
+                loop {
+                    let status = ingress.lifecycle_status().unwrap();
+                    assert_ne!(status.correction_applied, Some(true));
+                    if let Some(p) = &p2 {
+                        if status.phase == Phase::Active && Instant::now() >= next_feedback {
+                            p.feedback.send_to(&wave.p2(), p.destination).unwrap();
+                            next_feedback = Instant::now() + Duration::from_millis(2);
+                        }
+                    }
+                    if child.try_wait().unwrap().is_some() {
+                        break;
+                    }
+                    if Instant::now() >= end {
+                        child.kill().unwrap(); // LOCAL Node fixture only, never a radio/native owner
+                        panic!("diagnostic client exceeded offline test bound");
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                let output = child.wait_with_output().unwrap();
+                println!(
+                    "diagnostic client stdout={} stderr={}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(output.status.success(), "diagnostic Node client failed");
+                assert!(String::from_utf8_lossy(&output.stdout).contains("\"event\":\"exported\""));
+                assert!(link.restored().unwrap());
+                stop.store(true, Ordering::Release);
+                while !joined.load(Ordering::Acquire) {
+                    assert!(Instant::now() < end);
+                    thread::sleep(Duration::from_millis(1));
+                }
+                return 0; // diagnostic capture is not a corrected generation
+            }
             let mut stage = 0;
             let mut corrected = 0;
             while !joined.load(Ordering::Acquire) {
@@ -282,6 +339,12 @@ impl RuntimeIo for Io {
             return Err(std::io::Error::other("injected acquisition read failure").into());
         }
         let request = link.desired();
+        if self.case == Case::MeasurementClient && request.scope.is_some() {
+            if self.measurement_last_receive.elapsed() < Duration::from_millis(4) {
+                return Ok(false);
+            }
+            self.measurement_last_receive = Instant::now();
+        }
         if self.case != Case::SatpBindFailure
             && request.serial > 0
             && request.scope.is_none()
@@ -399,6 +462,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         received_turns: 0,
         injected: false,
         expected_rx: None,
+        measurement_last_receive: Instant::now(),
     };
     let directory = std::env::temp_dir().join(format!(
         "saturn-runtime-{}-{}",
@@ -421,6 +485,18 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         store.save(&settings).unwrap();
         io.expected_rx = Some(settings);
     }
+    let mut selected_options = options();
+    if case == Case::MeasurementClient {
+        selected_options.measurement_only = true;
+        selected_options.operational_policy = None;
+        selected_options.timing.tx_duration_ns = 1_000_000_000;
+        let captures = crate::tx_thread::ps_measurement::tests::directory();
+        // Explicit isolated ignored-test process; no live service reads these.
+        unsafe {
+            std::env::set_var("SATURN_PS_MEASUREMENT_DIR", &captures);
+            std::env::set_var("SATURN_PS_MEASUREMENT_FREQUENCY_HZ", "7200000");
+        }
+    }
     let result = run_inner_with_state_store(
         config,
         if direct {
@@ -428,7 +504,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         } else {
             RadioBackend::P2
         },
-        options(),
+        selected_options,
         &directory.join("ready.json"),
         &directory.join("perf.json"),
         &mut io,
@@ -461,7 +537,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
     let status = io.status.unwrap();
     assert_eq!(
         result.is_ok(),
-        case == Case::ShutdownActive,
+        matches!(case, Case::ShutdownActive | Case::MeasurementClient),
         "{case:?} {result:?} {status:?}"
     );
     if case == Case::RestoreFailure {
@@ -485,7 +561,10 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         assert_eq!(status.phase, Phase::ReadyOff, "{status:?}");
         assert!(status.authority_completed_ns.is_some() && status.cleanup_completed_ns.is_some());
         assert!(io.link.as_ref().unwrap().restored().unwrap());
-        if !matches!(case, Case::SatpBindFailure | Case::AttachmentFailure) {
+        if !matches!(
+            case,
+            Case::SatpBindFailure | Case::AttachmentFailure | Case::MeasurementClient
+        ) {
             assert!(io.held_turns > 2 && io.received_turns > 10);
         }
         if let Some(f) = &io.files {
@@ -500,7 +579,18 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
             .to_string()
             .contains("injected acquisition read failure"));
     }
-    println!("run_inner backend={} case={case:?} corrected_generations={corrected} receive_turns={} restoration_wait_turns={} owner_joined=true phase={:?} physical_rf_qualified=false", if direct {"DirectXdma"} else {"P2"}, io.received_turns, io.held_turns, status.phase);
+    println!("run_inner backend={} case={case:?} corrected_generations={corrected} measurement_captures={} receive_turns={} restoration_wait_turns={} owner_joined=true phase={:?} physical_rf_qualified=false", if direct {"DirectXdma"} else {"P2"}, usize::from(case == Case::MeasurementClient), io.received_turns, io.held_turns, status.phase);
+}
+#[test]
+#[ignore = "serial actual runtime + Node tagged-PCM MeasurementOnly client; loopback/files only"]
+fn actual_run_inner_measurement_client_both_backends() {
+    assert!(
+        env!("SATURN_BRIDGE_SOURCE_PIN").len() == 64,
+        "compile with explicit offline source-content pin"
+    );
+    for direct in [false, true] {
+        exercise(direct, Case::MeasurementClient);
+    }
 }
 #[test]
 #[ignore = "serial matched-native actual runtime orchestration; loopback/files only"]

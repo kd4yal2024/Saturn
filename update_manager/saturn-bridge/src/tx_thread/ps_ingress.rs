@@ -28,7 +28,7 @@ use std::{
     io,
     sync::{
         mpsc::{self, Receiver, SyncSender},
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
     },
     time::Instant,
 };
@@ -154,17 +154,239 @@ pub(crate) struct SharedIngress {
     settings_tail: Arc<Mutex<Option<SettingsTail>>>,
     media: Arc<crate::tci::ps_media::RemoteMedia>,
     owner_status: Arc<Mutex<(u64, String, String)>>, // serial, fields, published frame
+    measurement_host: Arc<OnceLock<Arc<super::ps_measurement::Host>>>,
 }
 pub(crate) struct Receivers {
     pub(crate) commands: Receiver<TxCommand>,
     pub(crate) audio: Receiver<Audio>,
     pub(crate) feedback: Receiver<Box<PairBlock>>,
 }
+
+#[cfg(test)]
+mod measurement_tests {
+    use super::*;
+    #[cfg(not(saturn_bridge_stub_native))]
+    use crate::{tci::ps_ingress_fixture::SocketFixture, tx_owner_stop::OutputFence};
+    use saturn_bridge::puresignal::{tx_lifecycle::RunMode, OverloadSource};
+    use std::time::Duration;
+
+    fn ready(ingress: &SharedIngress) {
+        let mut model = crate::tx_owner_stop::tests::model();
+        model.desired.tx_enabled = false;
+        model.desired.tx_drive = 5;
+        model.desired.tx_frequency_hz = 7_200_000;
+        model.desired.pure_signal_enabled = false;
+        model.desired.pure_signal_attenuation_db = 31;
+        let config = Config {
+            id: 1,
+            route: 1,
+            physical_adc: OverloadSource::Adc1,
+            enabled: false,
+            automatic: false,
+            hardware_peak: 1.,
+            requested_delay_seconds: 0.,
+            loop_delay_seconds: 0.,
+            settling_ns: 0,
+            stale_after_ns: 150_000_000,
+        };
+        let stamp = IngressStamp {
+            fence: Default::default(),
+            revision: 0,
+            release: 0,
+            output: None,
+        };
+        ingress.publish(
+            stamp,
+            LifecycleStatus {
+                mode: RunMode::Correction,
+                measurement_deadline_ns: None,
+                phase: Phase::ReadyOff,
+                primary_fault: None,
+                cleanup_fault: None,
+                authority_fault: None,
+                stop_id: 1,
+                release_handled: 0,
+                required_release: 0,
+                notified_ns: None,
+                authority_completed_ns: Some(1),
+                cleanup_started_ns: Some(1),
+                cleanup_completed_ns: Some(2),
+                cleanup_steps: 1,
+                stop_evidence: None,
+                correction_applied: Some(false),
+                last_known_applied_before_stop: false,
+            },
+            Some((model, config)),
+            TxAudioSource::Tci,
+        );
+    }
+    fn collector() -> (SharedIngress, Receivers) {
+        let (ingress, rx) = crate::tx_thread::feedback_owner::tests::collector();
+        let directory = super::super::ps_measurement::tests::directory();
+        ingress
+            .enable_measurement_only(
+                super::super::ps_measurement::Host::open(&directory, 7_200_000).unwrap(),
+            )
+            .unwrap();
+        ready(&ingress);
+        (ingress, rx)
+    }
+    #[test]
+    fn diagnostic_wire_limits_authority_and_no_ordinary_ptt_or_ps_enable() {
+        let (ingress, rx) = collector();
+        let capture = ingress.capture(Instant::now()).unwrap();
+        for value in ["0", "1001", "18446744073709551615", "-1", "abc"] {
+            assert!(ingress.measurement_message(
+                7,
+                &format!("saturn_ps_measurement:0,start,{value};"),
+                Some(&capture)
+            ));
+            assert!(rx.commands.try_recv().is_err());
+        }
+        assert!(ingress.measurement_message(
+            8,
+            "saturn_ps_measurement:0,start,500;",
+            Some(&capture)
+        ));
+        assert!(rx.commands.try_recv().is_err());
+        assert_eq!(
+            ingress.tci(7, Some(&capture), &TciCommand::SetTxEnabled(true)),
+            Err(Fault::InvalidConfig)
+        );
+        assert_eq!(
+            ingress.configure_batch(7, Some(&capture), &[TciCommand::SetPureSignalEnabled(true)]),
+            Err(Fault::InvalidConfig)
+        );
+        assert!(rx.commands.try_recv().is_err());
+        ingress.measurement_message(7, "saturn_ps_measurement:0,start,500;", Some(&capture));
+        let TxCommand::MeasurementOnly(request) = rx.commands.try_recv().unwrap() else {
+            panic!("explicit diagnostic envelope missing")
+        };
+        assert_eq!(request.duration_ns, 500_000_000);
+        assert_eq!(request.requested_at, capture.received_at);
+        assert!(request.credential.valid());
+        assert_eq!(request.recorder.context().feedback_attenuation_db, Some(31));
+        assert!(request.diagnostic.is_some());
+        drop(request);
+        assert!(ingress
+            .measurement_host
+            .get()
+            .unwrap()
+            .status()
+            .contains("Rejected"));
+    }
+    #[test]
+    fn full_diagnostic_queue_preserves_rejection_and_cancels_output() {
+        let (ingress, rx) = collector();
+        for _ in 0..16 {
+            ingress
+                .commands
+                .try_send(TxCommand::ModelChanged)
+                .ok()
+                .unwrap();
+        }
+        let before = ingress.cancel.settings_epoch.current();
+        ingress.measurement_message(
+            7,
+            "saturn_ps_measurement:0,start,500;",
+            ingress.capture(Instant::now()).as_ref(),
+        );
+        assert_ne!(ingress.cancel.settings_epoch.current(), before);
+        assert!(ingress
+            .measurement_host
+            .get()
+            .unwrap()
+            .status()
+            .contains("Rejected"));
+        assert_eq!(rx.commands.try_iter().count(), 16);
+        assert_eq!(ingress.take_fault(), Some(Fault::QueueOverrun));
+    }
+    #[test]
+    fn mixed_diagnostic_batch_never_swallows_release_or_queues_arm() {
+        for release in [
+            "trx:0,false",
+            "trx:false",
+            "trx:0,off,tci",
+            "trx:0,no",
+            "trx:0,0",
+        ] {
+            let (ingress, rx) = collector();
+            let before = ingress.cancel.settings_epoch.current();
+            ingress.measurement_message(
+                7,
+                &format!("saturn_ps_measurement:0,start,500;{release};trx:0,true;"),
+                ingress.capture(Instant::now()).as_ref(),
+            );
+            assert_ne!(ingress.cancel.settings_epoch.current(), before, "{release}");
+            assert!(rx.commands.try_recv().is_err());
+        }
+    }
+    #[test]
+    fn viewer_reply_overflow_revokes_only_viewer_not_operator_output() {
+        let (ingress, rx) = collector();
+        let (clients, _) = ingress.operator.fixture_registry();
+        let viewer = clients.lock_unpoisoned().get(&8).unwrap().outbound.clone();
+        for _ in 0..64 {
+            assert!(viewer.enqueue_transaction_reply("fixture".into()));
+        }
+        let before = ingress.cancel.settings_epoch.current();
+        ingress.measurement_message(8, "saturn_ps_measurement:0,start,500;", None);
+        assert_eq!(ingress.cancel.settings_epoch.current(), before);
+        assert!(ingress.operator.settings_permission(7).is_ok());
+        assert!(ingress.operator.settings_permission(8).is_err());
+        assert!(rx.commands.try_recv().is_err());
+        assert_eq!(ingress.take_fault(), None);
+    }
+    #[cfg(not(saturn_bridge_stub_native))]
+    #[test]
+    fn actual_websocket_diagnostic_capability_and_queued_request_use_existing_operator_boundary() {
+        let socket = SocketFixture::new();
+        let model = Arc::new(Mutex::new(crate::tx_owner_stop::tests::model()));
+        let fence = Arc::new(OutputFence::new_open_for_offline_trial());
+        fence.close();
+        let (ingress, rx) =
+            SharedIngress::channels(socket.issuer(), Cancel::fixture(fence), model.clone());
+        let directory = super::super::ps_measurement::tests::directory();
+        ingress
+            .enable_measurement_only(
+                super::super::ps_measurement::Host::open(&directory, 7_200_000).unwrap(),
+            )
+            .unwrap();
+        ingress.enable_tagged_pcm_review().unwrap();
+        ready(&ingress);
+        let mut client = socket.connect(ingress, model);
+        client.text("saturn_ps_measurement:0,start,300;");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let command = loop {
+            if let Ok(c) = rx.commands.try_recv() {
+                break c;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let TxCommand::MeasurementOnly(request) = command else {
+            panic!("wrong diagnostic command")
+        };
+        assert_eq!(request.duration_ns, 300_000_000);
+        assert!(request.credential.valid());
+        while client.diagnostics.iter().all(|s| !s.contains(",queued;")) {
+            client.drain();
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(client
+            .diagnostics
+            .iter()
+            .any(|s| s.starts_with("saturn_ps_measurement_caps:0,true,1000,rx-bypass,")));
+        assert!(socket.legacy.try_recv().is_err());
+        drop(request);
+        client.close();
+    }
+}
 impl SharedIngress {
-    /// Explicit host diagnostic entry, deliberately NOT wired to ordinary trx,
-    /// a browser setting, startup, reconnect, or any live endpoint. An eventual
-    /// reviewed RF procedure must invoke this on a NEW operator action only.
-    /// Capture is sealed before queuing; authority is never restamped later.
+    /// Typed diagnostic entry. Ordinary trx, settings and reconnect never
+    /// select it. The optional live diagnostic command uses the SAME sealed
+    /// credential/age checks, with a separate host-only mode and export ticket.
     pub(crate) fn measurement_only(
         &self,
         client: u64,
@@ -172,6 +394,16 @@ impl SharedIngress {
         duration_ns: u64,
         recorder: saturn_bridge::puresignal::measurement::MeasurementRecorder,
     ) -> Result<(), Fault> {
+        let request = self.measurement_request(client, capture, duration_ns, recorder)?;
+        self.send_command(TxCommand::MeasurementOnly(request))
+    }
+    fn measurement_request(
+        &self,
+        client: u64,
+        capture: &Capture,
+        duration_ns: u64,
+        recorder: saturn_bridge::puresignal::measurement::MeasurementRecorder,
+    ) -> Result<super::ps_owner_queue::AuthorizedMeasurement, Fault> {
         let context = recorder.context();
         if context.physical_adc != capture.config.physical_adc
             || context.commanded_drive != Some(capture.model.desired.tx_drive)
@@ -187,13 +419,182 @@ impl SharedIngress {
             capture.stamp.fence,
             capture.stamp.revision,
         )?;
-        let request = super::ps_owner_queue::AuthorizedMeasurement::new(
+        super::ps_owner_queue::AuthorizedMeasurement::new(
             credential,
             duration_ns,
             capture.received_at,
             recorder,
-        )?;
-        self.send_command(TxCommand::MeasurementOnly(request))
+        )
+    }
+    pub(crate) fn enable_measurement_only(
+        &self,
+        host: Arc<super::ps_measurement::Host>,
+    ) -> Result<(), Fault> {
+        self.measurement_host
+            .set(host)
+            .map_err(|_| Fault::InvalidConfig)
+    }
+    pub(crate) fn measurement_only_mode(&self) -> bool {
+        self.measurement_host.get().is_some()
+    }
+    pub(crate) fn measurement_frequency_hz(&self) -> u32 {
+        self.measurement_host.get().map_or(0, |h| h.frequency_hz)
+    }
+    /// A diagnostic action must occupy a standalone control message. No mixed
+    /// settings/PTT batch can hide or refresh the captured operator action.
+    pub(crate) fn measurement_message(
+        &self,
+        client: u64,
+        text: &str,
+        capture: Option<&Capture>,
+    ) -> bool {
+        if !text
+            .split(';')
+            .any(|part| part.trim().split(':').next() == Some("saturn_ps_measurement"))
+        {
+            return false;
+        }
+        let reply = |status: &str| {
+            self.operator.settings_reply(
+                client,
+                format!("saturn_ps_measurement:0,{status};"),
+                || self.release(),
+            )
+        };
+        if self.operator.settings_permission(client).is_err() {
+            // An unauthorized viewer cannot cancel the operator by filling
+            // its own reply queue. Revoke only that viewer on backpressure.
+            self.operator.settings_reply(
+                client,
+                "saturn_ps_measurement:0,0,rejected,TxAuthority;".into(),
+                || {},
+            );
+            return true;
+        }
+        // Never let a malformed diagnostic batch swallow an ordinary release.
+        if text.split(';').any(|s| {
+            s.trim().split_once(':').is_some_and(|(name, args)| {
+                let args: Vec<_> = args.split(',').map(str::trim).collect();
+                let enabled = if args.len() >= 2 {
+                    args.get(1)
+                } else {
+                    args.first()
+                };
+                name.eq_ignore_ascii_case("trx")
+                    && enabled.is_some_and(|v| crate::tci::parse_tci_bool(v) == Some(false))
+            })
+        }) {
+            self.release();
+        }
+        let Some(host) = self.measurement_host.get() else {
+            reply("0,rejected,DiagnosticDisabled");
+            return true;
+        };
+        let parts: Vec<_> = text
+            .split(';')
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .collect();
+        let args: Vec<_> = parts
+            .first()
+            .and_then(|s| s.strip_prefix("saturn_ps_measurement:"))
+            .unwrap_or("")
+            .split(',')
+            .collect();
+        if parts.len() != 1 || args.first() != Some(&"0") {
+            reply("0,rejected,InvalidCommand");
+            return true;
+        }
+        match args.as_slice() {
+            ["0", "status"] => {
+                reply(&host.status());
+            }
+            ["0", "stop"] => {
+                self.release();
+                reply("0,stop-requested");
+            }
+            ["0", "export", value] => {
+                match value
+                    .parse::<u64>()
+                    .map_err(|_| "InvalidCaptureId".into())
+                    .and_then(|id| host.export(id))
+                {
+                    Ok(path) => {
+                        reply(&format!("{value},exported,{path}"));
+                    }
+                    Err(error) => {
+                        reply(&format!("{value},export-rejected,{error}"));
+                    }
+                }
+            }
+            ["0", "start", value] => {
+                use saturn_bridge::puresignal::measurement::{CaptureContext, MeasurementRecorder};
+                let request = (|| {
+                    let ms = value.parse::<u64>().map_err(|_| Fault::InvalidConfig)?;
+                    let c = capture.ok_or(Fault::CleanupPending)?;
+                    if ms == 0
+                        || ms > super::ps_measurement::MAX_DURATION_MS
+                        || c.config.enabled
+                        || c.config.automatic
+                        || c.model.desired.pure_signal_enabled
+                        || c.model.desired.tx_drive > super::ps_measurement::MAX_DRIVE_WATTS
+                        || c.model.desired.tx_frequency_hz != host.frequency_hz
+                    {
+                        return Err(Fault::InvalidConfig);
+                    }
+                    let recorder = MeasurementRecorder::new(
+                        super::ps_measurement::CAPACITY_BLOCKS,
+                        CaptureContext {
+                            source_pin: env!("SATURN_BRIDGE_SOURCE_PIN").into(),
+                            native_identity: format!(
+                                "WDSP210 archive={} header={}",
+                                env!("SATURN_BRIDGE_WDSP_ARCHIVE_SHA256"),
+                                env!("SATURN_BRIDGE_WDSP_HEADER_SHA256")
+                            ),
+                            feedback_attenuation_db: Some(
+                                c.model.desired.pure_signal_attenuation_db,
+                            ),
+                            commanded_drive: Some(c.model.desired.tx_drive),
+                            physical_adc: c.config.physical_adc,
+                        },
+                    )?;
+                    let mut request =
+                        self.measurement_request(client, c, ms * 1_000_000, recorder)?;
+                    let ticket =
+                        host.reserve(client, self.operator.clone(), self.cancel.clone())?;
+                    if !ticket.queued() {
+                        return Err(Fault::TxAuthority);
+                    }
+                    request.diagnostic = Some(ticket);
+                    Ok(request)
+                })();
+                match request {
+                    Ok(request) => {
+                        if let Err(error) =
+                            self.commands.try_send(TxCommand::MeasurementOnly(request))
+                        {
+                            let command = match error {
+                                mpsc::TrySendError::Full(c)
+                                | mpsc::TrySendError::Disconnected(c) => c,
+                            };
+                            if let TxCommand::MeasurementOnly(request) = &command {
+                                if let Some(ticket) = &request.diagnostic {
+                                    ticket.reject(Fault::QueueOverrun);
+                                }
+                            }
+                            self.stop(Fault::QueueOverrun);
+                        }
+                    }
+                    Err(fault) => {
+                        reply(&format!("0,rejected,{fault:?}"));
+                    }
+                }
+            }
+            _ => {
+                reply("0,rejected,InvalidCommand");
+            }
+        }
+        true
     }
     pub(super) fn settings_epoch(&self) -> Arc<SettingsEpoch> {
         self.cancel.settings_epoch.clone()
@@ -224,6 +625,7 @@ impl SharedIngress {
                 settings_tail: Arc::new(Mutex::new(None)),
                 media: Arc::new(crate::tci::ps_media::RemoteMedia::default()),
                 owner_status: Arc::new(Mutex::new((0, String::new(), String::new()))),
+                measurement_host: Arc::new(OnceLock::new()),
             },
             Receivers {
                 commands: crx,
@@ -654,6 +1056,9 @@ impl SharedIngress {
                 return Ok(true);
             }
             TciCommand::SetTxEnabled(true) => {
+                if self.measurement_only_mode() {
+                    return Err(Fault::InvalidConfig);
+                }
                 let c = capture.ok_or(Fault::CleanupPending)?;
                 let credential = self.operator.receive(
                     client,
@@ -756,6 +1161,9 @@ impl SharedIngress {
             };
             for command in commands {
                 apply_config(command, &mut model, &mut config, &mut source)?;
+            }
+            if self.measurement_only_mode() && (config.enabled || config.automatic) {
+                return Err(Fault::InvalidConfig);
             }
             config.id = config.id.checked_add(1).ok_or(Fault::InvalidConfig)?;
             let receipt = Arc::new(Receipt {

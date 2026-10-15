@@ -20,6 +20,7 @@ pub struct AuthorizedMeasurement {
     pub(super) duration_ns: u64,
     pub(super) requested_at: std::time::Instant,
     pub(super) recorder: saturn_bridge::puresignal::measurement::MeasurementRecorder,
+    pub(super) diagnostic: Option<super::ps_measurement::Ticket>,
 }
 impl AuthorizedMeasurement {
     pub(crate) fn new(
@@ -38,6 +39,7 @@ impl AuthorizedMeasurement {
             duration_ns,
             requested_at,
             recorder,
+            diagnostic: None,
         })
     }
 }

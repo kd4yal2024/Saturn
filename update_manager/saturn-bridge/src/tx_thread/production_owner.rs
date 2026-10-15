@@ -37,6 +37,7 @@ pub(crate) struct Options {
     pub(crate) operational_policy: Option<DraftLimits>,
     pub(crate) startup_timeout_ns: u64,
     pub(crate) feedback_attenuation_db: u8,
+    pub(crate) measurement_only: bool,
 }
 impl Options {
     pub(crate) fn from_env() -> Result<Self, String> {
@@ -80,6 +81,7 @@ impl Options {
             max_watts: number("SATURN_PS_MAX_WATTS")?,
             startup_timeout_ns: number("SATURN_PS_STARTUP_TIMEOUT_NS")?,
             feedback_attenuation_db: number("SATURN_PS_FEEDBACK_ATTENUATION_DB")?,
+            measurement_only: flag("SATURN_PS_MEASUREMENT_ONLY")?,
             feedback_topology_reviewed: flag("SATURN_PS_FEEDBACK_TOPOLOGY_REVIEWED")?,
             managed_rf_permitted: flag("SATURN_PS_MANAGED_RF_PERMITTED")?,
             operational_policy: match std::env::var("SATURN_PS_ADMISSION").as_deref() {
@@ -120,6 +122,22 @@ impl Options {
         if !options.feedback_topology_reviewed {
             return Err("managed startup requires reviewed feedback topology attestation; default is unavailable".into());
         }
+        if (options.measurement_only || options.managed_rf_permitted)
+            && std::env::var("SATURN_PS_FEEDBACK_INPUT").as_deref() != Ok("rx-bypass")
+        {
+            return Err("explicit SATURN_PS_FEEDBACK_INPUT=rx-bypass required".into());
+        }
+        if options.measurement_only
+            && (options.operational_policy.is_some()
+                || options.max_watts > super::ps_measurement::MAX_DRIVE_WATTS
+                || options.timing.tx_duration_ns
+                    > super::ps_measurement::MAX_DURATION_MS * 1_000_000)
+        {
+            return Err(
+                "MeasurementOnly requires strict admission, <=5 commanded W and <=1000ms duration"
+                    .into(),
+            );
+        }
         Ok(options)
     }
 }
@@ -148,6 +166,19 @@ pub(crate) fn spawn(
     if keepalive_period.is_zero() {
         return Err(Fault::InvalidConfig);
     }
+    let measurement_host = if options.measurement_only {
+        let path = std::env::var_os("SATURN_PS_MEASUREMENT_DIR").ok_or(Fault::InvalidConfig)?;
+        let frequency = std::env::var("SATURN_PS_MEASUREMENT_FREQUENCY_HZ")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or(Fault::InvalidConfig)?;
+        Some(
+            super::ps_measurement::Host::open(std::path::Path::new(&path), frequency)
+                .map_err(|_| Fault::InvalidConfig)?,
+        )
+    } else {
+        None
+    };
     let origin = Instant::now();
     let link = Link::new();
     let thread_link = link.clone();
@@ -216,6 +247,9 @@ pub(crate) fn spawn(
                 let life = TxLifecycle::new(controller, output, backend, options.limits)?;
                 let (mut owner, ingress) =
                     OwnerLoop::with_shared_ingress(life, operator, model, origin, options.timing)?;
+                if let Some(host) = measurement_host {
+                    ingress.enable_measurement_only(host)?;
+                }
                 ingress.enable_tagged_pcm_review()?;
                 // Parent attaches acquisition BEFORE accepting any client.
                 startup_tx
@@ -249,6 +283,8 @@ pub(crate) fn spawn(
                         last_keepalive = Instant::now();
                     }
                 });
+                #[cfg(test)]
+                eprintln!("shared owner completed counters={:?}", owner.counters);
                 let status = owner.life.status();
                 if status.phase != Phase::ReadyOff
                     || status.primary_fault.is_some()
@@ -400,6 +436,7 @@ mod tests {
                 operational_policy: None,
                 startup_timeout_ns: 60_000_000_000,
                 feedback_attenuation_db: 9,
+                measurement_only: false,
             };
             let mut runtime = spawn(
                 radio,
