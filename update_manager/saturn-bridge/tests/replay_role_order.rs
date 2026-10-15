@@ -29,6 +29,31 @@ fn role_notices(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// The Bridge locks its receive buffers in memory and does not start when it cannot ("could not lock aligned XDMA buffer in memory"); its service unit is
+/// given `LimitMEMLOCK=16M` for that. A CI runner's default is 8 MiB or less, and a developer's shell may be lower.
+const BRIDGE_MEMLOCK_BYTES: libc::rlim_t = 16 * 1024 * 1024;
+
+/// True when the Bridge this test starts can lock its buffers: the soft limit is raised to the requirement where the hard limit allows it (the runner inherits it).
+fn memlock_is_enough() -> bool {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid, writable rlimit for the duration of the call.
+    if unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) } != 0 {
+        return false;
+    }
+    if limit.rlim_cur >= BRIDGE_MEMLOCK_BYTES {
+        return true;
+    }
+    if limit.rlim_max < BRIDGE_MEMLOCK_BYTES {
+        return false;
+    }
+    limit.rlim_cur = BRIDGE_MEMLOCK_BYTES;
+    // SAFETY: `limit` is a valid rlimit whose soft limit does not exceed its hard limit.
+    unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &limit) == 0 }
+}
+
 fn connect_control(port: u16) -> Socket {
     let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect to the Bridge");
     let (socket, _) = tungstenite::client(format!("ws://127.0.0.1:{port}/control"), stream)
@@ -63,6 +88,17 @@ fn a_viewer_session_declared_at_once_is_last_told_viewer() {
     // itself: there this test steps aside, and the unit tests above carry the rule.
     if std::path::Path::new("/dev/xdma0_user").exists() {
         eprintln!("skipped: /dev/xdma0_user exists, so this is a radio host and the replay runner refuses to start here");
+        return;
+    }
+    if !memlock_is_enough() {
+        // CI must run this test (its workflow step lifts the limit); a developer's shell with a low hard limit may step aside, loudly.
+        let message = format!(
+            "the locked-memory limit (RLIMIT_MEMLOCK) is below the {} MiB the Bridge needs to start, and its hard limit does not allow raising it; \
+             run `ulimit -l 16384` first, or start the shell with a higher limit",
+            BRIDGE_MEMLOCK_BYTES / (1024 * 1024)
+        );
+        assert!(std::env::var_os("CI").is_none(), "{message}");
+        eprintln!("skipped: {message}");
         return;
     }
     let mut replay = Replay::start();

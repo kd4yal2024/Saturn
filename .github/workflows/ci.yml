@@ -52,9 +52,12 @@ jobs:
         run: |
           # A failing test is also named in an annotation, so the failure can be read without opening the log.
           set -o pipefail
+          # The Bridge locks its receive buffers in memory and does not start without 16 MiB lockable (its service unit sets LimitMEMLOCK=16M); the replay end-to-end tests start the real Bridge.
+          # The runner's default is lower, and its user may not raise the hard limit, so lift it for this shell (the runner has passwordless sudo) and so for cargo and the Bridge.
+          sudo -n prlimit --pid $$ --memlock=33554432:33554432 || echo "::warning::could not raise the locked-memory limit; the replay end-to-end tests cannot start the Bridge"
           cargo test --locked 2>&1 | tee "$RUNNER_TEMP/bridge-test.log" || {
             status=$?
-            grep -E -A1 --no-group-separator '^test .* FAILED$|panicked at' "$RUNNER_TEMP/bridge-test.log" | head -40 | sed 's/^/::error::/'
+            grep -E -A6 --no-group-separator '^test .* FAILED$|panicked at' "$RUNNER_TEMP/bridge-test.log" | head -60 | sed 's/^/::error::/'
             exit "$status"
           }
         working-directory: ${{ matrix.crate }}
