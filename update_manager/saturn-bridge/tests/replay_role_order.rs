@@ -4,7 +4,7 @@
 //! receive-only validation's browser does: the handshake, then `session_open ... viewer` at once, before the connection thread has had a chance to write its
 //! snapshot. The Bridge registers the first client as the operator, announces that in the snapshot, and releases the slot when it reads the viewer declaration
 //! (`release_operator_for_viewer_session`). A release notice that is written BEFORE the snapshot's older `operator` announcement leaves the client holding a role
-//! the Bridge has already taken away, which failed three of the five receive validations of the 2026-10-14 managed updates on the G2.
+//! the Bridge has already taken away, which failed three of the ten receive validations the G2 recorded on 2026-10-14 (a target at 06:15, then the target and the rollback of the 19:46 update).
 //!
 //! Needs only the stub native layer (no real WDSP: it looks at roles, not audio), so it runs in CI. Competing busy threads make the connection thread late, as a
 //! busy host does; the unfixed Bridge loses the race a measurable fraction of the time, the fixed one never does.
@@ -59,6 +59,12 @@ fn viewer_session_roles(port: u16, index: usize) -> Vec<String> {
 
 #[test]
 fn a_viewer_session_declared_at_once_is_last_told_viewer() {
+    // The replay runner never runs next to a real radio (it would conflict with the live Bridge), and the release build's test gate runs on the appliance
+    // itself: there this test steps aside, and the unit tests above carry the rule.
+    if std::path::Path::new("/dev/xdma0_user").exists() {
+        eprintln!("skipped: /dev/xdma0_user exists, so this is a radio host and the replay runner refuses to start here");
+        return;
+    }
     let mut replay = Replay::start();
     replay.wait_ready(Duration::from_secs(120));
 
