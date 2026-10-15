@@ -2787,6 +2787,198 @@ fn viewer_session_open_releases_the_operator_slot_it_got_at_registration() {
     );
 }
 
+/// Everything a client would be sent, in the order the connection's writer takes it from its queue.
+fn drain_all_text(clients: &ClientRegistry, client_id: u64) -> Vec<String> {
+    let outbound = clients
+        .lock_unpoisoned()
+        .get(&client_id)
+        .unwrap()
+        .outbound
+        .clone();
+    let mut sent = Vec::new();
+    while let Some(next) = outbound.next_message(true) {
+        if let OutboundMessage::Text(text) | OutboundMessage::SafetyText(text) = next.message {
+            sent.push(text);
+        }
+    }
+    sent
+}
+
+fn last_role_notice(sent: &[String]) -> Option<&str> {
+    sent.iter()
+        .rev()
+        .map(String::as_str)
+        .find(|text| text.starts_with("remote_client_role:"))
+}
+
+/// The snapshot a new connection is queued, as client.rs builds it: the role the client was registered with, then the rest of the state, then `ready;`.
+fn snapshot_for(client_id: u64, role: TciClientRole) -> Vec<String> {
+    vec![
+        "protocol:SaturnBridge,2.0;".to_string(),
+        remote_client_role_message(client_id, role),
+        "vfo:0,0,14200000;".to_string(),
+        "ready;".to_string(),
+    ]
+}
+
+#[test]
+fn a_viewer_session_declared_before_the_first_write_ends_up_holding_the_viewer_role() {
+    // The G2 failure (2026-10-14): the browser declares its viewer session the moment its socket opens, on a busy host before the connection thread
+    // has written anything. The release notice is a safety message and the snapshot's `operator` announcement is ordinary text, and safety messages are
+    // written first, so the client was told viewer and then, from the stale snapshot, operator, and kept that role.
+    let (tx, _rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 61, true);
+    let operator_client_id = Arc::new(AtomicU64::new(61)); // registration made it the operator
+    let operator_control_at = Arc::new(Mutex::new(None));
+    let outbound = clients.lock_unpoisoned().get(&61).unwrap().outbound.clone();
+    assert_eq!(
+        enqueue_initial_snapshot(&outbound, snapshot_for(61, TciClientRole::Operator)),
+        0
+    );
+
+    assert!(handle_incoming_message(
+        text_message("session_open:validate-3,viewer;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        61
+    ));
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 0);
+
+    let sent = drain_all_text(&clients, 61);
+    assert_eq!(
+        last_role_notice(&sent),
+        Some("remote_client_role:0,viewer,61;"),
+        "the last role the client is told is the one it holds: {sent:?}"
+    );
+}
+
+#[test]
+fn a_client_promoted_before_its_first_write_ends_up_holding_the_operator_role() {
+    // The same ordering from the other side: client 72 registered as a viewer and was promoted by 71's release before its snapshot was written.
+    let (tx, _rx) = mpsc::channel();
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 71, true);
+    client_with_state(&clients, 72, true);
+    let operator_client_id = Arc::new(AtomicU64::new(71));
+    let operator_control_at = Arc::new(Mutex::new(None));
+    let outbound = clients.lock_unpoisoned().get(&72).unwrap().outbound.clone();
+    assert_eq!(
+        enqueue_initial_snapshot(&outbound, snapshot_for(72, TciClientRole::Viewer)),
+        0
+    );
+
+    assert!(handle_incoming_message(
+        text_message("session_open:validate-4,viewer;"),
+        &tx,
+        &clients,
+        &operator_client_id,
+        &operator_control_at,
+        71
+    ));
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 72);
+
+    let sent = drain_all_text(&clients, 72);
+    assert_eq!(
+        last_role_notice(&sent),
+        Some("remote_client_role:0,operator,72;"),
+        "the last role the client is told is the one it holds: {sent:?}"
+    );
+}
+
+#[test]
+fn the_initial_snapshot_is_written_in_order_with_the_role_announced_first() {
+    let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+    client_with_state(&clients, 81, true);
+    let outbound = clients.lock_unpoisoned().get(&81).unwrap().outbound.clone();
+    assert_eq!(
+        enqueue_initial_snapshot(&outbound, snapshot_for(81, TciClientRole::Operator)),
+        0
+    );
+    let sent = drain_all_text(&clients, 81);
+    let others: Vec<&str> = sent
+        .iter()
+        .map(String::as_str)
+        .filter(|text| !text.starts_with("remote_client_role:"))
+        .collect();
+    assert_eq!(
+        others,
+        ["protocol:SaturnBridge,2.0;", "vfo:0,0,14200000;", "ready;"],
+        "the rest of the snapshot keeps its order and `ready;` stays last"
+    );
+    assert_eq!(
+        sent.iter()
+            .filter(|text| text.starts_with("remote_client_role:"))
+            .collect::<Vec<_>>(),
+        ["remote_client_role:0,operator,81;"],
+        "exactly one announcement"
+    );
+    assert_eq!(sent.last().map(String::as_str), Some("ready;"));
+    assert_eq!(
+        sent.iter()
+            .position(|text| text.starts_with("remote_client_role:"))
+            .unwrap()
+            < sent.iter().position(|text| text == "ready;").unwrap(),
+        true,
+        "the role is known before the client is told the Bridge is ready"
+    );
+}
+
+#[test]
+fn the_real_initial_snapshot_is_queued_whole_in_order_with_its_role_announced_once_before_ready() {
+    // The real snapshot is far larger than the safety queue (MAX_SAFETY_QUEUE_MESSAGES), so only the role announcement may take the safety path.
+    let model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+    for (client_id, role) in [(91, TciClientRole::Operator), (92, TciClientRole::Viewer)] {
+        let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
+        client_with_state(&clients, client_id, true);
+        let outbound = clients
+            .lock_unpoisoned()
+            .get(&client_id)
+            .unwrap()
+            .outbound
+            .clone();
+        let snapshot = initial_snapshot_messages(&model, false, client_id, role, (true, 50100));
+        assert!(
+            snapshot.len() > MAX_SAFETY_QUEUE_MESSAGES * 2,
+            "the point of the test needs a large snapshot: {}",
+            snapshot.len()
+        );
+        assert_eq!(
+            enqueue_initial_snapshot(&outbound, snapshot.clone()),
+            0,
+            "nothing of the snapshot may be dropped"
+        );
+
+        let sent = drain_all_text(&clients, client_id);
+        let role_notice = remote_client_role_message(client_id, role);
+        assert_eq!(
+            sent.iter().filter(|text| **text == role_notice).count(),
+            1,
+            "the role is announced exactly once"
+        );
+        assert_eq!(
+            sent.first(),
+            Some(&role_notice),
+            "and first: the role is known before anything else is applied"
+        );
+        let without_role = |messages: &[String]| {
+            messages
+                .iter()
+                .filter(|text| **text != role_notice)
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            without_role(&sent),
+            without_role(&snapshot),
+            "everything else arrives complete and in the order it was built"
+        );
+        assert_eq!(sent.last().map(String::as_str), Some("ready;"));
+    }
+}
+
 #[test]
 fn viewer_session_open_hands_the_slot_to_the_next_eligible_client() {
     let (tx, rx) = mpsc::channel();

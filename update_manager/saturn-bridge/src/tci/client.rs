@@ -467,10 +467,8 @@ pub(crate) fn handle_client(
                         .unwrap_or(snapshot.len());
                     snapshot.insert(ready_at, DISPLAY_SPECTRUM_CAPS_MESSAGE.to_string());
                 }
-                for message in snapshot {
-                    let drops = outbound.enqueue(OutboundMessage::Text(message));
-                    drop_count.fetch_add(drops, Ordering::Relaxed);
-                }
+                let drops = enqueue_initial_snapshot(&outbound, snapshot);
+                drop_count.fetch_add(drops, Ordering::Relaxed);
             }
             outbound.mark_writer_started();
 
@@ -746,6 +744,27 @@ pub(crate) fn send_role_to_client(
         )));
         println!("{log_message}");
     }
+}
+
+/// Queue a new connection's initial snapshot, in order, and return how many queued messages were dropped.
+///
+/// The role announcement is queued as a SAFETY message, like every later role notice (a viewer session releasing the operator slot, a promotion, a move
+/// to the control lane). Safety messages are written before ordinary text, so with the announcement queued as ordinary text a notice sent between the
+/// snapshot being queued and its being written (a browser declares its viewer session the moment its socket opens, and on a busy host the connection thread
+/// has not yet written anything) was written FIRST and the snapshot's older announcement AFTER it: the client was told `viewer` and then, from the stale
+/// snapshot, `operator`, and kept the role the Bridge had already taken away (the 2026-10-14 managed-update validations on the G2). Within the safety
+/// queue the notices keep the order in which they were made.
+pub(crate) fn enqueue_initial_snapshot(outbound: &ClientOutbound, snapshot: Vec<String>) -> u64 {
+    let mut dropped = 0;
+    for message in snapshot {
+        let queued = if message.starts_with("remote_client_role:") {
+            OutboundMessage::SafetyText(message)
+        } else {
+            OutboundMessage::Text(message)
+        };
+        dropped += outbound.enqueue(queued);
+    }
+    dropped
 }
 
 pub(crate) fn initial_snapshot_messages(

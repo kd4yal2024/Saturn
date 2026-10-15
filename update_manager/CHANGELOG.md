@@ -37,6 +37,12 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   (`session.connected_as_viewer`: the Bridge assigned role 'operator'; the Bridge's journal shows the viewer declaration read in the same second), so a correct update was rolled back. A role that reads `operator` or is not
   yet known is now given `role_settle_s` (default 10 s) to become `viewer`; any other role is refused at once, a role that does not settle is refused with the time it was given, the legacy fallback for the named older releases is
   taken only after that window and not for a role that merely read `operator` at first, and a settled session records how long the transient lasted (`role_transient_s`).
+- The Bridge now tells a new client its role in order. The initial snapshot (ordinary text) announces the role the client was registered with; a later role notice (a viewer session releasing the operator slot, a
+  promotion) is a safety message, and safety messages are written first. A browser that declares its viewer session the instant its socket opens, on a busy host, therefore had `viewer` written and then, from the stale snapshot,
+  `operator`, and kept the role the Bridge had already taken away; the validator, which judges the page's role, could not be helped by waiting (the hardware rehearsal of 2026-10-14 failed both the target's and the rollback's
+  validation on exactly this). The snapshot's role announcement is now queued as a safety message too, so all role notices share one queue and keep the order in which they were made (promotions had the mirror problem). Tests: the
+  production release path with the snapshot queued first, the real snapshot (larger than the safety queue) arriving whole and in order, and an end-to-end test over real sockets against the real Bridge binary (no hardware, stub DSP)
+  in which 83 of 120 sessions ended up told `viewer` then `operator` before the change and none after.
 - `VALIDATION_MEMORY_RESERVE` (administrator-owned, kept by the installer, default `32M`, at least `8M`) sets the memory kept free beyond the browser's cap before a browser is started. The default is unchanged;
   it exists so that one appliance's measurement does not have to become every host's default.
 - Maintenance exclusion holds for the whole update, rollback included. The broker first held `radio` exclusively, and `saturn-go`'s own startup (restore recovery under `repository` and `radio`, which exits when either is busy)
