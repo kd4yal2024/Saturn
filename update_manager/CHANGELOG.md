@@ -16,6 +16,15 @@ All notable changes to the Saturn Update Manager (Rust) are documented here.
   required" before anything changes. A legacy installation is moved only by an explicit
   `--migrate-to-releases`. With the policy off nothing changes.
 
+### Known limitations of managed updates
+- Releases whose Bridge predates the role-order correction (`cc09c61`, `42ff0919` and anything older) can still fail the headless validation's `session.connected_as_viewer` condition: on a busy host their Bridge
+  writes the stale `operator` notice after `viewer`, and the page keeps the last one. An update to such a release, or a rollback to one, may therefore be rolled back (or end `rollback_unverified`) on that condition alone;
+  no legacy exception was added to hide it, and viewer enforcement is unchanged. The correction protects the validation of any release that contains it, as an update target and as a rollback destination.
+  On the G2 it was shown for a normal update to the corrected release and for a rollback to it; two passes are consistent with the correction, the end-to-end test (39 of 60 sessions stale before, none after) is what shows it.
+- The headless browser's memory-headroom check passes on the host's idle-memory estimate (see below), a documented decision of the owner, not on the memory actually available while the validator's own processes are
+  resident; the actual figure alone can fall short of the cap plus the reserve, and the validator's record says so when it is the estimate that passed.
+- Putting a fresh installation onto the release layout is separate work: a fresh installation still deploys the legacy layout, and moving it onto releases is done with the explicit `--migrate-to-releases`.
+
 ### Changed
 - The installer is layout-aware. On an appliance that runs releases it refreshes only what it owns (helpers, sudoers, configuration, unit files, scripts,
   nginx), builds no server or Bridge, copies no web assets, restarts no radio service, refreshes the Bridge unit without touching the running Bridge
