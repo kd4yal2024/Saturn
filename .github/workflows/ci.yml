@@ -49,7 +49,14 @@ jobs:
         if: ${{ matrix.run_tests == false }}
         env:
           SATURN_BRIDGE_STUB_NATIVE: "1"
-        run: cargo test --locked
+        run: |
+          # A failing test is also named in an annotation, so the failure can be read without opening the log.
+          set -o pipefail
+          cargo test --locked 2>&1 | tee "$RUNNER_TEMP/bridge-test.log" || {
+            status=$?
+            grep -E -A1 --no-group-separator '^test .* FAILED$|panicked at' "$RUNNER_TEMP/bridge-test.log" | head -40 | sed 's/^/::error::/'
+            exit "$status"
+          }
         working-directory: ${{ matrix.crate }}
 
       - name: Test SATP preflight and installer failure recovery
