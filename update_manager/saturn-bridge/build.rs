@@ -162,6 +162,7 @@ fn build_ps_observer(wdsp: &Path) {
         .expect("CALCC layout extraction");
     let source = "src/wdsp/ps_observer.c";
     println!("cargo:rerun-if-changed={source}");
+    println!("cargo:rerun-if-changed=src/wdsp/native_shutdown.c");
     println!("cargo:rerun-if-changed=../docs/puresignal/native-abi.h");
     println!("cargo:rerun-if-env-changed=SATURN_ARM_SYSROOT");
     let mut compiler = Command::new("cc");
@@ -178,7 +179,7 @@ fn build_ps_observer(wdsp: &Path) {
             .arg(sysroot.join("usr/include/aarch64-linux-gnu"));
     }
     let status = compiler
-        .args(["-std=gnu11", "-O2", "-Werror", "-I"])
+        .args(["-std=gnu11", "-D_GNU_SOURCE", "-O2", "-Werror", "-I"])
         .arg(wdsp)
         .arg("-I")
         .arg(&out)
@@ -196,6 +197,8 @@ fn build_ps_observer(wdsp: &Path) {
         .success());
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=saturn_ps_observer");
+    println!("cargo:rustc-link-arg=-Wl,--wrap=_beginthread");
+    println!("cargo:rustc-link-arg=-Wl,--wrap=CloseChannel");
 }
 
 fn native_digest(name: &str) -> String {

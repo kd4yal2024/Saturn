@@ -5,6 +5,7 @@
 #include "comm.h"
 #include "extrapolate.h"
 #include "saturn-calcc-layout.h"
+#include "native_shutdown.c"
 
 /* Nonblocking copy of the exact GetPSDisp buffers (WDSP Guide 2.1 pp109-110).
  * Sole native owner only: channel recreation must never run concurrently.

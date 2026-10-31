@@ -37,6 +37,7 @@ pub(crate) struct FullNative {
     flags: fn() -> i32, // pinned native IQC atomics, verified by offline runner
     history: Option<usize>,
     cleanup: Option<(bool, u32)>,
+    closing_worker: bool,
     quiescent: bool,
     measurement_gain: bool,
     diagnostic_source: crate::tx_thread::feedback_owner::Stimulus,
@@ -143,6 +144,7 @@ impl FullNative {
             flags,
             history,
             cleanup: None,
+            closing_worker: false,
             quiescent: true,
             measurement_gain: false,
             diagnostic_source: Default::default(),
@@ -397,6 +399,9 @@ impl ScheduledNative for FullNative {
 }
 impl CooperativeNative for FullNative {
     fn advance_dsp_discard(&mut self) -> Result<(), Fault> {
+        if self.closing_worker {
+            return Ok(());
+        }
         self.exchange(&[0.; 512]).map(|_| ())
     }
     fn begin_cleanup(&mut self) -> Result<(), Fault> {
@@ -415,25 +420,18 @@ impl CooperativeNative for FullNative {
     }
     fn cleanup_step(&mut self) -> Result<CleanupProgress, Fault> {
         let (resetting, stable) = self.cleanup.ok_or(Fault::NativeFailure)?;
-        let mut t = [0.; 2048];
-        let mut r = [0.; 2048];
-        unsafe {
-            pscc(WDSP_TX_CHANNEL, 1024, t.as_mut_ptr(), r.as_mut_ptr());
-        }
-        self.exchange(&[0.; 512])?;
-        self.audit.cleanup_steps += 1;
-        let info = self.info();
-        let flags = (self.flags)();
-        if !(0..=3).contains(&flags) {
-            return Err(Fault::NativeUnverified);
-        }
-        let done = if resetting {
-            info[15] == 0 && info[14] == 0 && flags == 0
-        } else {
-            matches!(info[15], 0 | 1 | 8)
-        };
-        let stable = if done { stable + 1 } else { 0 };
-        if resetting && stable >= 2 {
+        if self.closing_worker {
+            #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+            {
+                unsafe extern "C" {
+                    fn saturn_channel_shutdown_poll(channel: i32) -> i32;
+                }
+                match unsafe { saturn_channel_shutdown_poll(WDSP_TX_CHANNEL) } {
+                    0 => return Ok(CleanupProgress::Pending),
+                    1 => (),
+                    _ => return Err(Fault::NativeUnverified),
+                }
+            }
             // Receipt and fitter/IQC quiescence precede channel recreation.
             // This also removes ALL old TX filter/ALC/EQ/CFC/DEXP sample state.
             let engine = self.engine.as_mut().unwrap();
@@ -458,8 +456,32 @@ impl CooperativeNative for FullNative {
             }
             self.audit.recreations += 1;
             self.cleanup = None;
+            self.closing_worker = false;
             self.quiescent = true;
             return Ok(CleanupProgress::Complete);
+        }
+
+        let mut t = [0.; 2048];
+        let mut r = [0.; 2048];
+        unsafe {
+            pscc(WDSP_TX_CHANNEL, 1024, t.as_mut_ptr(), r.as_mut_ptr());
+        }
+        self.exchange(&[0.; 512])?;
+        self.audit.cleanup_steps += 1;
+        let info = self.info();
+        let flags = (self.flags)();
+        if !(0..=3).contains(&flags) {
+            return Err(Fault::NativeUnverified);
+        }
+        let done = if resetting {
+            info[15] == 0 && info[14] == 0 && flags == 0
+        } else {
+            matches!(info[15], 0 | 1 | 8)
+        };
+        let stable = if done { stable + 1 } else { 0 };
+        if resetting && stable >= 2 {
+            self.closing_worker = true;
+            return Ok(CleanupProgress::Pending);
         }
         if !resetting && stable >= 2 {
             unsafe {

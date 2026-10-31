@@ -384,6 +384,7 @@ run_test_gates(){
   run python3 "$REPO_ROOT/update_manager/scripts/saturn-xdma-operational-client.py" --self-test
 
   log "Running Protocol 2 native boundary tests"
+  run python3 "$REPO_ROOT/tests/test-wdsp-channel-shutdown.py"
   run make -C "$REPO_ROOT/sw_projects/P2_app" test
 
   log "Running persistent-state compatibility tests"
