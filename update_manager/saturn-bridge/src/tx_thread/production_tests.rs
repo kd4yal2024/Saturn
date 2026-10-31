@@ -18,6 +18,7 @@ pub(crate) struct Client {
     pub(crate) transactions: Vec<String>,
     pub(crate) binary_frames: usize,
     pub(crate) iq_frames: usize,
+    pub(crate) spectrum_frames: usize,
     pub(crate) iq_pairs_per_frame: Vec<usize>,
     pub(crate) audio_frames: usize,
     pub(crate) rx_meter_dbm: Vec<f32>,
@@ -48,6 +49,7 @@ impl Client {
             transactions: Vec::new(),
             binary_frames: 0,
             iq_frames: 0,
+            spectrum_frames: 0,
             iq_pairs_per_frame: Vec::new(),
             audio_frames: 0,
             rx_meter_dbm: Vec::new(),
@@ -125,6 +127,7 @@ impl Client {
                                 );
                             }
                             1 | 17 => self.audio_frames += 1,
+                            16 => self.spectrum_frames += 1,
                             _ => {}
                         }
                     }

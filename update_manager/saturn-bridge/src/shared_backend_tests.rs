@@ -31,6 +31,7 @@ enum Case {
     AutoCorrection,
     AutoSustained,
     ReceiveMeter,
+    ReceiveSpectrum,
     ShutdownActive,
     AcquisitionFailure,
     SatpBindFailure,
@@ -396,11 +397,12 @@ impl RuntimeIo for Io {
                             c.text("rx_antenna:0,3;");
                             c.text("rx_attenuation:0,20;tx_puresignal_attenuation:0,13;");
                         }
+                        if case == Case::ReceiveSpectrum { c.text("saturn_display:spectrum,1024,50;"); }
                         c.text("iq_start:0;audio_start:0;");
                         client = Some(c);
                         stage = 1;
                     }
-                    1 if client.as_ref().unwrap().iq_frames > 0
+                    1 if (if case == Case::ReceiveSpectrum { client.as_ref().unwrap().spectrum_frames >= 2 } else { client.as_ref().unwrap().iq_frames > 0 })
                         && client.as_ref().unwrap().audio_frames > 0
                         && (case != Case::ReceiveMeter
                             || client
@@ -417,6 +419,13 @@ impl RuntimeIo for Io {
                             client.as_ref().unwrap().iq_frames,
                             client.as_ref().unwrap().audio_frames
                         );
+                        if case == Case::ReceiveSpectrum {
+                            assert_eq!(client.as_ref().unwrap().iq_frames, 0, "WAN client must receive spectrum rows without raw-IQ fallback");
+                            assert_eq!(status.phase, Phase::ReadyOff);
+                            stop.store(true, Ordering::Release);
+                            while !joined.load(Ordering::Acquire) { assert!(Instant::now()<end); thread::sleep(Duration::from_millis(1)); }
+                            return 0; // no arm or key; actual row worker and TCI output
+                        }
                         if case == Case::ReceiveMeter {
                             if direct {
                                 assert!(client.as_ref().unwrap().iq_pairs_per_frame.iter().all(|n| *n == 12_800), "shared Direct must deliver complete 384 kHz display frames, not rate-limited DMA snippets");
@@ -890,6 +899,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::BaselineTwoTone
                 | Case::NativeKeepaliveGap
                 | Case::ReceiveMeter
+                | Case::ReceiveSpectrum
                 | Case::MeasurementClient
                 | Case::BrowserMeasurementClient
                 | Case::BrowserLongMeasurementClient
@@ -926,6 +936,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::NativeKeepaliveGap
                 | Case::NativeKeepaliveMissing
                 | Case::ReceiveMeter
+                | Case::ReceiveSpectrum
                 | Case::AttachmentFailure
                 | Case::MeasurementClient
                 | Case::BrowserMeasurementClient
@@ -1222,4 +1233,10 @@ fn actual_production_spawn_native_lease_failure_is_joined() {
 #[ignore = "isolated matched-native failure test; uncertain native retained, never reported clean"]
 fn actual_run_inner_failed_restoration_cannot_report_clean_or_detach_owner() {
     exercise(true, Case::RestoreFailure);
+}
+
+#[test]
+#[ignore = "serial real-WDSP production runtime WAN spectrum/audio; loopback/files only"]
+fn actual_run_inner_wan_spectrum_receive_both_backends() {
+    for direct in [false, true] { exercise(direct, Case::ReceiveSpectrum); }
 }

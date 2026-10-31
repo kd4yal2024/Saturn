@@ -205,8 +205,17 @@ fn run_inner_with_state_store<I: RuntimeIo>(
     config.ddc0_frequency_hz = initial_receive.iq_center_hz;
     let (radio, mut acquisition) = io.open(&mut config, backend, &model)?;
     config.remote_tx_rf_enabled &= options.managed_rf_permitted;
-    let (frontend, commands) = TciFrontend::reserve_shared_startup(&config, model.clone(), false)?;
+    let (frontend, commands) = TciFrontend::reserve_shared_startup(&config, model.clone(), true)?;
     let frontend = Arc::new(frontend);
+    // Reuse the Legacy observer: acquisition only copies into its lock-free
+    // latest-IQ ring; FFT work stays outside the acquisition/TX owner loops.
+    let spectrum_ring = Arc::new(crate::display_spectrum::LatestIqRing::new(
+        u64::from(initial_receive.iq_center_hz),
+    ));
+    let _spectrum_worker = crate::display_spectrum::SpectrumWorker::spawn(
+        frontend.clone(), spectrum_ring.clone(),
+        u32::from(config.ddc0_sample_rate_khz) * 1000,
+    )?;
     let _correction_worker = crate::correction_monitor::Worker::optional(
         frontend.clone(),
         match backend {
@@ -289,6 +298,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
     ));
     let mut received_frames = 0u64;
     let mut received_pairs = 0u64;
+    let mut spectrum_scope = None;
     let mut direct_applied = (
         initial_receive.iq_center_hz,
         initial_receive.rx_antenna,
@@ -320,6 +330,12 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             input.configure(crate::rf_monitor::Settings::model(&snapshot));
         }
         let transmitting = snapshot.desired.tx_phase != TxPhase::Rx;
+        let spectrum_feed_active = !transmitting && frontend.media_demand().spectrum_stream_enabled;
+        let scope = (spectrum_feed_active, snapshot.desired.iq_center_hz);
+        if spectrum_scope != Some(scope) {
+            spectrum_ring.restart(u64::from(scope.1));
+            spectrum_scope = Some(scope);
+        }
         if transmitting || !frontend.media_demand().raw_iq_stream_enabled {
             if let Some(packetizer) = &mut display_iq_packetizer {
                 packetizer.reset();
@@ -371,6 +387,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                                 &snapshot,
                                 transmitting,
                                 display_iq_packetizer.as_mut(),
+                                spectrum_feed_active.then_some(spectrum_ring.as_ref()),
                             );
                             model.lock_unpoisoned().apply_ddc_frame(frame);
                         }
@@ -428,6 +445,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                             &snapshot,
                             transmitting,
                             display_iq_packetizer.as_mut(),
+                            spectrum_feed_active.then_some(spectrum_ring.as_ref()),
                         );
                     }
                     if last_health.elapsed() >= Duration::from_secs(1) {
@@ -558,7 +576,9 @@ fn publish_receive(
     model: &RadioModel,
     transmitting: bool,
     display_packetizer: Option<&mut crate::xdma_backend::DirectIqPacketizer>,
+    spectrum_ring: Option<&crate::display_spectrum::LatestIqRing>,
 ) {
+    if let Some(ring) = spectrum_ring { ring.push(iq); }
     if let Some(packetizer) = display_packetizer {
         // Same full-stream batching as Legacy Direct XDMA. Sending each tiny
         // DMA completion through the snapshot limiter discards most samples
