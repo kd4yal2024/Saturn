@@ -2275,6 +2275,7 @@ mod arm_cancellation_tests {
 
     struct Worker {
         radio: Arc<FakeTxRadio>,
+        audio: Sender<TxAudioMessage>,
         commands: Option<Sender<TxCommand>>,
         events: Receiver<TxEvent>,
         stop: Arc<AtomicBool>,
@@ -2305,6 +2306,30 @@ mod arm_cancellation_tests {
 
         fn wait_keyed(&self) -> bool {
             self.wait_for(|event| matches!(event, TxEvent::Keyed))
+        }
+
+        fn wait_keyed_with_fresh_audio(&self) -> bool {
+            // Release clears two-tone. A new ordinary press must receive a
+            // fresh source; keyable stub IQ alone must not satisfy that gate.
+            let deadline = Instant::now() + WAIT;
+            while Instant::now() < deadline {
+                let frame = crate::tx_audio::TxAudioFrame {
+                    enqueued_at: Instant::now(),
+                    source: TxAudioSource::Tci,
+                    samples: crate::tx_audio::TxAudioSamples::Dynamic(vec![0.5; 512]),
+                    channels: 1,
+                    sample_rate_hz: 48_000,
+                };
+                if self.audio.send(TxAudioMessage::Frames(frame)).is_err() {
+                    return false;
+                }
+                match self.events.recv_timeout(Duration::from_millis(10)) {
+                    Ok(TxEvent::Keyed) => return true,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return false,
+                    _ => (),
+                }
+            }
+            false
         }
     }
 
@@ -2367,7 +2392,7 @@ mod arm_cancellation_tests {
             (options.during_prekey_feedback)(commands.clone());
         *radio.during_prekey_duc_specific.lock_unpoisoned() =
             (options.during_prekey_duc_specific)(commands.clone());
-        let (_audio_tx, audio_rx) = mpsc::channel();
+        let (audio_tx, audio_rx) = mpsc::channel();
         let (event_tx, events) = mpsc::channel();
         let model = {
             let mut model = RadioModel::new(6, 7_215_000, 0, 384, 24, 2048, true, 4096, true);
@@ -2390,11 +2415,11 @@ mod arm_cancellation_tests {
                     event_tx,
                     stop,
                 );
-                drop(_audio_tx);
             })
         };
         Worker {
             radio,
+            audio: audio_tx,
             commands: options.keep_sender.then_some(commands),
             events,
             stop,
@@ -2510,7 +2535,7 @@ mod arm_cancellation_tests {
             worker.wait_unkeyed(),
             "the cancelled arm must be released first"
         );
-        assert!(worker.wait_keyed(), "the new press never keyed");
+        assert!(worker.wait_keyed_with_fresh_audio(), "the new press never keyed");
         assert_eq!(worker.key_calls(), 1);
     }
 
@@ -2523,7 +2548,7 @@ mod arm_cancellation_tests {
             }))
         });
         assert!(worker.wait_unkeyed());
-        assert!(worker.wait_keyed(), "the new press never keyed");
+        assert!(worker.wait_keyed_with_fresh_audio(), "the new press never keyed");
         assert_eq!(
             worker.key_calls(),
             1,
@@ -2643,7 +2668,7 @@ mod arm_cancellation_tests {
             worker.wait_unkeyed(),
             "the cancelled arm must be released first"
         );
-        assert!(worker.wait_keyed(), "the new press never keyed");
+        assert!(worker.wait_keyed_with_fresh_audio(), "the new press never keyed");
         assert_eq!(worker.key_calls(), 1, "only the new press may key");
     }
 

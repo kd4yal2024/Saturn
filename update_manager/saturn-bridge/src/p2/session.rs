@@ -429,8 +429,11 @@ impl P2Session {
             }
             Err(error)
                 if error.kind() == io::ErrorKind::WouldBlock
-                    || error.kind() == io::ErrorKind::TimedOut =>
+                    || error.kind() == io::ErrorKind::TimedOut
+                    || error.kind() == io::ErrorKind::Interrupted =>
             {
+                // SIGTERM can interrupt recvmsg. Return to the runtime's
+                // stop service instead of turning orderly cleanup into exit 1.
                 Ok(ReceiveOutcome {
                     event: None,
                     consumed: false,
