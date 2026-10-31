@@ -26,6 +26,16 @@ enum Acquisition {
     P2(Arc<P2Session>),
     Direct(OperationalRxSession),
 }
+#[cfg(test)]
+fn trace_step(label: &str, started: Instant) {
+    let elapsed = started.elapsed();
+    if elapsed > Duration::from_millis(5) {
+        eprintln!(
+            "runtime fixture slow step={label} us={}",
+            elapsed.as_micros()
+        );
+    }
+}
 // Only the external I/O boundary is replaceable. Tests use this SAME startup,
 // receive, stop/restoration and join orchestration, not a fixture owner loop.
 trait RuntimeIo {
@@ -41,6 +51,15 @@ trait RuntimeIo {
         Ok(true)
     }
     fn joined(&mut self, _runtime: &production_owner::Runtime) {}
+    fn wait_for_input(&mut self, wait: Option<Duration>) {
+        if let Some(wait) = wait {
+            std::thread::sleep(wait);
+        }
+    }
+}
+
+pub(crate) fn acquisition_wait(requires_drain: bool) -> Option<Duration> {
+    (!requires_drain).then_some(Duration::from_millis(1))
 }
 struct HardwareIo;
 #[cfg(all(test, not(saturn_bridge_stub_native)))]
@@ -188,6 +207,22 @@ fn run_inner_with_state_store<I: RuntimeIo>(
     config.remote_tx_rf_enabled &= options.managed_rf_permitted;
     let (frontend, commands) = TciFrontend::reserve_shared_startup(&config, model.clone(), false)?;
     let frontend = Arc::new(frontend);
+    let _correction_worker = crate::correction_monitor::Worker::optional(
+        frontend.clone(),
+        match backend {
+            RadioBackend::P2 => "P2",
+            RadioBackend::Xdma => "DirectXdma",
+        },
+    )?;
+    if _correction_worker.is_some() {
+        frontend.set_correction_monitor_available();
+    }
+    let monitor_input = (std::env::var("SATURN_PS_LIVE_MONITOR").as_deref() == Ok("1"))
+        .then(crate::rf_monitor::Input::new);
+    let _rf_monitor = monitor_input
+        .as_ref()
+        .map(|input| crate::rf_monitor::Worker::spawn(frontend.clone(), input.clone()))
+        .transpose()?;
     let mut rx_dsp = WdspRxEngine::new(&model.lock_unpoisoned())?;
     let mut runtime = production_owner::spawn(
         radio.clone(),
@@ -199,6 +234,10 @@ fn run_inner_with_state_store<I: RuntimeIo>(
         config.high_priority_period,
     )
     .map_err(fault_error)?;
+    if let Some(input) = monitor_input {
+        let _ = runtime.ingress.rf_monitor.set(input);
+        frontend.set_rf_monitor_available();
+    }
     // RAII flush also covers startup failures and acquisition-error shutdown.
     let _rx_state_saver = rx_state_store
         .map(|store| crate::rx_state::RxStateSaver::spawn(store, model.clone(), rx_state_baseline));
@@ -245,6 +284,11 @@ fn run_inner_with_state_store<I: RuntimeIo>(
     let mut last_health = Instant::now();
     let mut last_status = Instant::now();
     let mut iq = Vec::with_capacity(8192);
+    let mut display_iq_packetizer = Some(crate::xdma_backend::DirectIqPacketizer::for_rate(
+        config.ddc0_sample_rate_khz as u32 * 1000,
+    ));
+    let mut received_frames = 0u64;
+    let mut received_pairs = 0u64;
     let mut direct_applied = (
         initial_receive.iq_center_hz,
         initial_receive.rx_antenna,
@@ -272,13 +316,29 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             receive_control(command, &frontend, &model, &runtime.ingress, &mut rx_dsp);
         }
         let snapshot = model.lock_unpoisoned().clone();
+        if let Some(input) = runtime.ingress.rf_monitor.get() {
+            input.configure(crate::rf_monitor::Settings::model(&snapshot));
+        }
         let transmitting = snapshot.desired.tx_phase != TxPhase::Rx;
+        if transmitting || !frontend.media_demand().raw_iq_stream_enabled {
+            if let Some(packetizer) = &mut display_iq_packetizer {
+                packetizer.reset();
+            }
+        }
         frontend.set_tx_media_priority_active(transmitting);
+        #[cfg(test)]
+        let rx_transition_started = Instant::now();
         if transmitting {
             rx_dsp.suspend_for_tx();
         } else {
             rx_dsp.resume_from_tx();
         }
+        #[cfg(test)]
+        trace_step("rx-suspend-resume", rx_transition_started);
+        let mut requires_drain = false;
+        let frames_before_receive = received_frames;
+        #[cfg(test)]
+        let receive_started = Instant::now();
         let receive = (|| -> Result<(), Box<dyn Error>> {
             if !io.before_receive(&mut acquisition)? {
                 return Ok(());
@@ -290,10 +350,19 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                         p2.shared_receive_keepalive(&snapshot)?;
                         last_keepalive = Instant::now();
                     }
-                    match p2.recv_event()? {
+                    let received = p2.recv_outcome()?;
+                    // At 192 kHz, 119-pair feedback packets arrive faster
+                    // than 1 kHz too. A consumed event is work, not an idle
+                    // turn. The next receive retains the existing bounded
+                    // socket wait and services restoration before reading.
+                    requires_drain = received.consumed;
+                    match received.event {
                         Some(P2Event::DdcIq(frame))
                             if frame.ddc_index == snapshot.desired.rx_ddc_index =>
                         {
+                            received_frames = received_frames.saturating_add(1);
+                            received_pairs =
+                                received_pairs.saturating_add((frame.iq_samples.len() / 2) as u64);
                             publish_receive(
                                 &frontend,
                                 &mut rx_dsp,
@@ -301,6 +370,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                                 config.ddc0_sample_rate_khz as u32 * 1000,
                                 &snapshot,
                                 transmitting,
+                                display_iq_packetizer.as_mut(),
                             );
                             model.lock_unpoisoned().apply_ddc_frame(frame);
                         }
@@ -329,6 +399,11 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                             snapshot.desired.rx_antenna,
                             snapshot.desired.rx_attenuation_db,
                         );
+                        if direct_applied != requested {
+                            if let Some(packetizer) = &mut display_iq_packetizer {
+                                packetizer.reset();
+                            }
+                        }
                         if direct_applied.0 != requested.0 {
                             rx.tune(requested.0)?;
                         }
@@ -341,7 +416,10 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                         direct_applied = requested;
                     }
                     let outcome = rx.read_iq(&mut iq)?;
+                    requires_drain = outcome.requires_drain;
                     if outcome.samples_ready {
+                        received_frames = received_frames.saturating_add(1);
+                        received_pairs = received_pairs.saturating_add((iq.len() / 2) as u64);
                         publish_receive(
                             &frontend,
                             &mut rx_dsp,
@@ -349,6 +427,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                             384000,
                             &snapshot,
                             transmitting,
+                            display_iq_packetizer.as_mut(),
                         );
                     }
                     if last_health.elapsed() >= Duration::from_secs(1) {
@@ -369,6 +448,8 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             }
             Ok(())
         })();
+        #[cfg(test)]
+        trace_step("receive", receive_started);
         if let Err(error) = receive {
             if terminal_error.is_none() {
                 terminal_error = Some(error);
@@ -376,11 +457,31 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             runtime.request_stop();
             stopping = true;
         }
+        if received_frames != frames_before_receive && !transmitting {
+            // The shared path owns RX DSP too. Copy its measurements back to
+            // the observed model, just as the legacy RX owners do, so periodic
+            // TCI telemetry includes the S-meter rather than only IQ/audio.
+            let mut current = model.lock_unpoisoned();
+            current.observed.ddc0_meter_dbm = rx_dsp.smeter_dbm().map(|raw| {
+                crate::rx_thread::correct_smeter_dbm(
+                    raw,
+                    snapshot.desired.rx_attenuation_db,
+                    config.smeter_calibration_db,
+                )
+            });
+            current.observed.rx_wbfm_stereo_detected = rx_dsp.wbfm_stereo_detected();
+        }
         if last_state.elapsed() >= Duration::from_millis(200) {
+            #[cfg(test)]
+            let started = Instant::now();
             frontend.publish_radio_state(&snapshot);
+            #[cfg(test)]
+            trace_step("publish-state", started);
             last_state = Instant::now();
         }
         if last_status.elapsed() >= Duration::from_secs(1) {
+            #[cfg(test)]
+            let started = Instant::now();
             let counter = match &acquisition {
                 Acquisition::Direct(rx) => Some(rx.rx_counter_v31_json()),
                 Acquisition::P2(_) => None,
@@ -391,11 +492,15 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                 "p2"
             };
             for path in [ready, perf] {
-                if let Err(error) = crate::xdma_telemetry::record_shared_review_status(
+                let (phase, clean_idle) = runtime.ingress.host_readiness();
+                if let Err(error) = crate::xdma_telemetry::record_shared_host_status(
                     path,
                     label,
-                    runtime.ingress.pipeline_state(),
+                    phase,
                     counter.clone(),
+                    clean_idle && !stopping,
+                    received_frames,
+                    received_pairs,
                 ) {
                     if terminal_error.is_none() {
                         terminal_error = Some(error.into());
@@ -405,6 +510,8 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                 }
             }
             last_status = Instant::now();
+            #[cfg(test)]
+            trace_step("write-status", started);
         }
         match runtime.done.try_recv() {
             Ok(result) => {
@@ -422,8 +529,12 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             }
             Err(mpsc::TryRecvError::Empty) => {}
         }
-        // Still service RX/restoration while stopping. No join before receipt.
-        std::thread::sleep(Duration::from_millis(1));
+        // One DMA buffer per turn, then all control/stop/restoration services
+        // above run again. Do not add an idle delay while completed buffers
+        // remain: small DMA reads can arrive faster than 1 kHz. Sleeping after
+        // every buffer accumulated old feedback despite an available reader.
+        // This neither retimes samples nor changes freshness/polling limits.
+        io.wait_for_input(acquisition_wait(requires_drain));
     }
     if let Some(worker) = runtime.worker.take() {
         worker
@@ -446,8 +557,22 @@ fn publish_receive(
     rate: u32,
     model: &RadioModel,
     transmitting: bool,
+    display_packetizer: Option<&mut crate::xdma_backend::DirectIqPacketizer>,
 ) {
-    front.publish_iq_frame(rate, iq);
+    if let Some(packetizer) = display_packetizer {
+        // Same full-stream batching as Legacy Direct XDMA. Sending each tiny
+        // DMA completion through the snapshot limiter discards most samples
+        // and starves the browser FFT/3D display despite a nominal 384 kHz tag.
+        if !transmitting && front.media_demand().raw_iq_stream_enabled {
+            packetizer.push(iq, |frame| {
+                front.publish_full_rate_iq_frame(rate, frame);
+            });
+        } else {
+            packetizer.reset();
+        }
+    } else {
+        front.publish_iq_frame(rate, iq);
+    }
     if !transmitting {
         let audio_rate = dsp.audio_sample_rate_hz();
         dsp.process_iq(iq, |samples| {

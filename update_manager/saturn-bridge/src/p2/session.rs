@@ -37,9 +37,17 @@ pub enum P2Event {
     ManagedFeedback,
 }
 
+/// Receiving an undecoded datagram still consumes socket work. Only a genuine
+/// timeout is idle; microphone packets must not add one sleep each to IQ RX.
+pub(crate) struct ReceiveOutcome {
+    pub(crate) event: Option<P2Event>,
+    pub(crate) consumed: bool,
+}
+
 pub struct P2Session {
     config: BridgeConfig,
     socket: UdpSocket,
+    kernel_ingress: Option<super::ingress::Clock>,
     duc_iq_sequence: AtomicU32,
     duc_specific_sequence: AtomicU32,
     /// Serializes reads from the shared UDP socket. Discovery holds this for
@@ -77,6 +85,7 @@ impl P2Session {
         Ok(Self {
             config,
             socket,
+            kernel_ingress: None,
             duc_iq_sequence: AtomicU32::new(0),
             duc_specific_sequence: AtomicU32::new(0),
             receive_lock: Mutex::new(()),
@@ -102,6 +111,7 @@ impl P2Session {
             return Err(io::ErrorKind::PermissionDenied.into());
         }
         let mut session = Self::bind(config)?;
+        session.kernel_ingress = Some(super::ingress::enable(&session.socket)?);
         // Receive-only bootstrap before any client/owner can arm. These are
         // general/DDC/DUC-specific setup commands, never RF/HP/IQ writes.
         if !session.bootstrap(model)? {
@@ -350,6 +360,10 @@ impl P2Session {
     }
 
     pub fn recv_event(&self) -> io::Result<Option<P2Event>> {
+        self.recv_outcome().map(|outcome| outcome.event)
+    }
+
+    pub(crate) fn recv_outcome(&self) -> io::Result<ReceiveOutcome> {
         let _receive = self.receive_lock.lock_unpoisoned();
         #[cfg(feature = "managed-puresignal")]
         let mut managed = self.managed_feedback.lock_unpoisoned();
@@ -364,13 +378,23 @@ impl P2Session {
         let token = managed.as_ref().and_then(|m| m.token());
         let mut buffer = [0u8; 2048];
 
-        match self.socket.recv_from(&mut buffer) {
-            Ok((size, source)) => {
+        let packet = if let Some(clock) = self.kernel_ingress {
+            super::ingress::receive(&self.socket, &mut buffer, clock)
+        } else {
+            self.socket
+                .recv_from(&mut buffer)
+                .map(|(size, source)| (size, source, Instant::now()))
+        };
+        match packet {
+            Ok((size, source, _observed)) => {
                 #[cfg(feature = "managed-puresignal")]
                 if let Some(m) = managed.as_mut() {
-                    let observed = Instant::now(); // observation before decode/queue
+                    let observed = _observed; // kernel ingress before socket buffering; never retimed
                     if source.ip() != self.config.radio_command_addr.ip() {
-                        return Ok(None);
+                        return Ok(ReceiveOutcome {
+                            event: None,
+                            consumed: true,
+                        });
                     }
                     if self
                         .config
@@ -379,7 +403,10 @@ impl P2Session {
                         == Some(0)
                     {
                         if m.link.desired().scope != token {
-                            return Ok(Some(P2Event::ManagedFeedback));
+                            return Ok(ReceiveOutcome {
+                                event: Some(P2Event::ManagedFeedback),
+                                consumed: true,
+                            });
                         }
                         if let Some(stream) = m.stream.as_mut() {
                             if let Err(fault) = stream.p2(token, &buffer[..size], observed) {
@@ -389,16 +416,25 @@ impl P2Session {
                                 m.stream = None;
                             }
                         }
-                        return Ok(Some(P2Event::ManagedFeedback));
+                        return Ok(ReceiveOutcome {
+                            event: Some(P2Event::ManagedFeedback),
+                            consumed: true,
+                        });
                     }
                 }
-                Ok(self.decode_event(&buffer[..size], source.port()))
+                Ok(ReceiveOutcome {
+                    event: self.decode_event(&buffer[..size], source.port()),
+                    consumed: true,
+                })
             }
             Err(error)
                 if error.kind() == io::ErrorKind::WouldBlock
                     || error.kind() == io::ErrorKind::TimedOut =>
             {
-                Ok(None)
+                Ok(ReceiveOutcome {
+                    event: None,
+                    consumed: false,
+                })
             }
             Err(error) => Err(error),
         }
@@ -797,6 +833,43 @@ fn _ports(_port_map: &P2PortMap) -> Duration {
 mod tests {
     use super::*;
     use crate::radio_model::RadioModel;
+
+    #[cfg(feature = "managed-puresignal")]
+    #[test]
+    fn undecoded_microphone_datagrams_are_work_and_only_timeout_is_idle() {
+        let session = P2Session::bind(BridgeConfig {
+            client_bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..BridgeConfig::default()
+        })
+        .unwrap();
+        session
+            .socket
+            .set_read_timeout(Some(Duration::from_millis(5)))
+            .unwrap();
+        let mic = UdpSocket::bind("127.0.0.1:0").unwrap();
+        // P2 microphone payloads are deliberately not decoded by this owner.
+        // Preserve that behavior while preventing an idle sleep per packet.
+        for _ in 0..32 {
+            mic.send_to(&[0; 132], session.socket.local_addr().unwrap())
+                .unwrap();
+        }
+        for _ in 0..32 {
+            let outcome = session.recv_outcome().unwrap();
+            assert!(outcome.consumed);
+            assert!(outcome.event.is_none());
+            assert_eq!(
+                crate::shared_backend::acquisition_wait(outcome.consumed),
+                None
+            );
+        }
+        let idle = session.recv_outcome().unwrap();
+        assert!(!idle.consumed);
+        assert!(idle.event.is_none());
+        assert_eq!(
+            crate::shared_backend::acquisition_wait(idle.consumed),
+            Some(Duration::from_millis(1))
+        );
+    }
 
     #[test]
     fn discovery_only_allows_idle_radio_ownership() {

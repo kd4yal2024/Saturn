@@ -283,6 +283,8 @@ pub(crate) struct OwnerStopAdapter<'a> {
     backend_stopped: bool,
     rearm: rearm::Rearm,
     feedback: Option<(crate::tx_thread::feedback_owner::Link, u128)>,
+    diagnostic: Option<crate::tx_signal_capture::shared::Producer>,
+    diagnostic_last: Option<crate::tx_signal_capture::shared::Submission>,
     #[cfg(test)]
     before_key_permit: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -334,6 +336,8 @@ impl<'a> OwnerStopAdapter<'a> {
             backend_stopped: false,
             rearm: rearm::Rearm::default(),
             feedback: None,
+            diagnostic: None,
+            diagnostic_last: None,
             #[cfg(test)]
             before_key_permit: None,
         }
@@ -366,6 +370,36 @@ impl<'a> OwnerStopAdapter<'a> {
     }
     pub(crate) fn queues_empty(&self) -> bool {
         self.pending_iq.is_empty() && self.pending_mic.is_empty()
+    }
+    pub(crate) fn attach_signal_capture(&mut self, p: crate::tx_signal_capture::shared::Producer) {
+        self.diagnostic = Some(p);
+    }
+    pub(crate) fn diagnostic_submission(
+        &mut self,
+        oldest: Option<u64>,
+    ) -> Option<crate::tx_signal_capture::shared::Submission> {
+        let p = self.diagnostic.as_ref()?;
+        let scope = self.rearm.capture_scope?;
+        let m = self.rearm.installed_model()?;
+        let s = p.submission(
+            scope,
+            self.backend(),
+            m.desired.tx_drive,
+            m.desired.mode,
+            oldest,
+        );
+        self.diagnostic_last = Some(s.clone());
+        Some(s)
+    }
+    pub(crate) fn diagnostic_stale(&mut self, fields: [u64; 8], oldest: Option<u64>) {
+        // A lifecycle stop can retire the current capture scope in tick().
+        // The last immutable submission still identifies that stopped arm.
+        if let Some(s) = self
+            .diagnostic_submission(oldest)
+            .or_else(|| self.diagnostic_last.clone())
+        {
+            s.stale(fields);
+        }
     }
     // Actual wall-clock spacing, never fabricated controller timestamps.
     fn progress(&mut self, id: u64, now: Instant) -> Result<Option<StopReceipt>, Fault> {
@@ -449,6 +483,9 @@ impl TxAuthority for OwnerStopAdapter<'_> {
     }
     fn release_received(&mut self, _: u64, _: u64) -> Result<(), Fault> {
         self.fence.close();
+        if let Some(c) = &self.diagnostic_last {
+            c.event(crate::tx_signal_capture::shared::Kind::Stop, None);
+        }
         self.pending_iq.clear();
         self.pending_mic.clear();
         self.rearm.cancel();
@@ -460,6 +497,9 @@ impl TxAuthority for OwnerStopAdapter<'_> {
     fn begin_stop(&mut self, request: StopRequest) -> Result<(), Fault> {
         // Even malformed requests fence immediately; they cannot mint receipts.
         self.fence.close();
+        if let Some(c) = &self.diagnostic_last {
+            c.event(crate::tx_signal_capture::shared::Kind::Stop, None);
+        }
         self.pending_iq.clear();
         self.pending_mic.clear();
         self.rearm.cancel();
@@ -492,7 +532,11 @@ impl TxAuthority for OwnerStopAdapter<'_> {
         id: u64,
         fence: saturn_bridge::puresignal::Fence,
     ) -> Result<(), Fault> {
-        self.mark_clean(id, fence)
+        self.mark_clean(id, fence)?;
+        if let Some(c) = self.diagnostic_last.take() {
+            c.event(crate::tx_signal_capture::shared::Kind::Clean, Some(false));
+        }
+        Ok(())
     }
     fn poll_health(&mut self) -> Result<(), Fault> {
         if self.cancellation_pending() {

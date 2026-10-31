@@ -256,7 +256,7 @@ impl SocketClient {
                     // The real snapshot may batch multiple TCI commands in
                     // one WebSocket message. Observe each command, as clients do.
                     for command in text.split(';').filter(|s| !s.is_empty()) {
-                        if command.starts_with("saturn_ps_measurement") {
+                        if command.starts_with("saturn_ps_") {
                             self.diagnostics.push(format!("{command};"));
                         } else if command.starts_with("saturn_tx_generation:psg1,") {
                             let value = command.split(',').nth(1).unwrap();

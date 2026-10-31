@@ -1,9 +1,15 @@
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+mod capture_directory;
 mod config;
+#[cfg(feature = "managed-puresignal")]
+mod correction_monitor;
 mod display_spectrum;
 mod fftw_wisdom;
 mod native_build_info;
 mod p2;
 mod radio_model;
+#[cfg(feature = "managed-puresignal")]
+mod rf_monitor;
 mod rx_counter_v31;
 mod rx_state;
 mod rx_thread;
@@ -18,6 +24,7 @@ mod tx_codec;
 mod tx_monitor;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 mod tx_owner_stop;
+mod tx_signal_capture;
 #[cfg(all(
     test,
     feature = "offline-puresignal-owner-native",
@@ -539,6 +546,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let _rx_state_saver = rx_state_store
         .map(|store| rx_state::RxStateSaver::spawn(store, radio_model.clone(), rx_state_baseline));
     let hp_thread = session.spawn_high_priority_loop(radio_model.clone(), stop_flag.clone())?;
+    #[cfg(feature = "managed-puresignal")]
+    let _correction_worker = correction_monitor::Worker::optional(tci.clone(), "P2")?;
+    #[cfg(feature = "managed-puresignal")]
+    if _correction_worker.is_some() {
+        tci.set_correction_monitor_available();
+    }
     let tx_thread = tx_thread::spawn(
         session.clone(),
         radio_model.clone(),
@@ -1048,6 +1061,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                         needs_high_priority = true;
                         let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
                     }
+                }
+                TciCommand::SetPureSignalMode(_) => {
+                    eprintln!("saturn-bridge: explicit PS adaptation mode requires the shared TX owner");
                 }
                 TciCommand::SetPureSignalAutoAttenuate(enabled) => {
                     if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx

@@ -465,6 +465,41 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
         if self.status.phase == Phase::Blocked || self.shutdown_requested {
             return Err(Fault::CleanupPending);
         }
+        // RX-only updates after a COMPLETED stop do not need another native
+        // teardown. In particular, absolute VFO/DDC changes must not recreate
+        // the full TX engine for every knob step. This is deliberately limited
+        // to bypass -> bypass with no retained measurement or fault. Active,
+        // fitting, initial-startup and uncertain states keep stop-before-cleanup.
+        if self.status.phase == Phase::ReadyOff
+            && self.status.cleanup_completed_ns.is_some()
+            && self.status.primary_fault.is_none()
+            && self.status.authority_fault.is_none()
+            && self.status.cleanup_fault.is_none()
+            && self.measurement.is_none()
+            && self.pending_action.is_none()
+            && self
+                .current_config
+                .is_some_and(|c| !c.enabled && !c.automatic)
+            && !config.enabled
+            && !config.automatic
+        {
+            let fence = self.fence();
+            if let Err(fault) = self.c_mut().configure(fence, config) {
+                self.stop(StopCause::Fault(fault))?;
+                return Err(fault);
+            }
+            self.current_config = Some(config);
+            // Retire old arm credentials even though the existing stop proof
+            // remains valid. This never opens the output fence or keys RF.
+            let fence = self.fence();
+            if let Err(fault) = self.authority.cleanup_complete(self.status.stop_id, fence) {
+                self.status.authority_fault = Some(fault);
+                self.status.phase = Phase::Blocked;
+                return Err(fault);
+            }
+            self.service_release()?;
+            return Ok(());
+        }
         self.pending_config = Some(config); // one bounded slot, never a command backlog
         self.stop(StopCause::Reconfiguration)
     }
@@ -475,6 +510,21 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
             return Err(Fault::InvalidConfig);
         }
         self.begin_fresh_action(action, now, false)
+    }
+    /// Explicit uncorrected TX: same fresh authority and stop barriers, with
+    /// native fitting/correction verified disabled before opening output.
+    pub fn fresh_bypass_tx_action(&mut self, action: FreshTxAction, now: u64) -> Result<(), Fault> {
+        self.clock(now)?;
+        self.service_release()?;
+        if self.status.mode == RunMode::MeasurementOnly
+            || !self
+                .current_config
+                .is_some_and(|c| !c.enabled && !c.automatic)
+        {
+            return Err(Fault::InvalidConfig);
+        }
+        self.c_mut().measurement_guard()?;
+        self.begin_fresh_action(action, now, true)
     }
     pub fn fresh_measurement_action(
         &mut self,
@@ -509,7 +559,7 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
         &mut self,
         action: FreshTxAction,
         now: u64,
-        measurement: bool,
+        disabled_native_verified: bool,
     ) -> Result<(), Fault> {
         self.clock(now)?;
         self.service_release()?;
@@ -523,7 +573,7 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
         {
             return Err(Fault::CleanupPending);
         }
-        if !measurement && !self.current_config.unwrap().enabled {
+        if !disabled_native_verified && !self.current_config.unwrap().enabled {
             return Err(Fault::InvalidConfig);
         }
         if action.expected_fence != self.fence()
@@ -567,8 +617,13 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
             return Err(Fault::CleanupPending);
         }
         let config = self.current_config.ok_or(Fault::InvalidConfig)?;
+        let release = self.release.current();
         let fence = self.fence();
         self.c_mut().configure(fence, config)?;
+        if self.release.current() != release {
+            self.service_release()?;
+            return Err(Fault::GenerationMismatch);
+        }
         let fence = self.fence();
         if let Err(fault) = self.authority.cleanup_complete(self.status.stop_id, fence) {
             self.status.authority_fault = Some(fault);

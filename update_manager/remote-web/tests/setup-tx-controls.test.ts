@@ -80,13 +80,14 @@ describe('TX setup controls', () => {
     }
   });
 
-  it('places PureSignal controls and status inside the TX setup panel', () => {
+  it('retains one PS control surface for relocation to the main PS tab', () => {
     const txSetupStart = template.indexOf('id="setup-panel-tx"');
     const pureSignalSection = template.indexOf('id="setup-tx-puresignal-section"');
     const txSetupEnd = template.indexOf('class="audio-control-strip panel"');
 
     expect(pureSignalSection).toBeGreaterThan(txSetupStart);
     expect(pureSignalSection).toBeLessThan(txSetupEnd);
+    expect(template).toContain('$("ps-control-body").appendChild(psControls)');
     for (const id of [
       'setup-tx-puresignal-enabled',
       'setup-tx-puresignal-auto-attenuate',

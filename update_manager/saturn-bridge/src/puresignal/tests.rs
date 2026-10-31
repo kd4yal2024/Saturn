@@ -281,6 +281,7 @@ fn block(c: &Controller<FakeNative>, first: u64, pairs: usize, seq: u32, now: u6
         interval,
         observed_ns: now,
         overload: brackets(interval, now),
+        sequence_packets: if c.test_backend() == Backend::P2 { 1 } else { 0 },
         sequence: if c.test_backend() == Backend::P2 {
             Some(seq)
         } else {
@@ -290,6 +291,32 @@ fn block(c: &Controller<FakeNative>, first: u64, pairs: usize, seq: u32, now: u6
     b.tx[..pairs * 2].fill(0.25);
     b.rf[..pairs * 2].fill(0.125);
     b
+}
+#[test]
+fn p2_batched_wire_sequence_span_preserves_gap_detection_and_wrap() {
+    for first_sequence in [0, u32::MAX - 3] {
+        let (mut c, _) = setup(Backend::P2, 4);
+        let mut first = block(&c, 0, 952, first_sequence, 1);
+        first.meta.sequence_packets = 8;
+        c.submit(&first, 1).unwrap();
+        let mut second = block(&c, 952, 952, first_sequence.wrapping_add(8), 2);
+        second.meta.sequence_packets = 8;
+        c.submit(&second, 2).unwrap();
+        let mut gap = block(&c, 1904, 952, first_sequence.wrapping_add(17), 3);
+        gap.meta.sequence_packets = 8;
+        assert_eq!(c.submit(&gap, 3), Err(Fault::SequenceGap));
+    }
+}
+#[test]
+fn p2_batch_geometry_and_oldest_observation_are_mandatory() {
+    for (packets, pairs, fault) in [(0, 952, Fault::WrongFormat), (9, 952, Fault::WrongFormat), (8, 951, Fault::WrongFormat)] {
+        let (mut c, _) = setup(Backend::P2, 4);
+        let mut b = block(&c, 0, pairs, 0, 1); b.meta.sequence_packets = packets;
+        assert_eq!(c.submit(&b, 1), Err(fault));
+    }
+    let (mut c, _) = setup(Backend::P2, 4);
+    let mut b = block(&c, 0, 952, 0, 1); b.meta.sequence_packets = 8;
+    assert_eq!(c.submit(&b, 300_000_001), Err(Fault::Stale));
 }
 #[test]
 fn unverified_or_external_owner_never_calls_native() {

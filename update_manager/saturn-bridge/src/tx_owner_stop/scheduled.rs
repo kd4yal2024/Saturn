@@ -51,7 +51,7 @@ struct Fake {
 }
 
 fn remote_media_scenario(case: &str) {
-    let d = DirectFixture::new();
+    let d = DirectFixture::with_key_clock();
     d.fifo_ready();
     let (mut iq, mut mic) = queues();
     let mut m = model();
@@ -1071,6 +1071,7 @@ fn production_turn_clock_is_sampled_after_dequeue_without_rejuvenating_observati
                 rate_hz: 192000,
                 observed_ns: observed,
                 sequence: None,
+                sequence_packets: 0,
                 overload: [None; 3],
                 interval: Interval {
                     fence: r.life.fence(),
@@ -1104,7 +1105,7 @@ fn production_turn_clock_is_sampled_after_dequeue_without_rejuvenating_observati
 // Injection is at the actual initial-tick -> pump boundary, with rendering and
 // packet sending due. No sleeps or races determine which operation happens.
 fn exercise_pump_boundary(case: PumpBoundary) {
-    let d = DirectFixture::new();
+    let d = DirectFixture::with_key_clock();
     d.fifo_ready();
     let (mut iq, mut mic) = queues();
     let mut m = model();
@@ -1187,6 +1188,26 @@ fn exercise_pump_boundary(case: PumpBoundary) {
     let before_packets = r.counters.iq_packets;
     let before_dma = d.dma_writes();
     let mut hook_ran = false;
+    // In the ordinary-release case, hold the actual production queue's
+    // producer lock throughout the scheduled stop and native cleanup. A
+    // consumer that waits/spins cannot reach the release hook promptly.
+    let paused_producer = if case == PumpBoundary::Release {
+        let (tx, rx) = crate::tx_thread::owner_mailbox::sync_channel(2);
+        r.replace_feedback_receiver(rx);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            tx.send_with_pause(Box::new(PairBlock::default()), || {
+                entered_tx.send(()).unwrap();
+                // Finite failure bound; an assertion failure cannot strand a
+                // helper thread or leave its test mutex held indefinitely.
+                let _ = resume_rx.recv_timeout(Duration::from_secs(2));
+            }).ok();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        Some((resume_tx, worker, Instant::now()))
+    } else { None };
+    r.counters.active_max_turn_ns = 0;
     r.turn_with_before_pump(now, |r| {
         hook_ran = true;
         assert_eq!(
@@ -1206,6 +1227,8 @@ fn exercise_pump_boundary(case: PumpBoundary) {
         }
     });
     assert!(hook_ran);
+    let active_turn_ns = r.counters.active_max_turn_ns;
+    assert!(active_turn_ns > 0, "retain the final active turn even when pump stops it");
     if case == PumpBoundary::Healthy {
         assert_eq!(r.life.status().phase, Phase::Active);
         assert_eq!(r.life.status().primary_fault, None);
@@ -1265,6 +1288,17 @@ fn exercise_pump_boundary(case: PumpBoundary) {
         Some(saturn_bridge::puresignal::tx_lifecycle::StopEvidence::DirectControlReadback)
     );
     assert!(trace.borrow().cleanup > before_cleanup);
+    if let Some((resume, worker, started)) = paused_producer {
+        let elapsed = started.elapsed();
+        resume.send(()).ok();
+        worker.join().unwrap();
+        assert!(elapsed < Duration::from_secs(1),
+            "release/receipt/native cleanup waited behind paused queue producer: {elapsed:?}");
+    }
+    if case != PumpBoundary::Healthy {
+        assert_eq!(r.counters.active_max_turn_ns, active_turn_ns,
+            "later stop/cleanup turns cannot replace active timing evidence");
+    }
     assert!(r.life.offline_owner().queues_empty());
     d.assert_off(); // ordinary-file control readback, NOT physical RF-off
     if case != PumpBoundary::Healthy {
@@ -1293,6 +1327,156 @@ fn scheduled_pump_missing_authority_does_not_unwrap_and_completes_cleanup() {
 #[test]
 fn scheduled_pump_healthy_control_renders_and_sends_one_exchange() {
     exercise_pump_boundary(PumpBoundary::Healthy);
+}
+
+// A control/media stall can deliver valid PCM in bursts while acquisition
+// preparation is pending. The bounded ingress FIFO must not be drained into
+// an already-full, smaller local staging buffer before rendering can resume.
+fn exercise_pcm_burst_while_preparing(case: &str) {
+    use crate::tx_thread::feedback_owner::Link;
+    let d = DirectFixture::with_key_clock();
+    d.fifo_ready();
+    let (mut iq, mut mic) = queues();
+    let mut m = model();
+    m.desired.tx_drive = 5;
+    let mut output = OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap();
+    output.enable_offline_handoff(&m, 5).unwrap();
+    let link = Link::new();
+    output.attach_feedback_owner(link.clone(), 20).unwrap();
+    let trace = Rc::new(RefCell::new(Trace::default()));
+    let life = controller(
+        Fake {
+            trace: trace.clone(),
+        },
+        output,
+        Backend::DirectXdma,
+    );
+    let (commands, rx) = mpsc::sync_channel(16);
+    let (audio, arx) = mpsc::sync_channel(16);
+    let (fb, frx) = mpsc::sync_channel(2);
+    let mut r = OwnerLoop::new(
+        life,
+        rx,
+        arx,
+        frx,
+        Instant::now(),
+        Timing {
+            mic_age_ns: 150_000_000,
+            source_stall_ns: 500_000_000,
+            tx_duration_ns: 2_000_000_000,
+        },
+    )
+    .unwrap();
+    let issuer = OperatorIngress::fixture();
+    let mut now = 0;
+    for _ in 0..20 {
+        now += 1_000_000;
+        r.turn(now);
+    }
+    send_config(&mut r, &commands, 300, TxAudioSource::Tci, 11);
+    for _ in 0..20 {
+        now += 1_000_000;
+        r.turn(now);
+    }
+    send_arm(&mut r, &commands, &issuer);
+    now += 1_000_000;
+    r.turn(now);
+    assert_eq!(r.life.status().phase, Phase::AwaitingKey);
+    assert!(link.preparing());
+    for _ in 0..2 {
+        now += 1_000_000;
+        for _ in 0..4 {
+            send_audio(&mut r, &audio, now);
+        }
+        r.turn(now);
+    }
+    assert_eq!(
+        r.life.status().primary_fault,
+        None,
+        "valid burst must remain bounded, not overflow the smaller staging ring"
+    );
+    assert_eq!(r.life.status().phase, Phase::AwaitingKey);
+    d.assert_off(); // no key before acquisition completion
+    let before = d.dma_writes();
+    if case == "release" {
+        r.cancel_handle().release();
+    } else {
+        if case == "stale" {
+            now += 160_000_000;
+        }
+        assert!(link.complete(link.desired()));
+    }
+    let mut first = 0;
+    for _ in 0..140 {
+        now += 1_000_000;
+        if r.life.status().phase == Phase::Active && now % 5_000_000 == 0 {
+            feedback(&mut r, &fb, &mut first, now, Backend::DirectXdma);
+        }
+        r.turn(now);
+        let request = link.desired();
+        if request.scope.is_none() && link.may_apply(request) {
+            link.complete(request);
+        }
+        if case == "healthy" && trace.borrow().nonzero_renders >= 8 {
+            break;
+        }
+        if case != "healthy" && r.life.status().phase == Phase::ReadyOff {
+            break;
+        }
+    }
+    if case == "healthy" {
+        assert_eq!(r.life.status().phase, Phase::Active);
+        assert_eq!(r.life.status().primary_fault, None);
+        assert_eq!(
+            trace.borrow().nonzero_renders,
+            8,
+            "every queued source block must render, without dropping or retiming it"
+        );
+        assert!(r.counters.iq_packets > 0);
+        assert!(d.dma_writes() > before);
+        r.cancel_handle().release();
+    } else {
+        assert_eq!(
+            r.life.status().primary_fault,
+            if case == "stale" {
+                Some(Fault::Stale)
+            } else {
+                None
+            }
+        );
+        assert_eq!(
+            d.dma_writes(),
+            before,
+            "deferred stale/released audio cannot produce RF output"
+        );
+    }
+    for _ in 0..40 {
+        now += 1_000_000;
+        r.turn(now);
+        let request = link.desired();
+        if request.scope.is_none() && link.may_apply(request) {
+            link.complete(request);
+        }
+        if r.life.status().phase == Phase::ReadyOff {
+            break;
+        }
+    }
+    assert_eq!(r.life.status().phase, Phase::ReadyOff);
+    assert!(r.life.status().cleanup_completed_ns.is_some());
+    assert!(r.life.offline_owner().queues_empty());
+    d.assert_off();
+}
+#[test]
+fn scheduled_pcm_burst_keeps_bounded_ingress_until_rendering_can_resume() {
+    exercise_pcm_burst_while_preparing("healthy");
+}
+#[test]
+fn scheduled_pcm_burst_release_precedes_deferred_audio() {
+    exercise_pcm_burst_while_preparing("release");
+}
+#[test]
+fn scheduled_pcm_burst_stale_samples_cannot_be_refreshed_or_key() {
+    exercise_pcm_burst_while_preparing("stale");
 }
 impl NativePs for Fake {
     fn configure(&mut self, _: Config) -> Result<f64, Fault> {
@@ -1335,6 +1519,9 @@ impl CooperativeNative for Fake {
     }
 }
 impl ScheduledNative for Fake {
+    fn measurement_mic_gain(&mut self, _: bool) -> Result<(), Fault> {
+        Ok(())
+    }
     fn configure_model(&mut self, m: &RadioModel) -> Result<(), Fault> {
         if let Some(fault) = self.trace.borrow_mut().model_fault.take() {
             return Err(fault);
@@ -1660,6 +1847,457 @@ fn cfg(id: u128) -> Config {
         stale_after_ns: 250_000_000,
     }
 }
+
+#[test]
+fn generated_single_trial_actual_owner_deadline_release_and_stale_authority_both_backends() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for case in [
+            "expiry",
+            "release",
+            "cancel-queued",
+            "stale-request",
+            "missing",
+            "config",
+        ] {
+            generated_single_trial(backend, case, false, |_| Fake {
+                trace: Rc::new(RefCell::new(Trace::default())),
+            });
+        }
+    }
+}
+
+#[test]
+fn feedback_burst_actual_owner_keeps_freshness_release_and_overflow_both_backends() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for case in [
+            "feedback-burst",
+            "feedback-release",
+            "feedback-overflow",
+            "feedback-stale",
+        ] {
+            generated_single_trial(backend, case, false, |_| Fake {
+                trace: Rc::new(RefCell::new(Trace::default())),
+            });
+        }
+    }
+}
+
+#[test]
+#[ignore = "serial real WDSP and actual file/loopback owners; no RF"]
+fn feedback_burst_real_native_owner_keeps_stop_cleanup_both_backends() {
+    unsafe extern "C" {
+        fn fftw_set_timelimit(seconds: f64);
+    }
+    unsafe { fftw_set_timelimit(0.01) };
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for case in [
+            "feedback-burst",
+            "feedback-release",
+            "feedback-overflow",
+            "feedback-stale",
+        ] {
+            generated_single_trial(backend, case, true, |m| {
+                crate::wdsp::ps_native::FullNative::matched(m).unwrap()
+            });
+        }
+    }
+}
+
+#[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+#[test]
+#[ignore = "serial matched WDSP; ordinary files/loopback only, no RF"]
+fn generated_single_trial_real_native_output_and_cleanup_both_backends() {
+    unsafe extern "C" {
+        fn fftw_set_timelimit(seconds: f64);
+    }
+    unsafe {
+        fftw_set_timelimit(0.01);
+    }
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for native_source in [false, true] {
+            for case in [
+                "expiry",
+                "release",
+                "missing",
+                "config",
+                "cancel-queued",
+                "stale-request",
+                "disconnect",
+                "missing-source",
+            ] {
+                generated_single_trial(backend, case, native_source, |m| {
+                    crate::wdsp::ps_native::FullNative::matched(m).unwrap()
+                });
+            }
+        }
+    }
+}
+
+fn generated_single_trial<N: ScheduledNative>(
+    backend: Backend,
+    case: &str,
+    native_source: bool,
+    native: impl FnOnce(&RadioModel) -> N,
+) {
+    use crate::tx_thread::ps_ingress::TwoToneLimits;
+    let p2 = (backend == Backend::P2).then(super::tests::p2_separate_lanes);
+    if let Some((_, hp, iq)) = &p2 {
+        hp.set_nonblocking(true).unwrap();
+        iq.set_nonblocking(true).unwrap();
+    }
+    let drain = || {
+        if let Some((_, hp, iq)) = &p2 {
+            let mut bytes = [0; 2048];
+            while hp.recv(&mut bytes).is_ok() {}
+            while iq.recv(&mut bytes).is_ok() {}
+        }
+    };
+    let direct = (backend == Backend::DirectXdma).then(DirectFixture::new);
+    if let Some(d) = &direct {
+        d.fifo_ready();
+    }
+    let (mut iq, mut mic) = queues();
+    let mut m = model();
+    m.desired.tx_drive = 5;
+    m.desired.tx_frequency_hz = 7_200_000;
+    let mut output = if let Some((session, _, _)) = &p2 {
+        OwnerStopAdapter::p2(session.clone(), &m, &mut iq, &mut mic).unwrap()
+    } else {
+        OwnerStopAdapter::direct(direct.as_ref().unwrap().radio.clone(), &mut iq, &mut mic).unwrap()
+    };
+    output.enable_offline_handoff(&m, 5).unwrap();
+    let life = controller(native(&m), output, backend);
+    let origin = Instant::now();
+    let issuer = OperatorIngress::fixture();
+    let (clients, operator_id) = issuer.fixture_registry();
+    let outbound = clients.lock().unwrap().get(&7).unwrap().outbound.clone();
+    let (mut r, ingress) = OwnerLoop::with_shared_ingress(
+        life,
+        issuer,
+        Arc::new(Mutex::new(m.clone())),
+        origin,
+        Timing {
+            mic_age_ns: 150_000_000,
+            source_stall_ns: 500_000_000,
+            tx_duration_ns: 2_000_000_000,
+        },
+    )
+    .unwrap();
+    ingress
+        .enable_two_tone_trials(TwoToneLimits {
+            frequency_hz: 7_200_000,
+            max_ms: 45000,
+        })
+        .unwrap();
+    if native_source {
+        ingress.restrict_to_generated_trials().unwrap();
+    }
+    let initial_deadline = Instant::now() + Duration::from_secs(3);
+    while r.life.status().phase != Phase::ReadyOff {
+        assert!(
+            Instant::now() < initial_deadline,
+            "initial cleanup {:?}",
+            r.life.status()
+        );
+        drain();
+        r.turn(origin.elapsed().as_nanos() as u64);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let mut config = cfg(11);
+    config.automatic = false;
+    // This isolated native fixture must allow actual DSP startup before its
+    // finite action expires; it is not a measured hardware key-latency bound.
+    config.stale_after_ns = if case == "feedback-stale" {
+        150_000_000
+    } else if case == "missing" {
+        250_000_000
+    } else {
+        1_000_000_000
+    };
+    ingress
+        .bootstrap(m.clone(), config, TxAudioSource::Tci)
+        .unwrap();
+    let mut stage = 0;
+    let mut requested = 0;
+    let mut next_audio = 0;
+    let mut active = false;
+    let mut arm_seen = false;
+    let mut active_at = None;
+    let mut injected = false;
+    let mut old_capture = None;
+    let mut next_sample = 0u64;
+    let mut stopped_packets = 0;
+    let mut observed_peak = 0.0_f32;
+    let mut packets_at_burst = 0;
+    r.run(&AtomicBool::new(false), |r, now| {
+        assert!(
+            now < 5_000_000_000,
+            "trial timeout {backend:?}/{case} {:?}",
+            r.life.status()
+        );
+        drain();
+        if stage == 0 && ingress.startup_ready() && (case != "stale-request" || now > 160_000_000) {
+            let capture = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+            old_capture = Some(capture.clone());
+            requested = now;
+            let duration = if matches!(case, "missing" | "missing-source") {
+                1000
+            } else {
+                600
+            };
+            if case == "stale-request" {
+                // Producer age is retained even when its queue is serviced later.
+                let old = ingress.capture(origin).unwrap();
+                ingress.two_tone_message(
+                    7,
+                    &format!(
+                        "saturn_ps_two_tone:0,1,start,{duration}{};",
+                        if native_source {
+                            ",wdsp-postgen-two-tone-v1"
+                        } else {
+                            ""
+                        }
+                    ),
+                    Some(&old),
+                );
+            } else {
+                ingress.two_tone_message(
+                    7,
+                    &format!(
+                        "saturn_ps_two_tone:0,1,start,{duration}{};",
+                        if native_source {
+                            ",wdsp-postgen-two-tone-v1"
+                        } else {
+                            ""
+                        }
+                    ),
+                    Some(&capture),
+                );
+                if case == "cancel-queued" {
+                    ingress.release();
+                }
+            }
+            stage = 1;
+        }
+        let phase = r.life.status().phase;
+        arm_seen |= phase == Phase::AwaitingKey;
+        active |= phase == Phase::Active;
+        observed_peak = observed_peak.max(r.counters.native_iq_component_peak);
+        if phase == Phase::Active {
+            active_at.get_or_insert(now);
+        }
+        if stage == 1
+            && !matches!(case, "cancel-queued" | "stale-request" | "missing-source")
+            && matches!(phase, Phase::AwaitingKey | Phase::Active)
+            && now >= next_audio
+        {
+            let capture = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+            old_capture = Some(capture.clone());
+            let samples = (0..512)
+                .map(|i| {
+                    if native_source {
+                        return 0.;
+                    }
+                    let n = (next_sample + i) as f64;
+                    (0.2 * ((std::f64::consts::TAU * 700. * n / 48000.).sin()
+                        + (std::f64::consts::TAU * 1900. * n / 48000.).sin()))
+                        as f32
+                })
+                .collect();
+            next_sample += 512;
+            ingress
+                .enqueue_audio(
+                    &capture,
+                    TxAudioFrame {
+                        enqueued_at: origin + Duration::from_nanos(now),
+                        source: TxAudioSource::Tci,
+                        samples: TxAudioSamples::Dynamic(samples),
+                        channels: 1,
+                        sample_rate_hz: 48000,
+                    },
+                )
+                .unwrap();
+            next_audio = now + 10_666_667;
+        }
+        if stage == 1
+            && active_at.is_some_and(|t| now.saturating_sub(t) > 40_000_000)
+            && !injected
+            && matches!(case, "release" | "config" | "disconnect")
+        {
+            if case == "release" {
+                ingress.release();
+            } else if case == "disconnect" {
+                crate::tci::unregister_client(&clients, &operator_id, 7);
+                ingress.release();
+            } else {
+                let c = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+                ingress
+                    .configure_batch(7, Some(&c), &[crate::tci::TciCommand::SetTxMicGain(2.)])
+                    .unwrap();
+            }
+            injected = true;
+        }
+        if stage == 1
+            && case.starts_with("feedback-")
+            && !injected
+            && active_at.is_some_and(|t| now.saturating_sub(t) > 40_000_000)
+        {
+            use crate::tx_thread::ps_ingress::FEEDBACK_QUEUE_BLOCKS;
+            use crate::tx_thread::{
+                feedback_owner::{Scope, Stimulus},
+                feedback_stream::{
+                    tests::{direct_frames, packet},
+                    Stream,
+                },
+            };
+            packets_at_burst = r.counters.iq_packets;
+            let count = if case == "feedback-overflow" {
+                (FEEDBACK_QUEUE_BLOCKS + 1) * if backend == Backend::P2 { 8 } else { 1 }
+            } else if backend == Backend::P2 {
+                16
+            } else {
+                6
+            };
+            let scope = Scope {
+                fence: r.life.fence(),
+                route: 20,
+                frequency_hz: 7_200_000,
+                attenuation_db: 0,
+                output: r.life.offline_owner().output_stamp().unwrap(),
+                stimulus: if native_source {
+                    Stimulus::NativeTwoTone
+                } else {
+                    Stimulus::TwoTone
+                },
+            };
+            let mut stream = Stream::new(scope, backend, origin, ingress.clone()).unwrap();
+            let mut ddc6 = Vec::new();
+            for n in 0..count {
+                // Actual production demux/assembly -> pooled ingress -> actual
+                // scheduled owner/native -> file/loopback output. This tests
+                // one combined path rather than separate handoff components.
+                let observed = origin + Duration::from_nanos(now);
+                let result = if backend == Backend::DirectXdma {
+                    stream.direct(Some(scope), &direct_frames(256), observed, &mut ddc6)
+                } else {
+                    stream.p2(Some(scope), &packet(n as u32), observed)
+                };
+                assert_eq!(
+                    result.is_err(),
+                    case == "feedback-overflow" && n + 1 == count
+                );
+            }
+            if case == "feedback-release" {
+                ingress.release();
+            }
+            if case == "feedback-stale" {
+                // Hold the actual queued samples beyond the unchanged 150 ms
+                // deadline. Their original observation must not be refreshed.
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            injected = true;
+        }
+        let canceled = matches!(case, "cancel-queued" | "stale-request") && r.counters.rejected > 0;
+        if stage == 1
+            && (active || canceled || (arm_seen && case == "missing-source"))
+            && phase == Phase::ReadyOff
+            && now > requested
+        {
+            assert!(r.life.status().cleanup_completed_ns.is_some());
+            assert_eq!(
+                r.life.status().primary_fault,
+                if matches!(case, "missing" | "missing-source" | "feedback-stale") {
+                    Some(Fault::Stale)
+                } else if case == "feedback-overflow" {
+                    Some(Fault::QueueOverrun)
+                } else {
+                    None
+                }
+            );
+            if case == "feedback-burst" {
+                assert!(injected);
+                assert_eq!(
+                    r.life.feedback_status().accepted_pairs,
+                    if backend == Backend::P2 {
+                        16 * 119
+                    } else {
+                        6 * 1024
+                    }
+                );
+            }
+            if matches!(
+                case,
+                "feedback-release" | "feedback-stale" | "feedback-overflow"
+            ) {
+                assert!(injected);
+                assert_eq!(
+                    r.counters.iq_packets, packets_at_burst,
+                    "no output after release/expired burst/overflow"
+                );
+            }
+            if case == "missing-source" {
+                assert!(
+                    !active,
+                    "native generator cannot replace fresh source ingress"
+                );
+                assert_eq!(r.counters.iq_packets, 0);
+                assert_eq!(r.counters.last_stale.unwrap().fields[0], 2);
+            }
+            if active {
+                assert!(r.counters.iq_packets > 0);
+                assert!(observed_peak > 0.01);
+            }
+            stopped_packets = r.counters.iq_packets;
+            // An old generation's PCM is not rebound after cleanup.
+            let old = old_capture.as_ref().unwrap();
+            let retained = ingress.enqueue_audio(
+                old,
+                TxAudioFrame {
+                    enqueued_at: origin + Duration::from_nanos(now),
+                    source: TxAudioSource::Tci,
+                    samples: TxAudioSamples::Dynamic(vec![0.1; 512]),
+                    channels: 1,
+                    sample_rate_hz: 48000,
+                },
+            );
+            if !active {
+                assert!(retained.is_err());
+            }
+            ingress.shutdown().unwrap();
+            stage = 2;
+        }
+    });
+    assert_eq!(stage, 2);
+    assert!(r.life.offline_owner().queues_empty());
+    assert_eq!(
+        r.counters.iq_packets, stopped_packets,
+        "retained PCM wrote output after stop"
+    );
+    let mut replies = String::new();
+    while let Some(item) = outbound.next_message(false) {
+        if let crate::tci::OutboundMessage::TransactionText(s) = item.message {
+            replies.push_str(&s);
+        }
+    }
+    assert!(
+        replies.contains("saturn_ps_two_tone:0,1,queued;"),
+        "{replies}"
+    );
+    if active || (arm_seen && case == "missing-source") {
+        assert!(replies.contains("saturn_ps_two_tone:0,1,accepted;"));
+        if case != "disconnect" {
+            assert!(replies.contains("saturn_ps_two_tone:0,1,complete,"));
+        }
+    } else {
+        assert!(replies.contains("saturn_ps_two_tone:0,1,rejected,"));
+    }
+    if case == "stale-request" {
+        assert!(replies.contains("rejected,Stale;"));
+    }
+    if let Some(d) = &direct {
+        d.assert_off();
+    }
+}
 fn controller<N: ScheduledNative>(
     n: N,
     owner: OwnerStopAdapter<'_>,
@@ -1694,6 +2332,161 @@ fn controller<N: ScheduledNative>(
     .unwrap();
     life.reconfigure(life.fence(), cfg(10), 0).unwrap();
     life
+}
+
+#[test]
+fn explicit_fault_ack_actual_owner_both_backends_never_arms_and_rejects_cancelled_requests() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for case in ["fresh", "release", "disconnect", "wrong-stop", "stale"] {
+            let p2 = (backend == Backend::P2).then(super::tests::p2_separate_lanes);
+            let direct = (backend == Backend::DirectXdma).then(DirectFixture::new);
+            if let Some(d) = &direct {
+                d.fifo_ready();
+            }
+            let (mut iq, mut mic) = queues();
+            let mut m = model();
+            m.desired.tx_drive = 5;
+            let mut output = if let Some((session, _, _)) = &p2 {
+                OwnerStopAdapter::p2(session.clone(), &m, &mut iq, &mut mic).unwrap()
+            } else {
+                OwnerStopAdapter::direct(direct.as_ref().unwrap().radio.clone(), &mut iq, &mut mic)
+                    .unwrap()
+            };
+            output.enable_offline_handoff(&m, 5).unwrap();
+            let trace = Rc::new(RefCell::new(Trace::default()));
+            let life = controller(
+                Fake {
+                    trace: trace.clone(),
+                },
+                output,
+                backend,
+            );
+            let issuer = OperatorIngress::fixture();
+            let (clients, _) = issuer.fixture_registry();
+            let outbound = clients.lock().unwrap().get(&7).unwrap().outbound.clone();
+            let origin = Instant::now();
+            let (mut r, ingress) = OwnerLoop::with_shared_ingress(
+                life,
+                issuer,
+                Arc::new(Mutex::new(m.clone())),
+                origin,
+                Timing {
+                    mic_age_ns: 150_000_000,
+                    source_stall_ns: 500_000_000,
+                    tx_duration_ns: 2_000_000_000,
+                },
+            )
+            .unwrap();
+            let mut now = 0;
+            for _ in 0..200 {
+                std::thread::sleep(Duration::from_millis(2));
+                now += 2_000_000;
+                r.turn(now);
+                if r.life.status().phase == Phase::ReadyOff {
+                    break;
+                }
+            }
+            ingress
+                .bootstrap(m.clone(), cfg(11), TxAudioSource::Tci)
+                .unwrap();
+            for _ in 0..200 {
+                std::thread::sleep(Duration::from_millis(2));
+                now += 2_000_000;
+                r.turn(now);
+                if r.counters.configurations == 1 && r.life.status().phase == Phase::ReadyOff {
+                    break;
+                }
+            }
+            ingress.stop(Fault::QueueOverrun);
+            for _ in 0..200 {
+                std::thread::sleep(Duration::from_millis(2));
+                now += 2_000_000;
+                r.turn(now);
+                if r.life.status().phase == Phase::ReadyOff {
+                    break;
+                }
+            }
+            assert_eq!(r.life.status().phase, Phase::ReadyOff);
+            assert_eq!(r.life.status().primary_fault, Some(Fault::QueueOverrun));
+            let stop = r.life.status().stop_id;
+            let capture = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+            let requested = if case == "wrong-stop" { stop + 1 } else { stop };
+            assert!(ingress.fault_ack_message(
+                7,
+                &format!("saturn_tx_fault_ack:0,1,{requested};"),
+                Some(&capture)
+            ));
+            if case == "release" {
+                ingress.release();
+            }
+            if case == "disconnect" {
+                clients
+                    .lock()
+                    .unwrap()
+                    .get(&7)
+                    .unwrap()
+                    .state
+                    .authorization_live
+                    .store(false, Ordering::SeqCst);
+            }
+            if case == "stale" {
+                now += 151_000_000;
+            }
+            for _ in 0..100 {
+                std::thread::sleep(Duration::from_millis(2));
+                now += 2_000_000;
+                r.turn(now);
+            }
+            assert_eq!(r.life.status().phase, Phase::ReadyOff);
+            assert_eq!(
+                r.life.status().primary_fault,
+                if case == "fresh" {
+                    None
+                } else {
+                    Some(Fault::QueueOverrun)
+                }
+            );
+            assert_eq!(trace.borrow().nonzero_renders, 0);
+            assert_eq!(r.counters.iq_packets, 0);
+            assert!(r.life.offline_owner().queues_empty());
+            let mut replies = String::new();
+            while let Some(item) = outbound.next_message(false) {
+                if let crate::tci::OutboundMessage::TransactionText(text) = item.message {
+                    replies.push_str(&text);
+                }
+            }
+            assert!(
+                replies.contains(if case == "fresh" {
+                    "saturn_tx_fault_ack:0,1,applied,none,"
+                } else {
+                    "saturn_tx_fault_ack:0,1,rejected,"
+                }),
+                "{backend:?} {case}: {replies}"
+            );
+            if case == "fresh" {
+                let fresh = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+                ingress
+                    .tci(7, Some(&fresh), &crate::tci::TciCommand::SetTxEnabled(true))
+                    .unwrap();
+                now += 1_000_000;
+                r.turn(now);
+                assert_eq!(r.life.status().phase, Phase::AwaitingKey); // a separate authorized action
+                ingress.release();
+                for _ in 0..200 {
+                    std::thread::sleep(Duration::from_millis(2));
+                    now += 2_000_000;
+                    r.turn(now);
+                    if r.life.status().phase == Phase::ReadyOff {
+                        break;
+                    }
+                }
+                assert_eq!(r.life.status().phase, Phase::ReadyOff);
+            }
+            if let Some(d) = &direct {
+                d.assert_off();
+            }
+        }
+    }
 }
 fn send_config<N: ScheduledNative>(
     r: &mut OwnerLoop<'_, N>,
@@ -1766,6 +2559,7 @@ fn feedback<N: ScheduledNative>(
         route: 20,
         observed_ns: now,
         sequence: None,
+                sequence_packets: 0,
         rate_hz: 192000,
         overload: [None; 3],
     };
@@ -1886,6 +2680,10 @@ fn scheduled_owner_watchdogs_empty_busy_and_single_exchange_budget() {
             });
             assert!(fault_seen);
             assert_eq!(r.counters.deadline_stops, 1);
+            let snapshot = r.counters.last_stale.expect("watchdog cause retained");
+            assert_eq!(snapshot.fields[0], if duration { 1 } else { 2 });
+            assert!(snapshot.fields[1] >= snapshot.fields[2]);
+            assert_eq!(snapshot.fields[6], 40_000_000);
             assert!(r.counters.mic_blocks > 0);
             assert!(trace.borrow().cleanup >= 2);
             assert_eq!(trace.borrow().models, vec![300]);
@@ -2848,6 +3646,11 @@ mod native {
     #[test]
     fn combined_full_native_satp_source_changes_rearm_and_discontinuity() {
         use crate::wdsp::ps_native::FullNative;
+        // This test must also run alone, without inheriting planner settings
+        // from an earlier test. Limit FFTW planning, not lifecycle deadlines.
+        unsafe {
+            fftw_set_timelimit(0.01);
+        }
         for backend in [Backend::P2, Backend::DirectXdma] {
             let p2 = (backend == Backend::P2).then(p2_separate_lanes);
             if let Some((_, hp, iq)) = &p2 {
@@ -2904,6 +3707,12 @@ mod native {
             let mut retained_delay = None;
             let mut selected = TxAudioSource::Satp;
             r.run(&AtomicBool::new(false), |r, now| {
+                if r.life.status().phase == Phase::Blocked {
+                    unsafe extern "C" {fn GetPSInfo(channel:i32,info:*mut i32);}
+                    let mut info=[0i32;16];
+                    unsafe {GetPSInfo(1,info.as_mut_ptr());}
+                    panic!("full pipeline blocked stage={stage} info={info:?} iqc_flags={} status={:?}",iqc_flags(),r.life.status());
+                }
                 assert!(
                     now < 12_000_000_000,
                     "stage={stage} full pipeline stalled {:?}",

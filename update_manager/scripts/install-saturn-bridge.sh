@@ -33,6 +33,9 @@ SATURN_BRIDGE_BUILD_ONLY="${SATURN_BRIDGE_BUILD_ONLY:-0}"
 SATURN_BRIDGE_UNIT_ONLY="${SATURN_BRIDGE_UNIT_ONLY:-0}"
 SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
+# Explicit shared-owner build; runtime owner selection remains a separate setting.
+SATURN_BRIDGE_MANAGED_PURESIGNAL="${SATURN_BRIDGE_MANAGED_PURESIGNAL:-0}"
+SATURN_BRIDGE_REVIEWED_WDSP_DIR="${SATURN_BRIDGE_REVIEWED_WDSP_DIR:-}"
 SATURN_INSTALL_PACKAGES="${SATURN_INSTALL_PACKAGES:-1}"
 SATURN_BRIDGE_VERIFY_RUNTIME="${SATURN_BRIDGE_VERIFY_RUNTIME:-1}"
 SATURN_BRIDGE_BACKEND_STATE_FILE="${SATURN_BRIDGE_BACKEND_STATE_FILE:-/var/lib/saturn-radio-backend/selection.json}"
@@ -328,6 +331,19 @@ build_bridge() {
     cargo_args+=(--release)
   fi
 
+  if flag_enabled "$SATURN_BRIDGE_MANAGED_PURESIGNAL"; then
+    [[ -n "$SATURN_BRIDGE_REVIEWED_WDSP_DIR" ]] || die "Managed PureSignal requires SATURN_BRIDGE_REVIEWED_WDSP_DIR"
+    [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.10" ]] || die "Managed PureSignal requires reviewed WDSP 2.10"
+    need_file "$SATURN_BRIDGE_REVIEWED_WDSP_DIR/libwdsp.a" "reviewed PureSignal native archive"
+    need_file "$SATURN_BRIDGE_REVIEWED_WDSP_DIR/wdsp.h" "reviewed PureSignal native header"
+    cargo_args+=(--features managed-puresignal)
+    native_env+=(
+      SATURN_WDSP_DIR="$SATURN_BRIDGE_REVIEWED_WDSP_DIR"
+      SATURN_BRIDGE_WDSP_FLAVOR="wdsp2-2.10"
+      SATURN_BRIDGE_WDSP_COMMIT="$SATURN_WDSP2_REF"
+      SATURN_BRIDGE_SOURCE_PIN="$(python3 "$SATURN_BRIDGE_SOURCE_DIR/scripts/source-pin.py" "$SATURN_REPO_ROOT")"
+    )
+  else
   case "$SATURN_BRIDGE_WDSP_FLAVOR" in
     wdsp2|2.00|2.10)
       build_wdsp2
@@ -351,6 +367,8 @@ build_bridge() {
       die "Unsupported SATURN_BRIDGE_WDSP_FLAVOR: $SATURN_BRIDGE_WDSP_FLAVOR"
       ;;
   esac
+
+  fi
 
   log "Building saturn-bridge ($SATURN_BRIDGE_BUILD_PROFILE, WDSP=$SATURN_BRIDGE_WDSP_FLAVOR)"
   run_as_bridge_user env \

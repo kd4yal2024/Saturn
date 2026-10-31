@@ -38,6 +38,7 @@ pub(crate) struct Options {
     pub(crate) startup_timeout_ns: u64,
     pub(crate) feedback_attenuation_db: u8,
     pub(crate) measurement_only: bool,
+    pub(crate) generated_trials_only: bool,
 }
 impl Options {
     pub(crate) fn from_env() -> Result<Self, String> {
@@ -82,6 +83,7 @@ impl Options {
             startup_timeout_ns: number("SATURN_PS_STARTUP_TIMEOUT_NS")?,
             feedback_attenuation_db: number("SATURN_PS_FEEDBACK_ATTENUATION_DB")?,
             measurement_only: flag("SATURN_PS_MEASUREMENT_ONLY")?,
+            generated_trials_only: flag("SATURN_PS_GENERATED_TRIALS_ONLY")?,
             feedback_topology_reviewed: flag("SATURN_PS_FEEDBACK_TOPOLOGY_REVIEWED")?,
             managed_rf_permitted: flag("SATURN_PS_MANAGED_RF_PERMITTED")?,
             operational_policy: match std::env::var("SATURN_PS_ADMISSION").as_deref() {
@@ -127,14 +129,21 @@ impl Options {
         {
             return Err("explicit SATURN_PS_FEEDBACK_INPUT=rx-bypass required".into());
         }
+        if options.generated_trials_only
+            && (options.measurement_only
+                || options.max_watts > 5
+                || std::env::var("SATURN_PS_GENERATED_TRIALS").as_deref() != Ok("1"))
+        {
+            return Err("generated-only mode requires explicit generated trials, <=5 commanded W, and non-MeasurementOnly owner".into());
+        }
         if options.measurement_only
             && (options.operational_policy.is_some()
                 || options.max_watts > super::ps_measurement::MAX_DRIVE_WATTS
                 || options.timing.tx_duration_ns
-                    > super::ps_measurement::MAX_DURATION_MS * 1_000_000)
+                    > super::ps_measurement::CaptureMode::from_env()?.max_duration_ms() * 1_000_000)
         {
             return Err(
-                "MeasurementOnly requires strict admission, <=5 commanded W and <=1000ms duration"
+                "MeasurementOnly requires strict admission, <=5 commanded W and the selected capture-mode duration bound"
                     .into(),
             );
         }
@@ -147,6 +156,7 @@ pub(crate) enum Radio {
     Direct(Arc<DirectXdmaTxRadio>),
 }
 pub(crate) struct Runtime {
+    _signal_capture: Option<crate::tx_signal_capture::shared::Worker>,
     pub(crate) ingress: SharedIngress,
     pub(crate) link: Link,
     pub(crate) origin: Instant,
@@ -166,6 +176,19 @@ pub(crate) fn spawn(
     if keepalive_period.is_zero() {
         return Err(Fault::InvalidConfig);
     }
+    // Default off, separately reviewed from MeasurementOnly. No inferred
+    // frequency, feedback limits, RF permission or automatic PS enablement.
+    let two_tone_limits = match std::env::var("SATURN_PS_GENERATED_TRIALS").as_deref() {
+        Err(std::env::VarError::NotPresent) | Ok("0") => None,
+        Ok("1") if !options.measurement_only => Some(super::ps_ingress::TwoToneLimits {
+            frequency_hz: std::env::var("SATURN_PS_GENERATED_FREQUENCY_HZ")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .ok_or(Fault::InvalidConfig)?,
+            max_ms: 45_000.min(options.timing.tx_duration_ns / 1_000_000),
+        }),
+        _ => return Err(Fault::InvalidConfig),
+    };
     let measurement_host = if options.measurement_only {
         let path = std::env::var_os("SATURN_PS_MEASUREMENT_DIR").ok_or(Fault::InvalidConfig)?;
         let frequency = std::env::var("SATURN_PS_MEASUREMENT_FREQUENCY_HZ")
@@ -173,13 +196,25 @@ pub(crate) fn spawn(
             .and_then(|s| s.parse().ok())
             .ok_or(Fault::InvalidConfig)?;
         Some(
-            super::ps_measurement::Host::open(std::path::Path::new(&path), frequency)
-                .map_err(|_| Fault::InvalidConfig)?,
+            super::ps_measurement::Host::open_mode(
+                std::path::Path::new(&path),
+                frequency,
+                super::ps_measurement::CaptureMode::from_env().map_err(|_| Fault::InvalidConfig)?,
+            )
+            .map_err(|_| Fault::InvalidConfig)?,
         )
     } else {
         None
     };
     let origin = Instant::now();
+    // Optional diagnostics cannot prevent radio startup. MeasurementOnly's
+    // explicitly requested recorder retains its own strict evidence contract.
+    let signal_capture = crate::tx_signal_capture::shared::Worker::from_env(origin)
+        .unwrap_or_else(|error| {
+            eprintln!("saturn-bridge: optional shared diagnostics unavailable: {error}; radio startup continues");
+            None
+        });
+    let diagnostic = signal_capture.as_ref().map(|w| w.producer());
     let link = Link::new();
     let thread_link = link.clone();
     let stop = Arc::new(AtomicBool::new(false));
@@ -196,6 +231,12 @@ pub(crate) fn spawn(
                     Radio::P2(r) => r.realtime_priority(),
                     Radio::Direct(r) => r.realtime_priority(),
                 };
+                // Capture the original process mask before pinning the owner.
+                // Native workers retain SCHED_OTHER on the other allowed CPUs,
+                // including every channel recreation during cleanup.
+                let worker_policy = crate::wdsp::native_worker_scheduling::WorkerPolicy::capture(
+                    priority.is_some(),
+                )?;
                 #[cfg(not(test))]
                 super::configure_tx_thread_scheduling(priority).map_err(|_| Fault::TxAuthority)?;
                 #[cfg(test)]
@@ -203,7 +244,7 @@ pub(crate) fn spawn(
                                   // Construct the !Send native engine inside its sole owner thread.
                 let mut snapshot = model.lock_unpoisoned().clone();
                 snapshot.desired.pure_signal_attenuation_db = options.feedback_attenuation_db;
-                let native = FullNative::matched(&snapshot)?;
+                let native = FullNative::matched_with_worker_policy(&snapshot, worker_policy)?;
                 let mut iq = VecDeque::new();
                 let mut mic = VecDeque::new();
                 let (mut output, backend) = match &radio {
@@ -245,10 +286,25 @@ pub(crate) fn spawn(
                     )?,
                 };
                 let life = TxLifecycle::new(controller, output, backend, options.limits)?;
+                #[cfg(feature = "managed-puresignal")]
+                let correction_model = model.clone();
                 let (mut owner, ingress) =
                     OwnerLoop::with_shared_ingress(life, operator, model, origin, options.timing)?;
+                ingress.set_drive_ceiling(options.max_watts)?;
+                if options.operational_policy.is_some() && !options.measurement_only {
+                    ingress.enable_auto_mode()?;
+                }
+                if let Some(p) = diagnostic {
+                    owner.attach_signal_capture(p)?;
+                }
                 if let Some(host) = measurement_host {
                     ingress.enable_measurement_only(host)?;
+                }
+                if let Some(limits) = two_tone_limits {
+                    ingress.enable_two_tone_trials(limits)?;
+                }
+                if options.generated_trials_only {
+                    ingress.restrict_to_generated_trials()?;
                 }
                 ingress.enable_tagged_pcm_review()?;
                 // Parent attaches acquisition BEFORE accepting any client.
@@ -258,6 +314,8 @@ pub(crate) fn spawn(
                 let mut bootstrapped = false;
                 let mut admitted_configuration = false;
                 let mut last_keepalive = origin;
+                #[cfg(feature = "managed-puresignal")]
+                let mut correction_poll = crate::correction_monitor::Poller::new();
                 owner.run(&thread_stop, |owner, _| {
                     admitted_configuration |= ingress.startup_ready();
                     if !admitted_configuration
@@ -281,6 +339,17 @@ pub(crate) fn spawn(
                             }
                         }
                         last_keepalive = Instant::now();
+                    }
+                    #[cfg(feature = "managed-puresignal")]
+                    if matches!(owner.life.status().phase, Phase::ReadyOff | Phase::Active) {
+                        if let Some(input) = correction_poll.due() {
+                            if let Ok(model) = correction_model.try_lock() {
+                                let keyed = owner.life.status().phase == Phase::Active;
+                                owner.life.offline_native_snapshot(|n| {
+                                    n.observe_correction(&input, &model, keyed)
+                                });
+                            }
+                        }
                     }
                 });
                 #[cfg(test)]
@@ -329,6 +398,7 @@ pub(crate) fn spawn(
         return Err(Fault::TxAuthority);
     }
     Ok(Runtime {
+        _signal_capture: signal_capture,
         ingress,
         link,
         origin,
@@ -370,6 +440,42 @@ mod tests {
     #[test]
     #[ignore = "explicit matched-native fixture, run serially with the real reviewed archive"]
     fn matched_production_startup_single_owner_and_completed_shutdown_both_backends() {
+        startup_fixture(false);
+    }
+    #[test]
+    #[ignore = "explicit generated-only matched-native production constructor; no hardware or RF"]
+    fn matched_production_generated_only_single_owner_and_shutdown_both_backends() {
+        startup_fixture(true);
+    }
+    fn startup_fixture(generated_only: bool) {
+        struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Environment {
+            fn drop(&mut self) {
+                for (name, value) in &self.0 {
+                    if let Some(value) = value {
+                        std::env::set_var(name, value);
+                    } else {
+                        std::env::remove_var(name);
+                    }
+                }
+            }
+        }
+        let _environment = Environment(
+            [
+                "SATURN_PS_GENERATED_TRIALS",
+                "SATURN_PS_GENERATED_FREQUENCY_HZ",
+            ]
+            .into_iter()
+            .map(|name| (name, std::env::var_os(name)))
+            .collect(),
+        );
+        std::env::set_var(
+            "SATURN_PS_GENERATED_TRIALS",
+            if generated_only { "1" } else { "0" },
+        );
+        if generated_only {
+            std::env::set_var("SATURN_PS_GENERATED_FREQUENCY_HZ", "7200000");
+        }
         // Same local FFT planner cap as the existing combined native replay.
         // Not applied by production startup; no installed latency claim.
         unsafe extern "C" {
@@ -412,7 +518,7 @@ mod tests {
                     physical_adc: OverloadSource::Adc1,
                     enabled: false,
                     automatic: false,
-                    hardware_peak: 0.6121,
+                    hardware_peak: if generated_only { 0.67 } else { 0.6121 },
                     requested_delay_seconds: 0.,
                     settling_ns: 1_000_000,
                     loop_delay_seconds: 0.,
@@ -430,13 +536,18 @@ mod tests {
                 },
                 // Fixture attestation exercises the positive constructor, not
                 // physical RXC1 topology verification. RF remains forbidden.
-                max_watts: 5,
+                max_watts: if generated_only { 5 } else { 100 },
                 feedback_topology_reviewed: true,
                 managed_rf_permitted: false,
-                operational_policy: None,
+                operational_policy: generated_only.then_some(DraftLimits {
+                    active_reference_fraction: 0.1,
+                    feedback_rms_floor: 0.01,
+                    component_limit: 0.95,
+                }),
                 startup_timeout_ns: 60_000_000_000,
                 feedback_attenuation_db: 9,
                 measurement_only: false,
+                generated_trials_only: generated_only,
             };
             let mut runtime = spawn(
                 radio,
@@ -454,6 +565,9 @@ mod tests {
                 thread::sleep(std::time::Duration::from_millis(1));
             }
             assert!(!shared_model.lock_unpoisoned().desired.tx_enabled);
+            assert_eq!(runtime.ingress.drive_limit_message(), format!("saturn_tx_drive_limit:0,{};", options.max_watts));
+            assert_eq!(shared_model.lock_unpoisoned().desired.tx_drive, 5);
+            assert_eq!(runtime.ingress.generated_trials_only(), generated_only);
             assert!(
                 crate::wdsp::WdspTxEngine::try_new(&initial).is_err(),
                 "parallel legacy native owner"
@@ -467,7 +581,7 @@ mod tests {
                 .is_ok());
             runtime.worker.take().unwrap().join().unwrap();
             assert!(runtime.link.restored().unwrap());
-            println!("matched production constructor backend={} strict_policy=true topology_fixture_attestation=true rf_permission=false shutdown_complete=true legacy_native_rejected=true", if direct { "DirectXdma" } else { "P2" });
+            println!("matched production constructor backend={} strict_policy={} generated_only={} topology_fixture_attestation=true rf_permission=false shutdown_complete=true legacy_native_rejected=true", if direct { "DirectXdma" } else { "P2" }, options.operational_policy.is_none(), generated_only);
         }
     }
 }

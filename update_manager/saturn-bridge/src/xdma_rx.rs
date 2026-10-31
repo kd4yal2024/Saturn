@@ -1404,6 +1404,12 @@ impl OperationalRxSession {
 
     pub(crate) fn tune(&mut self, frequency_hz: u32) -> Result<(), XdmaError> {
         validate_frequency(frequency_hz)?;
+        let rx_filter = alex_rx_filter_word(frequency_hz);
+        #[cfg(feature = "managed-puresignal")]
+        let rx_filter = self
+            .managed_feedback
+            .as_mut()
+            .map_or(rx_filter, |m| m.observer_receive_filter(rx_filter));
         let registers = self
             .registers
             .lock()
@@ -1412,7 +1418,7 @@ impl OperationalRxSession {
             ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
             alex_receive_state_word(frequency_hz, self.rx_antenna),
         )?;
-        registers.write_register(ALEX_RX_FILTER_REGISTER, alex_rx_filter_word(frequency_hz))?;
+        registers.write_register(ALEX_RX_FILTER_REGISTER, rx_filter)?;
         registers.write_register(
             DDC6_FREQUENCY_REGISTER,
             frequency_to_phase_word(frequency_hz),
@@ -1436,6 +1442,10 @@ impl OperationalRxSession {
 
     pub(crate) fn set_rx_attenuation(&mut self, attenuation_db: u8) -> Result<(), XdmaError> {
         let attenuation_db = attenuation_db.min(31);
+        #[cfg(feature = "managed-puresignal")]
+        if let Some(managed) = &mut self.managed_feedback {
+            managed.observer_receive_attenuation(attenuation_db);
+        }
         self.registers
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

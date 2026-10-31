@@ -5,10 +5,11 @@ import {
 } from '../src/ui/control-context';
 
 describe('normalizeRadioControlContext', () => {
-  it('accepts the three operator contexts case-insensitively', () => {
+  it('accepts the four operator contexts case-insensitively', () => {
     expect(normalizeRadioControlContext('RX')).toBe('rx');
     expect(normalizeRadioControlContext('dsp')).toBe('dsp');
     expect(normalizeRadioControlContext('Tx')).toBe('tx');
+    expect(normalizeRadioControlContext('PS')).toBe('ps');
   });
 
   it('uses a safe receive fallback for stale preferences', () => {
@@ -22,6 +23,7 @@ describe('radioControlContextForTarget', () => {
     expect(radioControlContextForTarget('rx')).toBe('rx');
     expect(radioControlContextForTarget('dsp')).toBe('dsp');
     expect(radioControlContextForTarget('tx')).toBe('tx');
+    expect(radioControlContextForTarget('ps')).toBe('ps');
   });
 
   it('leaves non-context navigation alone', () => {

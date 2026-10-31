@@ -41,16 +41,22 @@ fn recorder(capacity: usize) -> MeasurementRecorder {
 #[test]
 #[ignore = "serial matched-native synthetic diagnostic; loopback/ordinary files only"]
 fn measurement_only_actual_acquisition_owner_native_both_backends() {
-    run_measurement_only(false);
+    run_measurement_only(false, false);
 }
 
 #[test]
 #[ignore = "serial real-native explicit control-handler diagnostic; loopback/files only"]
 fn measurement_only_actual_control_handler_native_both_backends() {
-    run_measurement_only(true);
+    run_measurement_only(true, false);
 }
 
-fn run_measurement_only(wire: bool) {
+#[test]
+#[ignore = "serial matched native capture through existing acquisition/output owners; loopback/files only"]
+fn measurement_only_shared_signal_capture_actual_boundaries_both_backends() {
+    run_measurement_only(true, true);
+}
+
+fn run_measurement_only(wire: bool, capture_signals: bool) {
     unsafe extern "C" {
         fn fftw_set_timelimit(seconds: f64);
     }
@@ -71,6 +77,9 @@ fn run_measurement_only(wire: bool) {
             "cancel-queued",
             "disconnect-queued",
         ] {
+            if capture_signals && case != "expiry" {
+                continue;
+            }
             // Recorder-capacity injection remains in the typed fixture. The
             // live entry uses a fixed bounded capacity, never a client value.
             if wire && case == "queue" {
@@ -142,6 +151,15 @@ fn run_measurement_only(wire: bool) {
                 },
             )
             .unwrap();
+            let signal_dir = capture_signals.then(|| {
+                super::super::tx_thread::ps_measurement::tests::directory().join("shared-signal")
+            });
+            let signal_worker = signal_dir
+                .as_ref()
+                .map(|path| crate::tx_signal_capture::shared::Worker::start(path, origin).unwrap());
+            if let Some(w) = &signal_worker {
+                r.attach_signal_capture(w.producer()).unwrap();
+            }
             let export_directory = wire.then(crate::tx_thread::ps_measurement::tests::directory);
             if let Some(directory) = &export_directory {
                 ingress
@@ -381,6 +399,38 @@ fn run_measurement_only(wire: bool) {
                 }
             });
             assert_eq!(stage, 2);
+            if let Some(w) = signal_worker {
+                w.finish();
+                let path = signal_dir.as_ref().unwrap();
+                let mut native = false;
+                let mut pairs = false;
+                let mut completed = false;
+                for entry in std::fs::read_dir(path).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.extension().is_some_and(|e| e == "json") {
+                        let text = std::fs::read_to_string(&path).unwrap();
+                        native |= text.contains("\"kind\":\"Wdsp\"");
+                        pairs |= text.contains("\"kind\":\"Pairs\"");
+                        completed |= text.contains("\"kind\":\"H2c\"")
+                            && text.contains("\"keyedSnapshot\":true");
+                    }
+                }
+                assert!(native && pairs, "missing actual capture boundary");
+                assert_eq!(
+                    completed,
+                    backend == Backend::DirectXdma,
+                    "P2 is not an H2C write"
+                );
+                println!("shared_signal_capture backend={backend:?} directory={} native=true pairs=true h2c={completed}",path.display());
+                if let Some(root) = std::env::var_os("SATURN_SHARED_CAPTURE_FIXTURE_DIR") {
+                    let destination = std::path::PathBuf::from(root).join(format!("{backend:?}"));
+                    std::fs::create_dir(&destination).unwrap();
+                    for entry in std::fs::read_dir(path).unwrap() {
+                        let entry = entry.unwrap();
+                        std::fs::copy(entry.path(), destination.join(entry.file_name())).unwrap();
+                    }
+                }
+            }
             if !matches!(
                 case,
                 "delayed-request" | "cancel-queued" | "disconnect-queued"

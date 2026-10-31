@@ -117,7 +117,15 @@ import {
 
 import { createLegacySocketAdapter } from './transport/legacy-socket-adapter';
 import { ManagedPcmSession, managedSettingsMessage } from './transport/managed-pcm';
+import { TxPathNegotiator } from './transport/tx-path';
 import { microphoneManagedCapture } from './audio/managed-pcm-capture';
+import { twoToneManagedCapture } from './audio/managed-two-tone';
+import { PureSignalReports, pureSignalTestView } from './puresignal/test-view';
+import { mountSignalMonitor } from './puresignal/signal-monitor';
+import { mountPsHealthMonitor } from './puresignal/health-monitor';
+import { resetPanelLayouts } from './puresignal/panel-layout';
+import { RfMonitorState, mountRfMonitor } from './puresignal/rf-monitor';
+import {CorrectionMonitorState,mountCorrectionMonitor} from './puresignal/correction-monitor';
 import { createReconnectSupervisor } from './transport/reconnect-supervisor';
 import {
   SPLIT_TRANSPORT_LEGACY_STORAGE_KEY,
@@ -186,6 +194,7 @@ import {
 } from './audio/tx-audio-profile';
 import { volumeAmplitudeFromDb } from './audio/constants';
 import { FftProcessor } from './dsp/fft';
+import { acceptsTxDisplayFrame, txDisplayStatus, latestTxDisplayWindow } from './dsp/tx-display';
 import { RxSpectrumAccumulator, compareRxSpectrumCaptures, rxSpectrumSettingsMatch } from './dsp/rx-spectrum-measure';
 import {
   detectPeakInPassband,
@@ -280,6 +289,9 @@ import {
 import { preferredResponsiveLayout } from './ui/responsive-layout';
 
 const api = {
+  mountSignalMonitor,
+  PureSignalReports,
+  pureSignalTestView,
   SpectrumHistory, TerrainRenderer, cleanupNormalized, waterfallCleanupNormalized, normalizeTerrain, referenceColor, fitTerrainRange,
   // Controller / runtime
 
@@ -323,8 +335,10 @@ const api = {
   createReconnectSupervisor,
   createLegacySocketAdapter,
   ManagedPcmSession,
+  TxPathNegotiator,
   managedSettingsMessage,
   microphoneManagedCapture,
+  twoToneManagedCapture,
   SPLIT_TRANSPORT_LEGACY_STORAGE_KEY,
   SPLIT_TRANSPORT_STORAGE_KEY,
   createSplitSessionId,
@@ -428,6 +442,15 @@ const api = {
 
   // DSP
   FftProcessor,
+  acceptsTxDisplayFrame,
+  txDisplayStatus,
+  RfMonitorState,
+  CorrectionMonitorState,
+  mountCorrectionMonitor,
+  mountPsHealthMonitor,
+  resetPanelLayouts,
+  mountRfMonitor,
+  latestTxDisplayWindow,
   RxSpectrumAccumulator,
   compareRxSpectrumCaptures,
   rxSpectrumSettingsMatch,

@@ -4606,7 +4606,7 @@
       z-index: 4;
       top: 0;
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 3px;
       padding: 4px;
       border: 1px solid var(--border-subtle);
@@ -4653,7 +4653,11 @@
     }
 
     .audio-control-strip[hidden],
+    #ps-control-panel[hidden],
     .audio-control[hidden] { display: none; }
+    #ps-control-panel .setup-section { padding: 12px; }
+    #ps-control-panel .setup-inline-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #ps-control-panel .setup-readout { overflow-wrap: anywhere; }
     .operations-drawer { grid-area: drawer; }
 
     .left-rail,
@@ -7418,6 +7422,7 @@
                         <div class="setup-button-row" style="grid-template-columns: minmax(0, 1fr);">
                           <button class="btn" id="two-tone-btn" type="button">2-Tone Test Off</button>
                         </div>
+                        <p class="small" data-two-tone-host-result>No host two-tone result in this connection</p>
                         <div class="setup-inline-fields">
                           <div class="setup-row">
                             <label class="label" for="two-tone-freq1">Tone 1 Frequency</label>
@@ -7443,23 +7448,48 @@
                         <label class="toggle-field"><span>Invert On LSB/DIGL/CWL</span><input id="two-tone-invert-lsb" type="checkbox" checked /></label>
                       </div>
                       <div class="setup-section" id="setup-tx-puresignal-section">
-                        <div class="setup-section-title">PureSignal</div>
-                        <div class="setup-row">
-                          <label class="label" for="managed-pcm-select">TX owner path (review)</label>
-                          <select class="field" id="managed-pcm-select">
-                            <option value="legacy" selected>Legacy — default</option>
-                            <option value="managed">Managed tagged PCM / SATP — opt-in</option>
+                        <div class="setup-section-title">Controls</div>
+                        <label class="label" for="setup-ps-adaptation">Adaptation mode</label>
+                        <select class="field" id="setup-ps-adaptation" disabled>
+                          <option value="off">Off — bypass</option>
+                          <option value="single">Single — prepare one fit</option>
+                          <option value="auto" disabled>Auto — continuous WDSP adaptation</option>
+                        </select>
+                        <div class="setup-button-row">
+                          <button class="btn ghost" id="setup-ps-off" type="button" disabled>PS Off</button>
+                          <button class="btn ghost" id="setup-ps-calibrate" type="button" disabled>Calibrate (prepare single)</button>
+                        </div>
+                        <p class="small" id="setup-ps-control-contract">Waiting for host PS capabilities. Calibration configuration does not key TX.</p>
+                        <div class="setup-readout" id="setup-ps-committed-mode">Host committed mode: unavailable</div>
+                        <button class="btn ghost" id="setup-ps-ack-fault" type="button" disabled>Acknowledge completed TX fault — stays RX</button>
+                        <div class="setup-readout" id="setup-ps-ack-result" role="status">No fault acknowledgment requested</div>
+                        <details id="setup-ps-measurement-controls">
+                          <summary>Attended RF duration / confirmation · Measure Only / Timing</summary>
+                          <label class="label" for="setup-ps-measurement-kind">Measurement stimulus</label>
+                          <select class="field" id="setup-ps-measurement-kind">
+                            <option value="mode-default">Two-tone (USB/LSB) / silent carrier (AM)</option>
+                            <option value="timing">Timing Measurement — multisine (USB/LSB)</option>
                           </select>
-                        </div>
-                        <p class="small">Change while disconnected. Requires a selectable shared-owner Bridge; this browser cannot enable the host owner. Banked Opus is not supported.</p>
-                        <div class="setup-readout" id="managed-pcm-status" role="status" aria-live="polite">Legacy TX selected</div>
-                        <div class="setup-readout" id="managed-pcm-transaction" role="status">No managed settings result</div>
+                          <p class="small" id="setup-ps-stimulus">USB/LSB: generated two-tone. AM/SAM: silent carrier. No microphone required.</p>
+                          <p class="small" id="setup-ps-measurement-limits">Host duration, frequency and capture mode unavailable.</p>
+                          <label class="label" for="setup-ps-commanded-watts">Commanded measurement power (W; not measured RF)</label>
+                          <input class="field" id="setup-ps-commanded-watts" type="number" min="1" max="5" step="1" value="5" disabled />
+                          <div class="setup-readout" id="setup-ps-power-result">Host committed power unavailable</div>
+                          <p class="small">Measurement gain is fixed at 0 dB (unity), independent of the normal microphone profile. Different stimuli can produce different RF power at the same command. Adjust power only while RX and settings are complete.</p>
+                          <label class="label" for="setup-ps-duration-ms">Duration (milliseconds)</label>
+                          <input class="field" id="setup-ps-duration-ms" type="number" min="1" max="45000" step="1" value="5000" />
+                          <label class="toggle-field"><span>I am attending; ANT1 dummy load and LP700 ready</span><input id="setup-ps-attended" type="checkbox" /></label>
+                          <button class="btn" id="setup-ps-measure" type="button" disabled>Start Measure Only — keys RF</button>
+                          <button class="btn ghost" id="setup-ps-measure-stop" type="button" disabled>Stop measurement</button>
+                          <div class="setup-readout" id="setup-ps-measurement-result" role="status" aria-live="polite">No measurement requested</div>
+                          <p class="small">Timing Measurement sends a deterministic 400–2600 Hz multisine, repeated every 1000 ms, not two tones. It records evidence for offline delay review; it does not set delay or calibrate PS. Fitting/correction stay OFF. USB/LSB default: 700/1900 Hz tagged PCM. AM/SAM default: zero PCM for dead-key carrier. Uses 1–5 commanded W, not measured LP700 power. Raw captures: up to 1000 ms; summary-only: up to 45000 ms (raw paired windows require separate host archive support). Unknown overload coverage stays unknown.</p>
+                        </details>
                         <div class="setup-inline-fields">
-                          <label class="toggle-field"><span>PureSignal</span><input id="setup-tx-puresignal-enabled" type="checkbox" /></label>
-                          <label class="toggle-field"><span>Auto Attenuation</span><input id="setup-tx-puresignal-auto-attenuate" type="checkbox" checked /></label>
+                          <label class="toggle-field"><span>PS enable request</span><input id="setup-tx-puresignal-enabled" type="checkbox" disabled /></label>
+                          <label class="toggle-field"><span>Auto ATT (unavailable here)</span><input id="setup-tx-puresignal-auto-attenuate" type="checkbox" disabled /></label>
                         </div>
                         <div class="setup-row">
-                          <label class="label" for="setup-tx-puresignal-attenuation">Feedback Attenuation</label>
+                            <label class="label" for="setup-tx-puresignal-attenuation">Commanded Feedback Attenuation</label>
                           <input id="setup-tx-puresignal-attenuation" type="range" min="0" max="31" step="1" value="0" />
                           <div class="setup-readout" id="setup-tx-puresignal-attenuation-readout">0 dB</div>
                         </div>
@@ -7467,23 +7497,51 @@
                           <button class="btn ghost" id="setup-tx-puresignal-reset" type="button">Reset Calibration</button>
                         </div>
                         <div class="setup-inline-fields">
+                          <div class="setup-row"><span class="label">TX owner selection</span><div class="setup-readout" id="setup-ps-owner">Unavailable</div></div>
+                          <div class="setup-row"><span class="label">TX audio source</span><div class="setup-readout" id="setup-ps-source">Unavailable</div></div>
+                          <div class="setup-row"><span class="label">Requested PS</span><div class="setup-readout" id="setup-ps-requested">Bypass requested</div></div>
+                          <div class="setup-row"><span class="label">Host enable report</span><div class="setup-readout" id="setup-ps-applied">Unavailable</div></div>
                           <div class="setup-row">
                             <span class="label">State</span>
-                            <div class="setup-readout" id="setup-tx-puresignal-state">Off</div>
+                            <div class="setup-readout" id="setup-tx-puresignal-state">Unavailable</div>
                           </div>
                           <div class="setup-row">
-                            <span class="label">Feedback</span>
-                            <div class="setup-readout" id="setup-tx-puresignal-feedback">0</div>
+                            <span class="label">WDSP Feedback Level (raw)</span>
+                            <div class="setup-readout" id="setup-tx-puresignal-feedback">Unavailable</div>
                           </div>
                           <div class="setup-row">
                             <span class="label">Calibrations</span>
-                            <div class="setup-readout" id="setup-tx-puresignal-calibrations">0</div>
+                            <div class="setup-readout" id="setup-tx-puresignal-calibrations">Unavailable</div>
                           </div>
                           <div class="setup-row">
                             <span class="label">Correction</span>
-                            <div class="setup-readout" id="setup-tx-puresignal-correcting">Bypassed</div>
+                            <div class="setup-readout" id="setup-tx-puresignal-correcting">Unavailable</div>
                           </div>
+                          <div class="setup-row"><span class="label">Reported feedback packets</span><div class="setup-readout" id="setup-ps-packets">Unavailable</div></div>
+                          <div class="setup-row"><span class="label">Reported feedback gaps</span><div class="setup-readout" id="setup-ps-gaps">Unavailable</div></div>
                         </div>
+                        <p class="small" id="setup-ps-timing">No PS report received in this connection</p>
+                        <p class="small" id="setup-ps-lock-reason">Connect to a ready Bridge to change PS settings.</p>
+                        <button class="btn ghost" id="setup-ps-copy-btn" type="button">Copy PS diagnostics</button>
+                        <div class="setup-section" data-ps-signal-monitor>
+                          <div class="setup-section-title">Digital capture inspector — offline</div>
+                          <p class="small">Read-only imported evidence, not live telemetry or calibrated RF IMD.</p>
+                          <label class="label">Load offline diagnostic report <input type="file" accept="application/json,.json" data-ps-signal-file /></label>
+                          <button class="btn ghost" type="button" data-ps-signal-popout>Pop out capture inspector</button>
+                          <pre class="small" style="white-space:pre-wrap" data-ps-signal-summary>No diagnostic capture loaded. Live levels unavailable.</pre>
+                        </div>
+                        <div class="setup-row">
+                          <label class="label" for="managed-pcm-select">TX path</label>
+                          <select class="field" id="managed-pcm-select">
+                            <option value="auto" selected>Auto — follow host (recommended)</option>
+                            <option value="legacy">Legacy — explicit diagnostic selection</option>
+                            <option value="managed">Managed tagged PCM / SATP — opt-in</option>
+                          </select>
+                        </div>
+                        <p class="small">Auto follows the host on every connection. TX stays inhibited until negotiation completes; host RF permission and a fresh ARM are still required. No banked Opus.</p>
+                        <div class="setup-readout" id="managed-pcm-status" role="status" aria-live="polite">Auto — waiting for host TX owner</div>
+                        <div class="setup-readout" id="managed-pcm-transaction" role="status">No managed settings result</div>
+                        <p class="small" id="setup-ps-qualification">RF output, feedback calibration and IMD improvement remain unqualified.</p>
                       </div>
                       <div class="setup-section">
                         <div class="setup-section-title">TX Equalizer</div>
@@ -8323,6 +8381,44 @@
         </div>
       </div>
 
+      <section class="panel" id="ps-control-panel" role="tabpanel" aria-labelledby="control-tab-ps" hidden>
+        <div class="panel-head"><h2 class="panel-title">PureSignal</h2><span class="panel-meta">Settings and host reports</span></div>
+        <div class="row"><button class="btn ghost" id="ps-reset-panel-layout" type="button">Reset panel layout</button></div>
+        <section class="setup-section" id="ps-health-monitor" aria-label="PureSignal status monitor">
+          <div class="setup-section-title">PS Monitor</div>
+          <button class="btn ghost" type="button" data-ps-health-popout>Pop out PS Monitor</button>
+          <pre class="small" style="white-space:pre-wrap;user-select:text" data-ps-health-summary>No live host status received.</pre>
+        </section>
+        <div class="setup-section" id="ps-two-tone-section">
+          <div class="setup-section-title">Two-Tone TX</div>
+          <button class="btn" id="ps-two-tone-btn" type="button" aria-pressed="false" aria-describedby="ps-two-tone-note" disabled>Start 2-tone — keys TX</button>
+          <p class="small" id="ps-two-tone-note">Uses the same generator and TX Ready/PTT path as Setup. No microphone needed. This starts TX; it does not enable PureSignal calibration.</p>
+          <div class="setup-readout" id="ps-two-tone-settings"></div>
+          <p class="small" data-two-tone-host-result>No host two-tone result in this connection</p>
+          <output class="small" id="ps-tx-display-status" role="status">TX display unavailable — disconnected</output>
+        </div>
+        <section class="setup-section" id="ps-rf-monitor" aria-label="RF feedback spectrum and IMD monitor">
+          <div class="setup-section-title">RF Feedback / IMD Monitor</div>
+          <p class="small">Raw paired RF observation, separate from the digital TX panadapter. No TX or PS control. Unknown overload coverage remains unknown.</p>
+          <output class="small" data-rf-status role="status">RF feedback unavailable — no live capture received</output>
+          <canvas data-rf-canvas style="position:relative;inset:auto;width:100%;height:260px" aria-label="Live RF-feedback spectrum with fundamental and IMD markers"></canvas>
+          <div class="row"><button type="button" class="btn ghost" data-rf-popout>Pop out RF / IMD</button><button type="button" class="btn ghost" data-rf-copy>Copy measurements</button><button type="button" class="btn ghost" data-rf-save disabled>Hold PS-off baseline</button><button type="button" class="btn ghost" data-rf-export disabled>Export baseline</button></div>
+          <div class="small" data-rf-copy-status role="status"></div>
+          <pre class="small" data-rf-summary style="white-space:pre-wrap;user-select:text">No paired RF evidence received.</pre>
+        </section>
+        <section class="setup-section" id="ps-correction-monitor" aria-label="WDSP correction and phase monitor">
+          <div class="setup-section-title">WDSP Correction / Phase Monitor</div>
+          <output class="small" data-correction-status role="status">Native correction display unavailable — disconnected</output>
+          <p class="small">Blue: measured magnitude · Yellow: measured phase · Red: magnitude correction · Green: phase correction. Read only; does not key TX or start calibration.</p>
+          <label class="small">Magnitude scale <select data-correction-scale><option value="db">dB ratio</option><option value="linear">Linear ratio</option></select></label>
+          <canvas data-correction-gain style="display:block;position:relative;inset:auto;width:100%;height:230px" aria-label="WDSP magnitude correction graph"></canvas>
+          <canvas data-correction-phase style="display:block;position:relative;inset:auto;width:100%;height:230px" aria-label="WDSP phase correction graph in degrees"></canvas>
+          <div class="row"><button type="button" class="btn ghost" data-correction-popout>Pop out Correction / Phase</button><button type="button" class="btn ghost" data-correction-copy>Copy measurements</button></div>
+          <div class="small" data-correction-copy-status role="status"></div>
+          <pre class="small" data-correction-summary style="white-space:pre-wrap;user-select:text">No native correction curve received. RF spectrum data is not substituted for correction data.</pre>
+        </section>
+        <div id="ps-control-body"></div>
+      </section>
       <div class="stack right-rail">
         <div id="tx-safety-host" class="phone-tx-bar">
             <div class="tx-zone" id="tx-zone" data-tx-state="disabled">
@@ -8346,6 +8442,7 @@
           <div class="panel-head" data-phone-panel-head>
             <h2 class="panel-title">Transmit</h2>
             <div class="panel-meta" id="tx-status-meta">RX</div>
+            <button class="btn ghost" id="setup-tx-open-ps-btn" type="button" aria-controls="ps-control-panel" title="Open PS tab">PS: unavailable</button>
           </div>
           <div class="panel-body">
             <div class="tx-zone-frequency" id="tx-zone-frequency">TX 14.200.000 USB</div>
@@ -9412,7 +9509,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const PANADAPTER_TUNE_STEP_HZ = 10;
     const PANADAPTER_TUNE_THROTTLE_MS = 80;
     const VFO_TUNE_STEP_KEY = "saturn.remote.vfoTuneStepHz";
-    const TX_DISPLAY_SETTLE_SKIP_FRAMES = 3;
+    const TX_DISPLAY_SETTLE_SKIP_FRAMES = 0;
     const TX_DISPLAY_SPAN_HZ = 48000; // match piHPSDR: show ±12 kHz for TX
     const WDSP_TX_IQ_RATE_HZ = 192000; // bridge TX IQ output rate
     const REMOTE_FIXED_RX_ADC = 0;
@@ -9694,6 +9791,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       generation: 0,
     };
     let reconnectRxPlan = null;
+    let psRxRestoreGeneration = null;
     let reconnectSettingsPrepared = false;
 
     function closeSocketForReconnect(reason) {
@@ -9775,6 +9873,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     let pureSignalOperatorLogReasons = new Set();
     let pureSignalOperatorTelemetryLastAt = 0;
     let pureSignalFeedbackGapFaultActive = false;
+    const pureSignalReports = new _next.PureSignalReports();
+    const rfMonitor = new _next.RfMonitorState();
+    const renderRfMonitor = _next.mountRfMonitor($("ps-rf-monitor"), rfMonitor);
+    window.setInterval(() => renderRfMonitor(state.connected, txReceiveSuppressionActive(), performance.now()), 200);
+    const renderPsHealthMonitor = _next.mountPsHealthMonitor($("ps-health-monitor"));
+    $("ps-reset-panel-layout").addEventListener("click", () => _next.resetPanelLayouts());
+    const correctionMonitor = new _next.CorrectionMonitorState();
+    const renderCorrectionMonitor = _next.mountCorrectionMonitor($("ps-correction-monitor"), correctionMonitor);
+    window.setInterval(() => renderCorrectionMonitor(state.connected, txReceiveSuppressionActive(), performance.now()), 200);
     let peakTuneTracker = {
       candidate: null,
       candidateFrames: 0,
@@ -11076,6 +11183,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.iqPackets = [];
       state.displayIqSource = "rx";
       state.txDisplaySettleFrames = 0;
+      state.lastTxDisplayFrameAt = null;
       state.latestBins = new Float32Array(fftProcessor.size);
       state.latestBins.fill(state.displayFloorDb);
       state.spectrumAverageBypassFrames = 1;
@@ -12400,7 +12508,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       // Each side-panel tab owns its details. The original Arm/PTT safety
       // strip remains outside the Transmit details panel at every width.
-      audioStrip.hidden = context === "tx";
+      audioStrip.hidden = context === "tx" || context === "ps";
+      const psPanel = $("ps-control-panel");
+      if (psPanel) psPanel.hidden = context !== "ps";
       audioStrip.querySelectorAll("[data-control-context]").forEach((control) => {
         control.hidden = control.dataset.controlContext !== context;
       });
@@ -12439,14 +12549,28 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         tabs.className = "context-tabs";
         tabs.setAttribute("role", "tablist");
         tabs.setAttribute("aria-label", "Radio control context");
-        for (const context of ["rx", "dsp", "tx"]) {
+        const contexts = ["rx", "dsp", "tx", "ps"];
+        for (const context of contexts) {
           const button = document.createElement("button");
+          button.id = `control-tab-${context}`;
           button.type = "button";
           button.className = "context-tab";
           button.dataset.controlContext = context;
           button.setAttribute("role", "tab");
+          if (context === "ps") button.setAttribute("aria-controls", "ps-control-panel");
           button.textContent = context.toUpperCase();
           button.addEventListener("click", () => applyControlContext(context));
+          button.addEventListener("keydown", event => {
+            const index = contexts.indexOf(context);
+            const step = ["ArrowRight", "ArrowDown"].includes(event.key) ? 1
+              : ["ArrowLeft", "ArrowUp"].includes(event.key) ? -1 : 0;
+            const next = event.key === "Home" ? 0 : event.key === "End" ? contexts.length - 1
+              : step ? (index + step + contexts.length) % contexts.length : -1;
+            if (next < 0) return;
+            event.preventDefault();
+            applyControlContext(contexts[next]);
+            $("control-tab-" + contexts[next])?.focus();
+          });
           tabs.appendChild(button);
         }
         rail.appendChild(tabs);
@@ -12455,6 +12579,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
       rail.appendChild(audioStrip);
       rail.appendChild(rightRail);
+      const psPanel = $("ps-control-panel");
+      const psControls = $("setup-tx-puresignal-section");
+      if (psPanel && psControls) {
+        $("ps-control-body").appendChild(psControls);
+        rail.appendChild(psPanel);
+      }
       applyControlContext(localStorage.getItem("saturn.remote.controlContext"), false);
     }
 
@@ -14306,31 +14436,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("setup-tx-puresignal-attenuation-readout")) {
         $("setup-tx-puresignal-attenuation-readout").textContent = `${radio.pureSignalAttenuationDb} dB`;
       }
-      if ($("setup-tx-puresignal-state")) {
-        $("setup-tx-puresignal-state").textContent = managedPcmSelected() ? "Native telemetry unavailable" : `${state.pureSignalState || "off"}`.toUpperCase();
-      }
-      if ($("setup-tx-puresignal-feedback")) {
-        $("setup-tx-puresignal-feedback").textContent = managedPcmSelected() ? "Unavailable" : `${state.pureSignalFeedbackLevel || 0}`;
-      }
-      if ($("setup-tx-puresignal-calibrations")) {
-        $("setup-tx-puresignal-calibrations").textContent = managedPcmSelected() ? "Unavailable" : `${state.pureSignalCalibrationCount || 0}`;
-      }
-      if ($("setup-tx-puresignal-correcting")) {
-        $("setup-tx-puresignal-correcting").textContent = managedPcmSelected() ? "Unqualified" : state.pureSignalCorrecting ? "Correcting" : "Bypassed";
-      }
-      const pureSignalTxBusy = state.txPhase !== "rx" || state.moxRequested || state.txEnabled;
-      if ($("setup-tx-puresignal-enabled")) {
-        $("setup-tx-puresignal-enabled").disabled = pureSignalTxBusy;
-      }
-      if ($("setup-tx-puresignal-auto-attenuate")) {
-        $("setup-tx-puresignal-auto-attenuate").disabled = pureSignalTxBusy || !radio.pureSignalEnabled;
-      }
-      if ($("setup-tx-puresignal-attenuation")) {
-        $("setup-tx-puresignal-attenuation").disabled = pureSignalTxBusy || !radio.pureSignalEnabled || radio.pureSignalAutoAttenuate;
-      }
-      if ($("setup-tx-puresignal-reset")) {
-        $("setup-tx-puresignal-reset").disabled = !state.connected || !radio.pureSignalEnabled;
-      }
+      syncPureSignalPanel();
       if ($("setup-tx-timeout-seconds")) $("setup-tx-timeout-seconds").disabled = !state.txTimeoutEnabled;
       if ($("setup-tx-timeout-readout")) {
         const mins = Math.floor(state.txTimeoutSeconds / 60);
@@ -14338,6 +14444,85 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("setup-tx-timeout-readout").textContent = `${mins}:${String(secs).padStart(2, "0")}`;
       }
       syncSetupPanels();
+    }
+
+    function pureSignalPanelView() {
+      return _next.pureSignalTestView({ ...state, measurementTiming: $("setup-ps-measurement-kind")?.value === "timing", rxRecoveryPending: psRxRestoreGeneration === state.connectionGeneration }, managedPcm.status(), pureSignalReports, performance.now(), correctionMonitor, txReceiveSuppressionActive());
+    }
+
+    function syncPureSignalPanel() {
+      const view = pureSignalPanelView();
+      renderPsHealthMonitor(state.connected, view);
+      const managed = managedPcm.status();
+      const values = {
+        "setup-ps-owner": view.owner, "setup-ps-source": view.source,
+        "setup-ps-requested": view.requested, "setup-ps-applied": view.applied,
+        "setup-tx-puresignal-state": view.state, "setup-tx-puresignal-feedback": view.feedback,
+        "setup-tx-puresignal-calibrations": view.calibrations, "setup-tx-puresignal-correcting": view.correcting,
+        "setup-ps-packets": view.packets, "setup-ps-gaps": view.gaps,
+        "setup-ps-timing": view.timing, "setup-ps-qualification": view.qualification,
+        "setup-ps-lock-reason": view.lockReason,
+        "setup-ps-control-contract": view.controlContract, "setup-ps-committed-mode": view.committedMode,
+        "setup-ps-measurement-result": view.measurement,
+        "setup-ps-stimulus": `${view.measurementStimulus}. ${view.measurementGain}`,
+      };
+      for (const [id, text] of Object.entries(values)) if ($(id)) $(id).textContent = text;
+      if ($("setup-tx-open-ps-btn")) $("setup-tx-open-ps-btn").textContent = `PS: ${view.state}`;
+      if ($("setup-tx-puresignal-enabled")) $("setup-tx-puresignal-enabled").disabled = !view.canCalibrate;
+      if ($("setup-ps-adaptation")) {
+        const mode = $("setup-ps-adaptation");
+        mode.disabled = !view.canConfigure;
+        mode.querySelector('option[value="auto"]').disabled = !view.canAutoAdaptation;
+        if (["off", "single", "auto"].includes(view.adaptationMode)) mode.value = view.adaptationMode;
+      }
+      // Auto ATT remains a separate policy. Manual settings use the existing
+      // stop/configuration barrier when the host advertises the command.
+      if ($("setup-tx-puresignal-auto-attenuate")) $("setup-tx-puresignal-auto-attenuate").disabled = true;
+      if ($("setup-tx-puresignal-attenuation")) $("setup-tx-puresignal-attenuation").disabled = !view.canSetFeedbackAttenuation;
+      if ($("setup-tx-puresignal-reset")) $("setup-tx-puresignal-reset").disabled = !view.canCalibrate || managed.psMode === "off";
+      if ($("setup-ps-off")) $("setup-ps-off").disabled = !view.canConfigure && !managed.measurementActive;
+      if ($("setup-ps-calibrate")) $("setup-ps-calibrate").disabled = !view.canCalibrate;
+      if ($("setup-ps-measure")) {
+        $("setup-ps-measure").disabled = !view.canMeasure || !$("setup-ps-attended").checked || state.txReadyExpiresAt <= performance.now();
+        $("setup-ps-measure").textContent = $("setup-ps-measurement-kind")?.value === "timing" ? "Start Timing Measurement — keys RF" : "Start Measure Only — keys RF";
+      }
+      if ($("setup-ps-measure-stop")) $("setup-ps-measure-stop").disabled = !managed.measurementActive;
+      if ($("setup-ps-ack-fault")) $("setup-ps-ack-fault").disabled = !managed.canAcknowledgeFault;
+      if ($("setup-ps-ack-result")) $("setup-ps-ack-result").textContent = managed.faultAcknowledgment || "Fault acknowledgment unavailable on this host";
+      const power = $("setup-ps-commanded-watts");
+      if (power) {
+        power.max = String(Math.min(5, managed.driveLimitWatts || 1));
+        power.disabled = !view.canConfigure || managed.phase !== "ready" || !managed.driveLimitWatts || Boolean(managed.measurementActive);
+        if (document.activeElement !== power && managed.committedWatts !== undefined) power.value = String(managed.committedWatts);
+      }
+      if ($("tx-drive")) $("tx-drive").max = String(managedPcmSelected() ? (managed.driveLimitWatts || 1) : 100);
+      if ($("setup-ps-power-result")) $("setup-ps-power-result").textContent = managed.committedWatts === undefined
+        ? "Host committed power unavailable"
+        : `Host committed command: ${managed.committedWatts} W (not measured RF) · ${managed.pendingSettings ? "settings pending" : managed.lastTransaction}`;
+      if ($("setup-ps-measurement-kind")) $("setup-ps-measurement-kind").disabled = !view.editable || Boolean(managed.measurementActive);
+      if ($("setup-ps-measurement-limits")) $("setup-ps-measurement-limits").textContent = managed.measurementLimitMs
+        ? `Host: ${managed.measurementCaptureMode}, maximum ${managed.measurementLimitMs} ms, ${(managed.measurementFrequencyHz / 1e6).toFixed(6)} MHz. Committed command: ${managed.committedWatts ?? state.txDrive} W. ARM TX before starting.`
+        : "Host MeasurementOnly capability unavailable; this UI cannot enable it.";
+      const generatedDurationLimit = managed.measurementLimitMs || managed.twoToneLimitMs;
+      if (generatedDurationLimit && $("setup-ps-duration-ms")) {
+        const duration = $("setup-ps-duration-ms");
+        duration.max = String(generatedDurationLimit);
+        if (Number(duration.value) > generatedDurationLimit) duration.value = String(generatedDurationLimit);
+      }
+    }
+
+    async function copyPureSignalDiagnostics() {
+      // Whitelist only non-secret presentation fields. No SATP key or socket
+      // object is copied. Receipt age is explicitly not observation freshness.
+      const text = JSON.stringify({ format: "saturn-ps-ui-diagnostics-v1",
+        copiedAtIso: new Date().toISOString(), mode: state.mode,
+        txPhase: state.txPhase, commandedWatts: state.txDrive,
+        feedbackAttenuationCommandDb: state.pureSignalAttenuationDb,
+        ...pureSignalPanelView(), rfImdQualified: false }, null, 2);
+      try { await navigator.clipboard.writeText(text); }
+      catch (_) { window.prompt("Copy PS diagnostics", text); }
+      logEvent("Copied PS diagnostics (host reports; RF unqualified)");
+      return text;
     }
 
     function syncSetupPanels() {
@@ -14916,6 +15101,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function revealSettingsEntry(entry) {
       const target = entry.target || $(entry.targetId);
       if (!target) return;
+      if (entry.existingSetupPanel === "ps") {
+        setSetupMenuOpen(false);
+        applyControlContext("ps");
+        requestAnimationFrame(() => { target.scrollIntoView({ block: "nearest" }); target.focus({ preventScroll: true }); });
+        return;
+      }
       if (entry.id === "radio.keypad") {
         setSetupMenuOpen(false);
         openFrequencyEntry();
@@ -17127,7 +17318,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function rfDisabledBlocksTx() {
-      return state.mode === "WFM" || (bridgeRfDisabled() && !txDiagnosticTxActive());
+      return !txPathNegotiator.ready || state.mode === "WFM" || (bridgeRfDisabled() && !txDiagnosticTxActive());
     }
 
     function generatedTxSourceActive() {
@@ -17771,6 +17962,30 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         !state.connected || rfDisabledBlocksTx() || clientRoleBlocksTx()
       );
       twoToneButton.title = state.twoToneEnabled ? "Stop two-tone test" : "Start two-tone test";
+      const psTwoToneButton = $("ps-two-tone-btn");
+      const managedTone = managedPcm.status();
+      const toneActive = managedPcmSelected() ? Boolean(managedTone.twoToneActive) : state.twoToneEnabled;
+      psTwoToneButton.textContent = toneActive ? "Stop 2-tone — unkey" : "Start 2-tone — keys TX";
+      psTwoToneButton.classList.toggle("active", toneActive);
+      psTwoToneButton.setAttribute("aria-pressed", String(toneActive));
+      psTwoToneButton.disabled = managedPcmSelected()
+        ? !toneActive && (!pureSignalPanelView().canTwoTone || !$("setup-ps-attended").checked || state.txReadyExpiresAt <= performance.now())
+        : twoToneButton.disabled || !state.connected || !state.bridgeReady || clientRoleBlocksTx()
+          || (!state.twoToneEnabled && psRxRestoreGeneration === state.connectionGeneration);
+      psTwoToneButton.title = managedPcmSelected() ? "Requires separately enabled host trial, prepared single fit and fresh attended confirmation" : twoToneButton.title;
+      $("ps-two-tone-note").textContent = managedPcmSelected()
+        ? `${managedTone.psMode === "off" ? "PS-off baseline" : "Prepared single-fit test"}. This separately authorized action keys RF with ${managedTone.nativeTwoToneSupported ? "the balanced 700/1900 Hz WDSP generator before IQC; tagged zero-input frames provide liveness, not tone audio" : "generated 700/1900 Hz PCM and fixed unity gain"}. Uses the attended confirmation and duration above; no microphone.`
+        : "Uses the same generator and TX Ready/PTT path as Setup. No microphone needed. This starts TX; it does not enable PureSignal calibration.";
+      $("ps-two-tone-settings").textContent = managedPcmSelected()
+        ? `${managedTone.twoToneResult} · ${managedTone.twoToneLimitMs ? `Host maximum ${managedTone.twoToneLimitMs} ms at ${managedTone.twoToneFrequencyHz} Hz, <=5 commanded W` : "Host generated calibration trial not enabled"}`
+        : `${state.txTwoToneFreq1} / ${state.txTwoToneFreq2} Hz · ${safeFixed(state.txTwoToneLevelDb, 1, "0.0")} dB · delay ${state.txTwoToneDelayMs} ms`;
+      const txDisplayStatus = _next.txDisplayStatus(state.connected, txReceiveSuppressionActive(), state.displayPaused,
+        state.displayIqSource === "tx" ? state.lastTxDisplayFrameAt ?? null : null, performance.now());
+      $("ps-tx-display-status").textContent = txDisplayStatus;
+      if (txReceiveSuppressionActive()) state.displayCaption = txDisplayStatus;
+      document.querySelectorAll('[data-two-tone-host-result]').forEach((element) => {
+        element.textContent = state.connected ? (state.twoToneHostResult || "No host two-tone result in this connection") : "Disconnected; no current host result";
+      });
       updateTxZone();
       const instrumentState = instrumentOperatingState(
         state.txPhase,
@@ -18059,17 +18274,34 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     let managedPcmEpoch = 0;
+    let txPathPreference = "auto";
+    let txPathNegotiator = new _next.TxPathNegotiator(txPathPreference);
     const managedPcm = new _next.ManagedPcmSession({
       now: () => performance.now(),
+      measurementCapture: _next.twoToneManagedCapture(undefined, () => ["AM", "SAM"].includes(state.mode) ? "am-carrier" : "two-tone"),
+      timingCapture: _next.twoToneManagedCapture(undefined, () => "timing"),
+      twoToneCapture: _next.twoToneManagedCapture(undefined, () => "two-tone"),
+      nativeKeepaliveCapture: _next.twoToneManagedCapture(undefined, () => "keepalive"),
       capture: _next.microphoneManagedCapture(() => state.audioInputDeviceId || "", samples => {
         let peak = 0;
         for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
         state.txMicLevel = peak; state.txMicLevelAt = performance.now();
       }),
       changed: status => {
+        if (status.committedWatts !== undefined && status.pendingSettings === 0 && status.phase === "ready") state.txDrive = status.committedWatts;
         const label = $("managed-pcm-status"), result = $("managed-pcm-transaction");
         if (label) { label.textContent = `${status.phase}: ${status.reason}`; label.dataset.phase = status.phase; }
         if (result) result.textContent = `${status.lastTransaction} · ${status.pendingSettings} pending`;
+        if (["disconnected", "disabled"].includes(status.phase) && $("setup-ps-attended")) $("setup-ps-attended").checked = false;
+        if ((status.measurementActive || status.twoToneActive) && ["arming", "streaming"].includes(status.phase)) {
+          state.moxRequested = true; state.txLocalRequestActive = true;
+        } else if ((!status.measurementActive && !status.twoToneActive) || status.phase === "releasing" || status.phase === "fault") {
+          if (state.psMeasurementOwned) {
+            state.psMeasurementOwned = false; state.moxRequested = false;
+            state.txLocalRequestActive = false; state.txLocalRequestPermitExpiresAt = 0;
+            setTxMediaPriority(false); recoverRxAfterMox();
+          }
+        }
         scheduleUiRefresh();
         if (status.selected && ["fault", "unsupported", "unavailable"].includes(status.phase) && state.moxRequested) {
           void setPtt(false, { lockAfter: "tx-fault" });
@@ -18083,7 +18315,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return;
       }
-      if (managedPcmSelected()) managedPcm.sendControl(text);
+      text = txPathNegotiator.filterControl(text);
+      if (!text) return;
+      // Reconnect retains the user's selection but disconnect clears its
+      // command channel. Only this connection's ready snapshot can select
+      // managed routing; pending discovery permits RX queries/release only.
+      if (txPathNegotiator.path === "managed") managedPcm.sendControl(text);
       else state.ws.send(text);
     }
 
@@ -18092,6 +18329,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       state.bridgeRttNonce = (state.bridgeRttNonce || 0) + 1;
+      rfMonitor.request(String(state.bridgeRttNonce), state.connectionGeneration, performance.now());
+      correctionMonitor.request(String(state.bridgeRttNonce), state.connectionGeneration, performance.now());
       if (state.satp?.paired && state.remoteClientRole === "operator") sendTci("saturn_satp_control:renew;");
       sendTci(`saturn_ping:${state.bridgeRttNonce},${performance.now().toFixed(3)};`);
     }
@@ -18263,6 +18502,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function sendTxCodecCaps() {
+      if (!txPathNegotiator.ready) return;
       if (managedPcmSelected()) return; // negotiated once by the managed controller
       const advertised = effectiveTxCodecAdvertisedCaps();
       state.txCodecRequested = advertised.includes("opus_wb")
@@ -18423,7 +18663,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       applyTxSourceOverrides();
-      if (generatedTxSourceActive()) {
+      if (generatedTxSourceActive() && !managedPcmSelected()) {
         sendTci("tx_two_tone:0,false;");
       }
       const commands = _next.buildAllRadioPrefsCommands(prefs);
@@ -18503,6 +18743,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function restoreRxSessionAfterReady(connectionGeneration) {
+      psRxRestoreGeneration = connectionGeneration;
       const plan = reconnectRxPlan;
       reconnectRxPlan = null;
       const restoreIq = plan ? plan.iq : shouldAutoStartIq();
@@ -18518,6 +18759,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           state.connectionGeneration !== connectionGeneration ||
           reconnectSnapshot.phase !== "online"
         ) {
+          if (psRxRestoreGeneration === connectionGeneration) psRxRestoreGeneration = null;
           return;
         }
         state.vfoA = restoreVfoA;
@@ -18542,6 +18784,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           logEvent("Automatic reconnect preserved stopped RX audio state");
         }
         logEvent(`RX session restored after bridge ready (IQ=${restoreIq ? "on" : "off"}, audio=${restoreAudio ? "on" : "off"})`);
+        if (psRxRestoreGeneration === connectionGeneration) psRxRestoreGeneration = null;
         updateUi();
       }, REMOTE_PROFILE_APPLY_DELAY_MS);
     }
@@ -19109,6 +19352,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function switchDisplayToTxArm() {
+      resetDisplayHistory();
       state.displayCaption = state.txEnabled ? "TX spectrum active" : "TX armed - RX panadapter muted";
       state.lastFrameAt = performance.now();
       state.lastSpectrumRenderAt = 0;
@@ -19130,6 +19374,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function recoverRxAfterMox() {
       flushRxAudioQueue("tx-recovery");
       resetRxWorkletRing(RX_AUDIO_MOX_RECOVERY_DROP_MS);
+      if (state.displayIqSource === "tx") resetDisplayHistory();
+      state.lastTxDisplayFrameAt = null;
       state.displayIqSource = "rx";
       state.spectrumAverageBypassFrames = 2;
       state.displayCaption = "RX active";
@@ -20048,9 +20294,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       if (active === state.moxRequested) { return true; }
       if (active) {
+        if (managedPcmSelected() && psRxRestoreGeneration === state.connectionGeneration) {
+          logEvent("Managed TX waiting for RX session settings restoration"); return false;
+        }
         if (managedPcmSelected() && (managedPcm.status().phase !== "ready" || generatedTxSourceActive()
           || (!voiceRequested && state.satp?.source !== "satp"))) {
-          logEvent(`Managed TX blocked: ${managedPcm.status().reason}; generated/two-tone sources are unavailable in this slice`);
+          logEvent(`Managed TX blocked: ${managedPcm.status().reason}; use the PS tab's separate attended Measure Only action for two-tone / AM carrier testing`);
           return false;
         }
         if (rfDisabledBlocksTx()) {
@@ -20142,7 +20391,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
 
+    let twoToneAction = 0;
     async function setTwoToneEnabled(enabled) {
+      const action = ++twoToneAction;
+      if (enabled && psRxRestoreGeneration === state.connectionGeneration) {
+        logEvent("Two-tone waiting for RX session settings restoration"); updateUi(); return;
+      }
       if (enabled && managedPcmSelected()) {
         logEvent("Managed two-tone generation is unavailable in this PCM/SATP review slice");
         updateUi(); return;
@@ -20162,10 +20416,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       saveRadioPrefs();
       if (enabled) {
         sendCurrentTwoToneSettings();
+        // Select the self-generated source BEFORE PTT so an unpaired SATP
+        // microphone cannot veto a generator that needs no mic. This command
+        // alone cannot arm/key; setPtt retains the operator/ready/RF gates.
+        sendTci("tx_two_tone:0,true;");
         state.twoTonePttOwned = !state.moxRequested;
         if (state.twoTonePttOwned) {
           const started = await setPtt(true, { useMic: false });
+          if (action !== twoToneAction) return;
           if (!started) {
+            sendTci("tx_two_tone:0,false;");
             state.twoToneEnabled = false;
             state.twoTonePttOwned = false;
             saveRadioPrefs();
@@ -20173,7 +20433,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             return;
           }
         }
-        sendTci("tx_two_tone:0,true;");
+        if (action !== twoToneAction) return;
       } else {
         sendTci("tx_two_tone:0,false;");
         if (state.twoTonePttOwned && state.moxRequested) {
@@ -20483,26 +20743,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.bridgeReady = false;
         state.remoteClientRole = null;
         state.remoteClientId = null;
-        if (managedPcmSelected()) {
-          managedPcmEpoch = managedPcm.connect(text => ws.send(text), frame => {
-            if (ws !== state.ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 4096) {
-              throw new Error("Managed media transport unavailable/backlogged");
-            }
-            if (ws.client) {
-              const result = ws.client.sendMedia(frame);
-              if (!result.sent) throw new Error("Managed media send refused");
-            } else ws.send(frame);
-          });
-        }
+        txPathNegotiator = new _next.TxPathNegotiator(txPathPreference);
+        managedPcm.disconnect();
+        $("managed-pcm-status").textContent = "Waiting for host TX owner";
         resetRxAudioCodecTransport();
         lockTx("reconnect", false);
+        state.twoToneHostResult = undefined;
+        twoToneAction += 1;
         resetDisplayHistory();
         logEvent(splitSessionId ? "Split WebSockets connected" : "WebSocket connected");
         logEvent(`TX transport active: ${splitSessionId ? "split WebSockets" : (forceLegacyWs ? "legacy diagnostic" : "single WebSocket")}`);
         void requestRxAudioCodec(ws);
         requestFullState();
-        sendTxCodecCaps();
-        if (!managedPcmSelected()) sendTxOpusLabTxAudioToBridgeOnce("socket open");
+        // Codec selection and TX preference replay wait for the host snapshot.
         void refreshTxCodecCapabilities();
         startBridgeRttPings();
         void syncWakeLock(true);
@@ -20604,6 +20857,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     window.saturnConnectBridgeDiagnostic = beginBridgeSession;
 
     async function disconnectBridge() {
+      state.twoToneHostResult = undefined;
+      twoToneAction += 1;
       if (managedPcmSelected()) managedPcm.release();
       resetRxAudioCodecTransport();
       state.intentionalDisconnect = true;
@@ -20655,8 +20910,46 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function handleTciText(text) {
+      rfMonitor.observe(text, state.connectionGeneration, performance.now());
+      correctionMonitor.observe(text, state.connectionGeneration, performance.now());
+      text = text.split(";").filter(c => !c.startsWith("saturn_ps_spectrum:") && !c.startsWith("saturn_ps_spectrum_clock:") && !c.startsWith("saturn_ps_correction:")).join(";");
+      pureSignalReports.observe(text, state.connectionGeneration, performance.now());
+      const pathChanged = txPathNegotiator.observe(text);
+      if (pathChanged && txPathNegotiator.ready) {
+        const managed = txPathNegotiator.path === "managed";
+        stopMicCapture(); resetTxOpusProducer("host TX owner negotiation");
+        state.pttRequestId += 1;
+        managedPcm.select(managed);
+        if (managed) {
+          const ws = state.ws;
+          managedPcmEpoch = managedPcm.connect(command => ws.send(command), frame => {
+            if (ws !== state.ws || !txPathNegotiator.ready || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 4096)
+              throw new Error("Managed media transport unavailable/backlogged");
+            if (ws.client) {
+              if (!ws.client.sendMedia(frame).sent) throw new Error("Managed media send refused");
+            } else ws.send(frame);
+          });
+          managedPcm.text(txPathNegotiator.takeSnapshot(), managedPcmEpoch);
+        } else {
+          txPathNegotiator.takeSnapshot();
+          sendTxCodecCaps();
+          sendTxOpusLabTxAudioToBridgeOnce("host Legacy negotiation");
+        }
+        logEvent(txPathNegotiator.reason);
+      } else if (pathChanged && txPathNegotiator.path === "blocked") {
+        lockTx("tx-fault", false);
+        if (managedPcmSelected()) managedPcm.release();
+        else state.ws?.send("trx:0,false;");
+        logEvent(`TX path unavailable: ${txPathNegotiator.reason}`);
+        $("managed-pcm-status").textContent = txPathNegotiator.reason;
+        state.intentionalDisconnect = true;
+        reconnectSupervisor.stop("TX owner mismatch; explicit reconnect required");
+        state.ws?.close();
+        return;
+      }
       if (managedPcmSelected()) {
         managedPcm.text(text, managedPcmEpoch);
+        text = managedPcm.filterTuningEcho(text);
         // A rejected old token is not an owner fault. Do not feed that
         // diagnostic into the legacy fault-to-lock path for current output.
         text = text.split(";").filter(c => c.trim() !== "tx_fault:0,psg1,GenerationMismatch").join(";");
@@ -20706,6 +20999,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function syncTciUiSideEffects(previous, next, events) {
+      if (events.txReleased) { rfMonitor.setTransmitting(false); correctionMonitor.setTransmitting(false); }
+      if (next.twoToneHostResult && next.twoToneHostResult !== previous.twoToneHostResult) {
+        logEvent(`Two-tone host ${next.twoToneHostResult}`);
+        if (next.twoToneHostResult.startsWith("rejected:") && state.twoTonePttOwned) void setPtt(false);
+      }
       const readinessAccepted = events.ready && reconnectSupervisor.bridgeReady(state.connectionGeneration);
       if (events.displayCenterHzChanged) {
         shiftDisplayForCenterChange(next.dds);
@@ -21275,6 +21573,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function buildRenderIqWindow() {
+      if (state.displayIqSource === "tx") return _next.latestTxDisplayWindow(state.iqPackets);
       if (state.iqPackets.length === 0) {
         return null;
       }
@@ -21311,6 +21610,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const view = new DataView(buffer);
       const sampleRate = view.getUint32(4, true);
       const floatCount = view.getUint32(20, true);
+      if (sourceKind === "tx" && !_next.acceptsTxDisplayFrame(state.connected,
+        txReceiveSuppressionActive(), sampleRate, floatCount, buffer.byteLength)) return;
       if (!floatCount || buffer.byteLength < 64 + floatCount * 4) {
         return;
       }
@@ -21335,12 +21636,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (sourceKind === "tx" && state.txDisplaySettleFrames > 0) {
         state.txDisplaySettleFrames -= 1;
       } else {
+        if (sourceKind === "tx") state.iqPackets = [];
         appendIqPacket(displayIqForSource(iq, sourceKind));
       }
       if (performance.now() - state.lastFrameAt > 2500) {
         logEvent(`Received ${sourceKind.toUpperCase()} IQ frame: ${samplePairs} complex samples @ ${Math.round(sampleRate / 1000)} kHz`);
       }
       state.lastFrameAt = performance.now();
+      if (sourceKind === "tx") state.lastTxDisplayFrameAt = state.lastFrameAt;
       if (displayFirstIqAt === null) displayFirstIqAt = state.lastFrameAt;
       state.iqFrameVersion = (state.iqFrameVersion || 0) + 1;
       if (sourceKind === "rx") {
@@ -21349,7 +21652,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.frameCounter += 1;
       state.displayCaption = sourceKind === "tx"
-        ? `Live TX IQ: ${samplePairs} samples at ${Math.round(sampleRate / 1000)} kHz, display ±${Math.round(TX_DISPLAY_SPAN_HZ / 2000)} kHz`
+        ? `Live TX baseband (WDSP): ${samplePairs} samples at ${Math.round(sampleRate / 1000)} kHz — not RF feedback`
         : `Live RX IQ frame: ${samplePairs} complex samples at ${Math.round(sampleRate / 1000)} kHz`;
       const now = performance.now();
       if (sourceChanged || nextDisplayRate !== prevDisplayRate || now - lastIqUiRefreshAt >= DISPLAY_STATUS_REFRESH_INTERVAL_MS) {
@@ -21466,7 +21769,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       // Safety: if TX ended but displayIqSource is still "tx", clear it
       // so the RX frame gate in handleBinaryFrame unblocks.
       if (!txDisplayActive && state.displayIqSource === "tx") {
+        resetDisplayHistory();
         state.displayIqSource = "rx";
+        state.lastTxDisplayFrameAt = null;
       }
       const canRenderIq =
         !state.displayPaused &&
@@ -22136,30 +22441,82 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sendTci(`tx_phase_rotator_corner:0,${state.txPhaseRotatorCornerHz};`);
       });
       $("setup-tx-puresignal-enabled").addEventListener("change", () => {
+        if (!pureSignalPanelView().canCalibrate) { syncSetupMenuFields(); return; }
         state.pureSignalEnabled = Boolean($("setup-tx-puresignal-enabled").checked);
         saveRadioPrefs();
-        sendTci(`tx_puresignal:0,${state.pureSignalEnabled};`);
+        managedPcm.preparePureSignal(state.pureSignalEnabled);
         updateUi();
       });
       $("setup-tx-puresignal-auto-attenuate").addEventListener("change", () => {
-        state.pureSignalAutoAttenuate = Boolean($("setup-tx-puresignal-auto-attenuate").checked);
-        saveRadioPrefs();
-        sendTci(`tx_puresignal_auto_attenuate:0,${state.pureSignalAutoAttenuate};`);
-        updateUi();
+        syncSetupMenuFields(); // fixed host acquisition contract; no unsupported setter
       });
       $("setup-tx-puresignal-attenuation").addEventListener("input", () => {
-        state.pureSignalAttenuationDb = clampPureSignalAttenuationDb(
-          $("setup-tx-puresignal-attenuation").value
-        );
-        $("setup-tx-puresignal-attenuation-readout").textContent = `${state.pureSignalAttenuationDb} dB`;
+        $("setup-tx-puresignal-attenuation-readout").textContent = `${$("setup-tx-puresignal-attenuation").value} dB requested`;
       });
       $("setup-tx-puresignal-attenuation").addEventListener("change", () => {
-        saveRadioPrefs();
-        sendTci(`tx_puresignal_attenuation:0,${state.pureSignalAttenuationDb};`);
+        if (!pureSignalPanelView().canSetFeedbackAttenuation) { syncSetupMenuFields(); return; }
+        const attenuation = Number($("setup-tx-puresignal-attenuation").value);
+        if (!Number.isInteger(attenuation) || attenuation < 0 || attenuation > 31) { syncSetupMenuFields(); return; }
+        sendTci(`tx_puresignal_attenuation:0,${attenuation};`);
       });
       $("setup-tx-puresignal-reset").addEventListener("click", () => {
+        if (!pureSignalPanelView().canCalibrate) return;
         sendTci("tx_puresignal_reset:0;");
       });
+      $("setup-ps-off").addEventListener("click", () => {
+        if (managedPcm.status().measurementActive) { managedPcm.release(); return; }
+        if (pureSignalPanelView().canConfigure && managedPcm.preparePureSignal(false)) state.pureSignalEnabled = false;
+      });
+      $("setup-ps-calibrate").addEventListener("click", () => {
+        if (pureSignalPanelView().canCalibrate && managedPcm.preparePureSignal(true)) state.pureSignalEnabled = true;
+      });
+      $("setup-ps-adaptation").addEventListener("change", () => {
+        const mode = $("setup-ps-adaptation").value;
+        if (!pureSignalPanelView().canConfigure || !["off", "single", "auto"].includes(mode)
+          || (mode === "auto" && !pureSignalPanelView().canAutoAdaptation)) { syncPureSignalPanel(); return; }
+        if (managedPcm.preparePureSignalMode(mode)) state.pureSignalEnabled = mode !== "off";
+      });
+      $("setup-ps-attended").addEventListener("change", updateUi);
+      $("setup-ps-measurement-kind").addEventListener("change", () => {
+        $("setup-ps-attended").checked = false;
+        syncPureSignalPanel();
+      });
+      $("setup-ps-measure-stop").addEventListener("click", () => managedPcm.release());
+      $("setup-ps-ack-fault").addEventListener("click", () => {
+        $("setup-ps-attended").checked = false;
+        lockTx("operator-lock", false);
+        managedPcm.acknowledgeFault(); updateUi();
+      });
+      $("setup-ps-commanded-watts").addEventListener("change", () => {
+        const managed = managedPcm.status(), watts = Number($("setup-ps-commanded-watts").value);
+        if (!pureSignalPanelView().canConfigure || managed.phase !== "ready" || !managed.driveLimitWatts
+          || !Number.isSafeInteger(watts) || watts < 1 || watts > Math.min(5, managed.driveLimitWatts)) { updateUi(); return; }
+        $("setup-ps-attended").checked = false;
+        managedPcm.sendControl(`tx_drive:0,${watts};`); updateUi();
+      });
+      $("setup-ps-measure").addEventListener("click", () => {
+        const attended = $("setup-ps-attended").checked;
+        $("setup-ps-attended").checked = false; // consumed by this action, never retained for retry/reconnect
+        if (!pureSignalPanelView().canMeasure || !normalizeTxReadyState() || rfDisabledBlocksTx()
+          || clientRoleBlocksTx() || !state.ws || state.ws.readyState !== WebSocket.OPEN) { updateUi(); return; }
+        const duration = Number($("setup-ps-duration-ms").value);
+        state.psMeasurementOwned = true;
+        const commandedWatts = managedPcm.status().committedWatts ?? state.txDrive;
+        if (!managedPcm.startMeasurement(duration, txVfoFrequency(), commandedWatts, attended, $("setup-ps-measurement-kind").value === "timing", ["AM", "SAM"].includes(state.mode))) {
+          state.psMeasurementOwned = false; logEvent("MeasurementOnly refused: verify host capability, frequency, drive, duration and attended confirmation"); updateUi(); return;
+        }
+        state.pttRequestId += 1; state.txLocalRequestId = state.pttRequestId;
+        state.txLocalRequestPermitExpiresAt = performance.now() + duration + 1000;
+        refreshBridgeControlHeartbeatForTx(); setTxMediaPriority(true); muteRxAudioForMox();
+        switchDisplayToTxArm(); logEvent(`MeasurementOnly requested: ${duration} ms, ${commandedWatts} commanded W, ${pureSignalPanelView().measurementStimulus}; fitting/correction OFF`);
+        updateUi();
+      });
+      $("setup-tx-open-ps-btn").addEventListener("click", () => {
+        applyControlContext("ps");
+        $("ps-control-panel")?.scrollIntoView({ block: "nearest" });
+        $("control-tab-ps")?.focus({ preventScroll: true });
+      });
+      $("setup-ps-copy-btn").addEventListener("click", () => { void copyPureSignalDiagnostics(); });
       $("setup-profile-load-btn").addEventListener("click", () => {
         const name = $("setup-profile-select").value;
         if (!name) {
@@ -22829,14 +23186,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       });
       bindPttButton();
+      document.querySelectorAll('[data-ps-signal-monitor]').forEach((element) => _next.mountSignalMonitor(element));
       $("managed-pcm-select").addEventListener("change", () => {
         if (state.connected || state.connectPending || state.moxRequested) {
-          $("managed-pcm-select").value = managedPcmSelected() ? "managed" : "legacy";
+          $("managed-pcm-select").value = txPathPreference;
           logEvent("Disconnect before changing the TX owner path"); return;
         }
         stopMicCapture(); resetTxOpusProducer("TX owner selection");
         state.pttRequestId += 1; // invalidate unresolved legacy microphone acquisition
-        managedPcm.select($("managed-pcm-select").value === "managed");
+        txPathPreference = $("managed-pcm-select").value;
+        txPathNegotiator = new _next.TxPathNegotiator(txPathPreference);
+        managedPcm.select(txPathPreference === "managed");
         logEvent(managedPcm.status().reason);
       });
       bindOperatorStateDetail();
@@ -22878,7 +23238,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sendTci(`tx_monitor_level:0,${level};`);
       });
       $("tx-drive").addEventListener("input", () => {
-        state.txDrive = clampTxDriveWatts($("tx-drive").value);
+        state.txDrive = Math.min(Number($("tx-drive").max), clampTxDriveWatts($("tx-drive").value));
         $("tx-drive-readout").textContent = `${state.txDrive} W`;
       });
       $("tx-drive").addEventListener("change", () => {
@@ -23072,6 +23432,26 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("two-tone-btn").addEventListener("click", () => {
         void setTwoToneEnabled(!state.twoToneEnabled);
+      });
+      $("ps-two-tone-btn").addEventListener("click", () => {
+        if ($("ps-two-tone-btn").disabled) return;
+        if (!managedPcmSelected()) { void setTwoToneEnabled(!state.twoToneEnabled); return; }
+        if (managedPcm.status().twoToneActive) { managedPcm.release(); return; }
+        const attended = $("setup-ps-attended").checked;
+        $("setup-ps-attended").checked = false;
+        if (!pureSignalPanelView().canTwoTone || !normalizeTxReadyState() || rfDisabledBlocksTx()
+          || clientRoleBlocksTx() || !state.ws || state.ws.readyState !== WebSocket.OPEN) { updateUi(); return; }
+        const duration = Number($("setup-ps-duration-ms").value);
+        state.psMeasurementOwned = true;
+        if (!managedPcm.startTwoTone(duration, txVfoFrequency(), state.txDrive, attended)) {
+          state.psMeasurementOwned = false;
+          logEvent("Two-tone refused: verify committed PS mode, host capability, frequency, drive, duration and attended confirmation"); updateUi(); return;
+        }
+        state.pttRequestId += 1; state.txLocalRequestId = state.pttRequestId;
+        state.txLocalRequestPermitExpiresAt = performance.now() + duration + 1000;
+        refreshBridgeControlHeartbeatForTx(); setTxMediaPriority(true); muteRxAudioForMox();
+        switchDisplayToTxArm(); logEvent(`Single-fit two-tone requested: ${duration} ms, ${state.txDrive} commanded W; RF/correction unverified`);
+        updateUi();
       });
     }
 

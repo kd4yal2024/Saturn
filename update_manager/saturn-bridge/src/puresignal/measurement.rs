@@ -175,8 +175,42 @@ pub struct MeasurementRecorder {
     terminal_fault: Option<Fault>,
     cleanup_completed_ns: Option<u64>,
     finalized: bool,
+    summary: Option<StimulusSummary>,
+}
+#[derive(Default)]
+struct StimulusSummary {
+    timing: bool,
+    blocks: u64,
+    pairs: u64,
+    verified_native_blocks: u64,
+    overload_unknown_blocks: u64,
+    max_ingress_age_ns: u64,
+    admissions: Vec<(Option<Fault>, u64)>,
 }
 impl MeasurementRecorder {
+    /// Explicit listening/power test, NOT a raw feedback capture. Retain only
+    /// bounded aggregate counts; the lifecycle still checks every block and
+    /// all native/freshness/stop gates remain in force.
+    pub fn stimulus_summary(context: CaptureContext) -> Result<Self, Fault> {
+        let mut recorder = Self::new(1, context)?;
+        recorder.summary = Some(StimulusSummary::default());
+        Ok(recorder)
+    }
+    /// Same bounded counters and cleanup gates; never label multisine evidence
+    /// as a two-tone summary. Requested waveform metadata is in the host envelope.
+    pub fn timing_summary(context: CaptureContext) -> Result<Self, Fault> {
+        let mut recorder = Self::new(1, context)?;
+        recorder.summary = Some(StimulusSummary {
+            timing: true,
+            ..Default::default()
+        });
+        Ok(recorder)
+    }
+    pub fn recorded_blocks(&self) -> u64 {
+        self.summary
+            .as_ref()
+            .map_or(self.records.len() as u64, |s| s.blocks)
+    }
     pub fn context(&self) -> &CaptureContext {
         &self.context
     }
@@ -201,6 +235,7 @@ impl MeasurementRecorder {
             terminal_fault: None,
             cleanup_completed_ns: None,
             finalized: false,
+            summary: None,
         })
     }
     pub fn record(
@@ -212,6 +247,24 @@ impl MeasurementRecorder {
     ) -> Result<(), Fault> {
         if self.cleanup_completed_ns.is_some() {
             return Err(Fault::CleanupPending);
+        }
+        if let Some(summary) = &mut self.summary {
+            let c = capture(&self.context, block, recorded_ns, native_state, admission);
+            summary.blocks = summary.blocks.saturating_add(1);
+            summary.pairs = summary.pairs.saturating_add(c.reference.len() as u64 / 2);
+            summary.verified_native_blocks += u64::from(native_state.disabled_verified());
+            summary.overload_unknown_blocks +=
+                u64::from(c.overload == OverloadQualification::Unknown);
+            summary.max_ingress_age_ns = summary
+                .max_ingress_age_ns
+                .max(recorded_ns.saturating_sub(block.meta.observed_ns));
+            let reason = c.original_admission.err();
+            if let Some((_, count)) = summary.admissions.iter_mut().find(|(r, _)| *r == reason) {
+                *count += 1;
+            } else {
+                summary.admissions.push((reason, 1));
+            }
+            return Ok(());
         }
         if self.records.len() == self.capacity {
             if self.overflow_record.is_none() {
@@ -257,6 +310,28 @@ impl MeasurementRecorder {
     /// No clearing/streaming on the active path; generation retirement controls
     /// recorder replacement. Slow export cannot postpone release processing.
     pub fn export_json(&self) -> String {
+        if let Some(summary) = &self.summary {
+            let admissions = summary
+                .admissions
+                .iter()
+                .map(|(reason, count)| {
+                    format!(
+                        "{{\"reason\":{},\"blocks\":{count}}}",
+                        optional_debug(*reason)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            return format!("{{\"format\":{},\"sourcePin\":{},\"nativeIdentity\":{},\"feedbackAttenuationCommandDb\":{},\"commandedDriveCode\":{},\"timestampDomain\":\"bridge-monotonic-ingress-not-RF-time\",\"rawFeedbackCaptured\":false,\"rfImdQualified\":false,\"captureFinished\":{},\"cleanupCompletedNs\":{},\"terminalFault\":{},\"blocksObserved\":{},\"pairsObserved\":{},\"nativeDisabledVerifiedBlocks\":{},\"overloadUnknownBlocks\":{},\"maxBridgeIngressAgeNs\":{},\"originalAdmissions\":[{}]}}",
+                quoted(if summary.timing { "saturn-timing-summary-v1" } else { "saturn-two-tone-summary-v1" }),
+                quoted(&self.context.source_pin), quoted(&self.context.native_identity),
+                self.context.feedback_attenuation_db.map_or_else(||"null".into(), |n|n.to_string()),
+                self.context.commanded_drive.map_or_else(||"null".into(), |n|n.to_string()),
+                self.finalized, self.cleanup_completed_ns.map_or_else(||"null".into(), |n| n.to_string()),
+                optional_debug(self.terminal_fault), summary.blocks, summary.pairs,
+                summary.verified_native_blocks, summary.overload_unknown_blocks,
+                summary.max_ingress_age_ns, admissions);
+        }
         let retention_complete = self.overflow_record.is_none() && self.lost_blocks == 0;
         let mut out = format!("{{\"format\":\"saturn-feedback-measurement-v1\",\"rfImdQualified\":false,\"recordingComplete\":{},\"retentionComplete\":{},\"captureFinished\":{},\"cleanupCompletedNs\":{},\"terminalFault\":{},\"lostBlocks\":{},\"captures\":[",
                               retention_complete && !self.records.is_empty() && self.finalized && self.cleanup_completed_ns.is_some() && self.terminal_fault.is_none(),
@@ -354,8 +429,8 @@ impl Capture {
             self.native_state.automatic_enabled,self.native_state.correction_applied,self.native_state.evidence_verified,
             bits_json(&self.reference),bits_json(&self.rf));
         out.pop();
-        write!(out, ",\"originalAdmissionFault\":{},\"physicalAdc\":{},\"referenceLevels\":{},\"rfLevels\":{},\"overloadProvenUnclipped\":{}}}",
-            optional_debug(self.original_admission.err()), quoted(&format!("{:?}",self.context.physical_adc)),
+        write!(out, ",\"sequencePackets\":{},\"originalAdmissionFault\":{},\"physicalAdc\":{},\"referenceLevels\":{},\"rfLevels\":{},\"overloadProvenUnclipped\":{}}}",
+            self.meta.sequence_packets, optional_debug(self.original_admission.err()), quoted(&format!("{:?}",self.context.physical_adc)),
             levels_json(self.reference_levels), levels_json(self.rf_levels), self.overload == OverloadQualification::Clear).unwrap();
         out
     }
@@ -477,6 +552,50 @@ pub fn estimate_integer_delay(c: &Capture, max_lag: usize) -> Result<DelayEstima
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_stimulus_summary_is_bounded_and_never_claims_raw_capture() {
+        let mut r = MeasurementRecorder::stimulus_summary(context()).unwrap();
+        let b = block();
+        for n in 0..10_000 {
+            r.record(
+                &b,
+                100,
+                off(),
+                if n % 2 == 0 {
+                    Ok(())
+                } else {
+                    Err(Fault::Settling)
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(r.recorded_blocks(), 10_000);
+        assert!(r.records().is_empty() && r.overflow_record().is_none());
+        assert_eq!(r.lost_blocks, 0);
+        assert_eq!(r.summary.as_ref().unwrap().admissions.len(), 2);
+        r.finish(Some(Fault::Stale), Some(200));
+        let text = r.export_json();
+        assert!(text.contains("\"format\":\"saturn-two-tone-summary-v1\""));
+        assert!(text.contains("\"rawFeedbackCaptured\":false"));
+        assert!(text.contains("\"terminalFault\":\"Stale\""));
+        assert!(text.contains("\"overloadUnknownBlocks\":10000"));
+        assert!(!text.contains("referenceF64Bits") && !text.contains("\"captures\""));
+        assert!(
+            text.len() < 4096,
+            "bounded summary, not growing sample export"
+        );
+        assert_eq!(r.record(&b, 300, off(), Ok(())), Err(Fault::CleanupPending));
+    }
+    #[test]
+    fn timing_summary_never_calls_itself_a_two_tone_capture() {
+        let mut recorder = MeasurementRecorder::timing_summary(context()).unwrap();
+        recorder.finish(None, Some(50));
+        let text = recorder.export_json();
+        assert!(text.contains("\"format\":\"saturn-timing-summary-v1\""));
+        assert!(!text.contains("saturn-two-tone-summary-v1"));
+        assert!(text.contains("\"rawFeedbackCaptured\":false"));
+        assert!(text.contains("\"rfImdQualified\":false"));
+    }
     fn context() -> CaptureContext {
         CaptureContext {
             source_pin: "synthetic-fixture".into(),

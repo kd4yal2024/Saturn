@@ -629,6 +629,12 @@ impl<N: NativePs> Controller<N> {
             }
         }
         if self.backend == Backend::P2 {
+            let packets = block.meta.sequence_packets;
+            if packets == 0 || packets as usize > super::adapters::P2_BATCH_PACKETS
+                || (packets > 1 && block.pairs != packets as usize * super::adapters::P2_PAIR_COUNT)
+            {
+                return self.reject(Fault::WrongFormat, true);
+            }
             let sequence = match block.meta.sequence {
                 Some(value) => value,
                 None => return self.reject(Fault::WrongFormat, true),
@@ -645,8 +651,8 @@ impl<N: NativePs> Controller<N> {
                     return self.reject(fault, true);
                 }
             }
-            self.next_p2_sequence = Some(sequence.wrapping_add(1));
-        } else if block.meta.sequence.is_some() {
+            self.next_p2_sequence = Some(sequence.wrapping_add(packets as u32));
+        } else if block.meta.sequence.is_some() || block.meta.sequence_packets != 0 {
             return self.reject(Fault::WrongFormat, true);
         }
         if self.queued == self.queue.len() {

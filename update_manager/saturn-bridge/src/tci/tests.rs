@@ -1161,6 +1161,110 @@ fn outbound_scheduler_replaces_display_depth_one() {
     assert_eq!(delta.display_replaced, 1);
 }
 
+#[cfg(feature = "managed-puresignal")]
+#[test]
+fn rf_monitor_is_bounded_latest_only_control_lane_display_not_safety_or_media() {
+    let make = || OutboundMessage::RfSpectrum {
+        text: "saturn_ps_spectrum:{};".into(),
+        enqueued: Instant::now(),
+    };
+    let outbound = ClientOutbound::new();
+    outbound.enqueue(make());
+    outbound.enqueue(make());
+    outbound.enqueue(OutboundMessage::SafetyText("tx_state:0,rx;".into()));
+    assert_eq!(
+        outbound.next_message(true).unwrap().class,
+        OutboundClass::Safety
+    );
+    assert_eq!(
+        outbound.next_message(true).unwrap().class,
+        OutboundClass::Display
+    );
+    assert!(outbound.next_message(true).is_none());
+    assert_eq!(outbound.drain_stats().display_replaced, 1);
+    let mut control = ClientConnection {
+        outbound: ClientOutbound::new(),
+        state: ClientState::default(),
+    };
+    control.state.connect_lane_hint = Some(SplitSocketKind::Control);
+    let mut media = control.clone();
+    media.state.connect_lane_hint = Some(SplitSocketKind::Media);
+    for tx in [false, true] {
+        assert!(client_wants_outbound_message(&control, &make(), tx));
+        assert!(!client_wants_outbound_message(&media, &make(), tx));
+    }
+    // The actual writer emits text, never a binary frame on the control lane.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let peer = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(30)))
+        .unwrap();
+    let mut sender =
+        tungstenite::WebSocket::from_raw_socket(server, tungstenite::protocol::Role::Server, None);
+    let mut receiver =
+        tungstenite::WebSocket::from_raw_socket(peer, tungstenite::protocol::Role::Client, None);
+    send_outbound(&mut sender, &make()).unwrap();
+    assert!(matches!(receiver.read().unwrap(), Message::Text(_)));
+    let stale = OutboundMessage::RfSpectrum {
+        text: "stale".into(),
+        enqueued: Instant::now() - Duration::from_secs(1),
+    };
+    send_outbound(&mut sender, &stale).unwrap();
+    assert!(receiver.read().is_err());
+}
+
+#[cfg(feature = "managed-puresignal")]
+#[test]
+fn correction_monitor_has_independent_bounded_slot_and_never_displaces_rf_or_release() {
+    let correction = |text: &'static str| OutboundMessage::PsCorrection {
+        text: text.into(),
+        enqueued: Instant::now(),
+    };
+    let outbound = ClientOutbound::new();
+    outbound.enqueue(OutboundMessage::RfSpectrum {
+        text: "rf".into(),
+        enqueued: Instant::now(),
+    });
+    outbound.enqueue(correction("old"));
+    outbound.enqueue(correction("new"));
+    outbound.enqueue(OutboundMessage::SafetyText("tx_state:0,rx;".into()));
+    assert_eq!(
+        outbound.next_message(true).unwrap().class,
+        OutboundClass::Safety
+    );
+    let taken = outbound.next_message(true).unwrap();
+    assert!(
+        matches!(&taken.message,OutboundMessage::PsCorrection{text,..} if text.as_ref()=="new")
+    );
+    outbound.enqueue(correction("newer"));
+    outbound.requeue_front(taken);
+    assert!(
+        matches!(outbound.next_message(true).unwrap().message,OutboundMessage::PsCorrection{text,..} if text.as_ref()=="newer")
+    );
+    assert!(matches!(
+        outbound.next_message(true).unwrap().message,
+        OutboundMessage::RfSpectrum { .. }
+    ));
+    assert_eq!(outbound.queued_bytes(), 0);
+    assert!(outbound.next_message(true).is_none());
+    let mut client = ClientConnection {
+        outbound: ClientOutbound::new(),
+        state: ClientState::default(),
+    };
+    client.state.connect_lane_hint = Some(SplitSocketKind::Media);
+    assert!(!client_wants_outbound_message(
+        &client,
+        &correction("x"),
+        true
+    ));
+    client.state.connect_lane_hint = Some(SplitSocketKind::Control);
+    assert!(client_wants_outbound_message(
+        &client,
+        &correction("x"),
+        true
+    ));
+}
+
 #[test]
 fn outbound_scheduler_buffers_full_rate_iq_in_order_and_bounds_latency() {
     let stats = Arc::new(FullRateIqTransportStats::default());
@@ -1404,6 +1508,33 @@ fn display_frame_interval_supports_limit_and_disable() {
         display_frame_interval_for_limit(50),
         Duration::from_millis(20)
     );
+}
+
+#[test]
+fn tx_display_clock_is_independent_and_bounded_without_sleep() {
+    let now = Instant::now();
+    let mut rx = None;
+    let mut tx = None;
+    assert!(display_frame_due_at(
+        &mut rx,
+        Duration::from_millis(33),
+        now
+    ));
+    assert!(display_frame_due_at(
+        &mut tx,
+        Duration::from_millis(100),
+        now
+    ));
+    assert!(!display_frame_due_at(
+        &mut tx,
+        Duration::from_millis(100),
+        now + Duration::from_millis(99)
+    ));
+    assert!(display_frame_due_at(
+        &mut tx,
+        Duration::from_millis(100),
+        now + Duration::from_millis(100)
+    ));
 }
 
 #[test]
@@ -3740,7 +3871,7 @@ fn split_audio_format_state_propagates_from_control_to_media() {
 }
 
 #[test]
-fn split_tx_media_priority_suppresses_media_downlink() {
+fn split_tx_media_priority_suppresses_rx_but_keeps_bounded_tx_display() {
     let clients: ClientRegistry = Arc::new(Mutex::new(BTreeMap::new()));
     insert_split_paired_client(
         &clients,
@@ -3774,14 +3905,19 @@ fn split_tx_media_priority_suppresses_media_downlink() {
         sequence: 7,
     };
 
-    // While on-air: all three binary variants are suppressed on the media lane.
+    // While on-air: only bounded, independently rate-limited TX display passes.
     assert!(!client_wants_outbound_message(media, &rx_iq, true));
-    assert!(!client_wants_outbound_message(media, &tx_iq, true));
+    assert!(client_wants_outbound_message(media, &tx_iq, true));
+    assert!(!client_wants_outbound_message(
+        snapshot.get(&86).unwrap(),
+        &tx_iq,
+        true
+    ));
     assert!(!client_wants_outbound_message(media, &audio, true));
 
     // Off-air: media lane receives binary as normal.
     assert!(client_wants_outbound_message(media, &rx_iq, false));
-    assert!(client_wants_outbound_message(media, &tx_iq, false));
+    assert!(!client_wants_outbound_message(media, &tx_iq, false));
     assert!(client_wants_outbound_message(media, &audio, false));
 }
 
@@ -3926,7 +4062,8 @@ fn split_outbound_routing_sends_iq_to_media_lane_not_control() {
         iq_samples: vec![0.0, 0.0],
     };
     assert!(!client_wants_outbound_message(&control, &tx_iq, false));
-    assert!(client_wants_outbound_message(&media, &tx_iq, false));
+    assert!(!client_wants_outbound_message(&media, &tx_iq, false));
+    assert!(client_wants_outbound_message(&media, &tx_iq, true));
 }
 
 #[test]
@@ -4215,6 +4352,41 @@ fn trx_true_resets_tx_uplink_attempt_telemetry() {
     assert_eq!(state.tx_mic_last_arrived_seq, 50);
     assert_eq!(state.tx_mic_seq_gap_count, 0);
     assert_eq!(state.tx_mic_last_arrived_at, Some(first_frame_at));
+}
+
+#[test]
+fn operator_disconnect_skips_declared_viewer_and_leaves_reconnect_available() {
+    let clients = test_client_registry(1);
+    let operator_client_id = Arc::new(AtomicU64::new(1));
+    register_client(
+        &clients, &operator_client_id, 2, ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(), None, true,
+    );
+    assert_eq!(
+        set_client_split_session_open(&clients, 2, "diagnostic-recorder", TciClientRole::Viewer),
+        Some(TciClientRole::Viewer),
+    );
+    let disconnect = unregister_client(&clients, &operator_client_id, 1);
+    assert!(disconnect.was_operator);
+    assert_eq!(disconnect.promoted_operator, None);
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 0);
+    let (role, _, _) = register_client(
+        &clients, &operator_client_id, 3, ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(), Some(SplitSocketKind::Control), true,
+    );
+    assert_eq!(role, TciClientRole::Operator);
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 3);
+
+    // An explicitly declared observer stays a viewer across later handoffs too.
+    register_client(
+        &clients, &operator_client_id, 4, ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(), Some(SplitSocketKind::Control), true,
+    );
+    let disconnect = unregister_client(&clients, &operator_client_id, 3);
+    assert_eq!(disconnect.promoted_operator, Some(4));
+    assert_eq!(operator_client_id.load(Ordering::SeqCst), 4);
+    assert_eq!(clients.lock_unpoisoned().get(&2).unwrap().state.split.as_ref().unwrap().role,
+        Some(TciClientRole::Viewer));
 }
 
 #[test]

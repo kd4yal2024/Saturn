@@ -52,20 +52,24 @@ impl P2Session {
                                // does not prove RF acquisition age or drain packets still in transit.
         self.socket.set_nonblocking(true)?;
         let mut discard = [0; 2048];
-        let drained = (|| -> io::Result<()> {
+        let drained = (|| -> io::Result<bool> {
             for _ in 0..256 {
                 match self.socket.recv_from(&mut discard) {
                     Ok(_) => {}
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(true),
                     Err(e) => return Err(e),
                 }
             }
-            Err(io::Error::other(
-                "P2 layout queue retirement exceeded bounded drain",
-            ))
+            Ok(false)
         })();
         self.socket.set_nonblocking(false)?;
-        drained?;
+        if !drained? {
+            // Continue this same request on the next acquisition turn. Keep
+            // the decoder retired and do not publish preparation/restoration
+            // completion until the queue is actually empty. Lifecycle stop
+            // and cleanup deadlines remain in force while this yields.
+            return Ok(());
+        }
         let model = managed.model.lock_unpoisoned().clone();
         if model.desired.rx_ddc_index < 2 {
             return Err(io::Error::other("P2 shared feedback reserves DDC0/1"));
@@ -192,6 +196,9 @@ pub(crate) mod tests {
             ));
         }
         pub(crate) fn drain_output(&self) {
+            self.drain_output_count();
+        }
+        pub(crate) fn drain_output_count(&self) -> u64 {
             let mut bytes = [0; 2048];
             while let Ok(n) = self.hp.recv(&mut bytes) {
                 if n == 1444 && bytes[4] & 2 != 0 {
@@ -202,8 +209,67 @@ pub(crate) mod tests {
                     );
                 }
             }
-            while self.duc.recv(&mut bytes).is_ok() {}
+            let mut packets = 0;
+            while let Ok(n) = self.duc.recv(&mut bytes) {
+                if n == 1444 {
+                    packets += 1;
+                }
+            }
+            packets
         }
+    }
+    #[test]
+    fn p2_queue_retirement_yields_without_premature_completion() {
+        use crate::tx_thread::{
+            feedback_owner::tests::{collector, scope},
+            feedback_stream::tests::packet,
+        };
+        let fixture = Fixture::new();
+        let link = Link::new();
+        let (ingress, _) = collector();
+        let model = Arc::new(Mutex::new(crate::tx_owner_stop::tests::model()));
+        fixture
+            .session
+            .attach_managed_feedback(link.clone(), ingress, model, Instant::now())
+            .unwrap();
+        let bytes: libc::c_int = 1024 * 1024;
+        use std::os::fd::AsRawFd;
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    fixture.session.socket.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_RCVBUF,
+                    (&bytes as *const libc::c_int).cast(),
+                    std::mem::size_of_val(&bytes) as _,
+                )
+            },
+            0
+        );
+        let first = scope(1);
+        link.request(Some(first)).unwrap();
+        for n in 0..300 {
+            fixture
+                .feedback
+                .send_to(&packet(n), fixture.destination)
+                .unwrap();
+        }
+        fixture.service().unwrap();
+        assert!(!link.prepared(first.output).unwrap());
+        fixture.service().unwrap();
+        assert!(link.prepared(first.output).unwrap());
+        let restore = link.request(None).unwrap();
+        link.permit_restoration(restore);
+        for n in 300..600 {
+            fixture
+                .feedback
+                .send_to(&packet(n), fixture.destination)
+                .unwrap();
+        }
+        fixture.service().unwrap();
+        assert!(!link.restored().unwrap());
+        fixture.service().unwrap();
+        assert!(link.restored().unwrap());
     }
     #[test]
     fn p2_existing_socket_layout_queue_retirement_demux_and_restore() {
@@ -235,13 +301,16 @@ pub(crate) mod tests {
         let mut duc = [0; 60];
         assert_eq!(fixture.duc.recv(&mut duc).unwrap(), 60);
         assert_eq!((duc[58], duc[59]), (31, 9));
-        fixture.receive(&packet(0));
+        for n in 0..8 {
+            fixture.receive(&packet(n));
+        }
         let block = deliveries.feedback.try_recv().unwrap();
         assert_eq!(block.meta.fence, first.fence);
-        assert_eq!(block.pairs, 119);
+        assert_eq!(block.pairs, 952);
+        assert_eq!(block.meta.sequence_packets, 8);
         assert!(block.meta.overload.iter().all(Option::is_none));
         ingress.recycle_feedback_buffer(block);
-        fixture.receive(&packet(2));
+        fixture.receive(&packet(9));
         assert!(deliveries.feedback.try_recv().is_err());
         assert!(fixture
             .session
@@ -264,7 +333,9 @@ pub(crate) mod tests {
         assert_eq!((duc[58], duc[59]), (31, 31));
         link.request(Some(scope(2))).unwrap();
         fixture.service().unwrap();
-        fixture.receive(&packet(0));
+        for n in 0..8 {
+            fixture.receive(&packet(n));
+        }
         let block = deliveries.feedback.try_recv().unwrap();
         assert_eq!(block.meta.interval.first, 0);
         assert_eq!(block.meta.fence, scope(2).fence);

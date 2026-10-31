@@ -64,10 +64,15 @@ pub struct TciFrontend {
     // media TCP send buffer. Cleared automatically when TX returns to RX,
     // eliminating the stuck-flag class of bug. Single source of truth.
     tx_media_priority_active: AtomicBool,
+    rf_monitor_available: AtomicBool,
+    correction_monitor_available: AtomicBool,
     tx_power_meter_scale: f32,
     remote_tx_rf_enabled: bool,
     display_frame_interval: Duration,
     last_display_frame_at: Mutex<Option<Instant>>,
+    // Independent of RX's display clock: suppressed RX publications must not
+    // consume TX slots. At most 10 display frames/s, each <= 32 KiB of IQ.
+    last_tx_display_frame_at: Mutex<Option<Instant>>,
     rx_audio_transport_rate_hz: u32,
     rx_audio_transport_channels: u32,
     _accept_thread: JoinGuard,
@@ -195,6 +200,14 @@ fn try_reserve_connection_slot(active: &AtomicU64, high_watermark: &AtomicU64) -
             return true;
         }
     }
+}
+
+fn display_frame_due_at(last: &mut Option<Instant>, interval: Duration, now: Instant) -> bool {
+    if last.is_some_and(|at| now.saturating_duration_since(at) < interval) {
+        return false;
+    }
+    *last = Some(now);
+    true
 }
 
 impl TciFrontend {
@@ -383,10 +396,13 @@ impl TciFrontend {
             display,
             display_rate_limited_count: AtomicU64::new(0),
             tx_media_priority_active: AtomicBool::new(false),
+            rf_monitor_available: AtomicBool::new(false),
+            correction_monitor_available: AtomicBool::new(false),
             tx_power_meter_scale: config.tx_power_meter_scale,
             remote_tx_rf_enabled,
             display_frame_interval: display_frame_interval_for_limit(config.display_frame_limit_hz),
             last_display_frame_at: Mutex::new(None),
+            last_tx_display_frame_at: Mutex::new(None),
             rx_audio_transport_rate_hz: config.rx_audio_transport_rate_hz,
             rx_audio_transport_channels: config.rx_audio_transport_channels.clamp(1, 2),
             _accept_thread: JoinGuard { handle },
@@ -439,8 +455,8 @@ impl TciFrontend {
 
     /// Set the bridge's authoritative TX media-priority state.
     /// Called from the main loop from TX intent/armed/keyed state. While true,
-    /// RX binary frames (IqFrame, TxIqFrame, AudioFrame) are suppressed on
-    /// the media lane so uplink mic owns the media TCP send buffer. The flag
+    /// RX IQ/audio are suppressed; independently bounded TX baseband display
+    /// remains on the media lane. The flag
     /// cannot drift out of sync because there is no browser-owned state to
     /// forget to clear.
     pub fn set_tx_media_priority_active(&self, active: bool) {
@@ -698,6 +714,22 @@ impl TciFrontend {
     }
 
     pub fn publish_radio_state(&self, model: &RadioModel) {
+        self.send_text(format!(
+            "saturn_ps_correction_caps:{};",
+            if self.correction_monitor_available.load(Ordering::Acquire) {
+                "wdsp-ampview-v1"
+            } else {
+                "unavailable"
+            }
+        ));
+        self.send_text(format!(
+            "saturn_ps_spectrum_caps:{};",
+            if self.rf_monitor_available.load(Ordering::Acquire) {
+                "raw-pairs-v1"
+            } else {
+                "unavailable"
+            }
+        ));
         self.send_text(format!("vfo:0,0,{};", model.desired.vfo_a_hz));
         self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
         self.send_text(format!(
@@ -1039,6 +1071,22 @@ impl TciFrontend {
         self.send_text(format!("tx_state:0,{};", model.desired.tx_phase));
     }
 
+    /// Dispatch acceptance is configuration evidence, never proof of native
+    /// generation, completed output, keying or RF. No client can arm from it.
+    pub(crate) fn publish_two_tone_result(
+        &self,
+        requested: bool,
+        accepted: bool,
+        reason: &str,
+        enabled: bool,
+    ) {
+        self.send_safety_text(format!(
+            "tx_two_tone_result:0,{requested},{},{reason},{enabled};",
+            if accepted { "accepted" } else { "rejected" }
+        ));
+        self.send_text(format!("tx_two_tone:0,{enabled};"));
+    }
+
     pub fn publish_puresignal_status(&self, model: &RadioModel) {
         self.send_text(format!(
             "tx_puresignal_attenuation:0,{};",
@@ -1195,6 +1243,42 @@ impl TciFrontend {
 
     pub fn publish_saturn_pong(&self, client_id: u64, nonce: &str, sent_at: &str) {
         self.send_text_to(client_id, format!("saturn_pong:{nonce},{sent_at};"));
+        #[cfg(feature = "managed-puresignal")]
+        {
+            let (boot, now) = crate::rf_monitor::clock();
+            self.send_text_to(
+                client_id,
+                format!("saturn_ps_spectrum_clock:{nonce},{boot},{now};"),
+            );
+        }
+    }
+
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn publish_rf_spectrum(&self, text: String) {
+        if text.len() <= 24_000 {
+            self.send_message(OutboundMessage::RfSpectrum {
+                text: text.into(),
+                enqueued: Instant::now(),
+            });
+        }
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn set_rf_monitor_available(&self) {
+        self.rf_monitor_available.store(true, Ordering::Release);
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn set_correction_monitor_available(&self) {
+        self.correction_monitor_available
+            .store(true, Ordering::Release);
+    }
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn publish_ps_correction(&self, text: String) {
+        if text.len() <= 160_000 {
+            self.send_message(OutboundMessage::PsCorrection {
+                text: text.into(),
+                enqueued: Instant::now(),
+            });
+        }
     }
 
     pub fn is_operator(&self, client_id: u64) -> bool {
@@ -1254,10 +1338,20 @@ impl TciFrontend {
     }
 
     pub fn publish_tx_iq_frame(&self, sample_rate_hz: u32, iq_samples: &[f32]) {
-        if !self.is_iq_stream_enabled() {
+        if !self.is_iq_stream_enabled()
+            || !self.tx_media_priority_active.load(Ordering::Acquire)
+            || iq_samples.is_empty()
+            || !iq_samples.len().is_multiple_of(2)
+            || iq_samples.len() > 8192
+        {
             return;
         }
-        if !self.should_publish_display_frame() {
+        let interval = self.display_frame_interval.max(Duration::from_millis(100));
+        if !display_frame_due_at(
+            &mut self.last_tx_display_frame_at.lock_unpoisoned(),
+            interval,
+            Instant::now(),
+        ) {
             self.display_rate_limited_count
                 .fetch_add(1, Ordering::Relaxed);
             return;

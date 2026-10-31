@@ -16,6 +16,8 @@ use crate::radio_model::{
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 mod native_owner;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod native_worker_scheduling;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod ps_native;
 
 const WDSP_RX_CHANNEL: i32 = 0;
@@ -1431,6 +1433,7 @@ const CFC_FREQS: [f64; 10] = [
 ];
 
 pub struct WdspTxEngine {
+    signal_capture: Option<crate::tx_signal_capture::Producer>,
     channel_id: i32,
     channel_open: bool,
     lifecycle_managed: bool,
@@ -1629,6 +1632,7 @@ impl WdspTxEngine {
             pure_signal_auto_calibrate: true,
             pure_signal_tx_reference: VecDeque::new(),
             pure_signal_rx_feedback: VecDeque::new(),
+            signal_capture: None,
             two_tone_enabled: false,
             two_tone_freq1_hz: model.desired.tx_two_tone_freq1_hz,
             two_tone_freq2_hz: model.desired.tx_two_tone_freq2_hz,
@@ -1747,7 +1751,13 @@ impl WdspTxEngine {
                 two_tone_magnitude(0.0),
                 two_tone_magnitude(0.0),
             );
-            SetTXAPostGenTTFreq(self.channel_id, 700.0, 1900.0);
+            let (freq1_hz, freq2_hz) = signed_two_tone_freqs(
+                self.mode,
+                self.two_tone_invert_lsb,
+                self.two_tone_freq1_hz,
+                self.two_tone_freq2_hz,
+            );
+            SetTXAPostGenTTFreq(self.channel_id, freq1_hz, freq2_hz);
             SetTXAPostGenRun(self.channel_id, 0);
 
             SetPSMox(self.channel_id, 0);
@@ -1800,7 +1810,10 @@ impl WdspTxEngine {
     }
 
     pub fn sync_model(&mut self, model: &RadioModel) {
-        if model.desired.mode != self.mode {
+        // Preserve the transition for downstream mode-dependent settings;
+        // comparing again after updating self.mode always reports unchanged.
+        let mode_changed = model.desired.mode != self.mode;
+        if mode_changed {
             self.mode = model.desired.mode;
             unsafe {
                 SetTXAMode(self.channel_id, wdsp_tx_mode(self.mode));
@@ -1946,7 +1959,7 @@ impl WdspTxEngine {
         if (model.desired.tx_two_tone_freq1_hz - self.two_tone_freq1_hz).abs() > f64::EPSILON
             || (model.desired.tx_two_tone_freq2_hz - self.two_tone_freq2_hz).abs() > f64::EPSILON
             || model.desired.tx_two_tone_invert_lsb != self.two_tone_invert_lsb
-            || model.desired.mode != self.mode
+            || mode_changed
         {
             self.two_tone_freq1_hz = model.desired.tx_two_tone_freq1_hz;
             self.two_tone_freq2_hz = model.desired.tx_two_tone_freq2_hz;
@@ -2262,6 +2275,18 @@ impl WdspTxEngine {
         }
     }
 
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn observe_correction(
+        &self,
+        input: &crate::correction_monitor::Input,
+        model: &RadioModel,
+        keyed: bool,
+    ) {
+        if self.channel_open {
+            input.capture(self.channel_id, model, keyed);
+        }
+    }
+
     /// Push mono mic audio samples (f32, normalized ±1.0) through the TX DSP
     /// chain. IQ output is accumulated in `self.pending_iq`; callers should
     /// drain it in 240-sample (DUC_IQ_SAMPLES_PER_PACKET) batches.
@@ -2305,6 +2330,9 @@ impl WdspTxEngine {
                 eprintln!("saturn-bridge: wdsp TX fexchange0 error {error}");
                 continue;
             }
+            if let Some(capture) = &self.signal_capture {
+                capture.wdsp(&self.output_buffer);
+            }
 
             // Output is interleaved [I, Q] IQ pairs at TX sample rate
             let mut output_peak = 0.0f32;
@@ -2320,6 +2348,13 @@ impl WdspTxEngine {
                 .total_output_pairs
                 .saturating_add(WDSP_TX_OUTPUT_SAMPLES as u64);
         }
+    }
+
+    pub(crate) fn set_signal_capture(
+        &mut self,
+        capture: Option<crate::tx_signal_capture::Producer>,
+    ) {
+        self.signal_capture = capture;
     }
 
     /// Actual DSP mode; requested changes may be deferred until the next arm.

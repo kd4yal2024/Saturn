@@ -18,7 +18,12 @@ pub(crate) struct Client {
     pub(crate) transactions: Vec<String>,
     pub(crate) binary_frames: usize,
     pub(crate) iq_frames: usize,
+    pub(crate) iq_pairs_per_frame: Vec<usize>,
     pub(crate) audio_frames: usize,
+    pub(crate) rx_meter_dbm: Vec<f32>,
+    pub(crate) native_applied: Vec<bool>,
+    pub(crate) native_calibrations: Vec<i32>,
+    pub(crate) two_tone_results: Vec<String>,
 }
 impl Client {
     pub(crate) fn open(address: std::net::SocketAddr) -> Self {
@@ -43,7 +48,12 @@ impl Client {
             transactions: Vec::new(),
             binary_frames: 0,
             iq_frames: 0,
+            iq_pairs_per_frame: Vec::new(),
             audio_frames: 0,
+            rx_meter_dbm: Vec::new(),
+            native_applied: Vec::new(),
+            native_calibrations: Vec::new(),
+            two_tone_results: Vec::new(),
         };
         if control_only {
             client.text("session_open:production-fixture,operator;session_lane:production-fixture,control;tx_codec_caps:pcm;");
@@ -76,11 +86,44 @@ impl Client {
                 Ok(Message::Text(text)) if text.starts_with("tx_config:") => {
                     self.transactions.push(text.to_string())
                 }
+                Ok(Message::Text(text)) if text.starts_with("rx_smeter:0,0,") => {
+                    self.rx_meter_dbm.push(
+                        text.trim_end_matches(';')
+                            .rsplit(',')
+                            .next()
+                            .unwrap()
+                            .parse()
+                            .unwrap(),
+                    );
+                }
+                Ok(Message::Text(text)) if text.starts_with("saturn_ps_two_tone:") => {
+                    self.two_tone_results.push(text.to_string());
+                }
+                Ok(Message::Text(text)) if text.starts_with("saturn_ps_correction:") => {
+                    self.native_applied
+                        .push(text.contains("\"nativeApplied\":true"));
+                    let count = text
+                        .split("\"calibrations\":")
+                        .nth(1)
+                        .unwrap()
+                        .split(',')
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    self.native_calibrations.push(count);
+                }
                 Ok(Message::Binary(bytes)) => {
                     self.binary_frames += 1;
                     if bytes.len() >= 64 {
                         match u32::from_le_bytes(bytes[24..28].try_into().unwrap()) {
-                            0 => self.iq_frames += 1,
+                            0 => {
+                                self.iq_frames += 1;
+                                self.iq_pairs_per_frame.push(
+                                    u32::from_le_bytes(bytes[20..24].try_into().unwrap()) as usize
+                                        / 2,
+                                );
+                            }
                             1 | 17 => self.audio_frames += 1,
                             _ => {}
                         }
@@ -95,12 +138,18 @@ impl Client {
         }
     }
     pub(crate) fn mic(&mut self) {
-        let Some(token) = self.token else {
-            return;
-        };
         let samples: Vec<_> = (0..512)
             .map(|i| (std::f32::consts::TAU * 700. * i as f32 / 48000.).sin() * 0.3)
             .collect();
+        self.pcm(&samples);
+    }
+    pub(crate) fn zero_keepalive(&mut self) {
+        self.pcm(&[0.; 512]);
+    }
+    fn pcm(&mut self, samples: &[f32]) {
+        let Some(token) = self.token else {
+            return;
+        };
         let mut bytes = crate::tci::build_tci_audio_frame(0, 48000, 1, &samples, self.sequence);
         self.sequence += 1;
         bytes[24..28].copy_from_slice(&2u32.to_le_bytes());
@@ -247,6 +296,7 @@ fn production_combined_listener_pcm_acquisition_matched_native_release_rearm() {
             startup_timeout_ns: 10_000_000_000,
             feedback_attenuation_db: 9,
             measurement_only: false,
+            generated_trials_only: false,
             // Explicit synthetic-waveform fixture policy. NOT production defaults.
             operational_policy: Some(DraftLimits {
                 active_reference_fraction: 0.1,
@@ -321,7 +371,7 @@ fn production_combined_listener_pcm_acquisition_matched_native_release_rearm() {
                     let mut c = Client::open(address);
                     assert!(!model.lock_unpoisoned().desired.pure_signal_enabled);
                     c.text("tx_puresignal:0,true;");
-                    c.text("rx_antenna:0,2;"); // real pre-queue fixed-route rejection
+                    c.text("rx_adc:0,1;"); // real pre-queue unsupported-ADC rejection
                     client = Some(c);
                     stage = 10;
                 }

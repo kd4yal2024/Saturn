@@ -35,6 +35,29 @@ log(){ printf '[saturn-release-build] %s\n' "$*"; }
 die(){ printf '[saturn-release-build] ERROR: %s\n' "$*" >&2; exit 1; }
 need_cmd(){ command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
 
+# An explicitly installed PS profile must produce a matching shared-owner
+# binary on subsequent managed updates. Parse root-owned data, never source it.
+load_puresignal_build_profile(){
+  local config="${SATURN_PURESIGNAL_BUILD_CONFIG:-/etc/default/saturn-puresignal-build}"
+  local owner mode line key value
+  [[ -f "$config" ]] || return 0
+  owner="$(stat -c '%u' "$config")"; mode="$(stat -c '%a' "$config")"
+  if [[ "$owner" != "0" ]] || (( (8#$mode & 8#022) != 0 )); then die "unsafe PureSignal build profile: $config"; fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == *=* ]] || die "invalid PureSignal build profile"
+    key="${line%%=*}"; value="${line#*=}"
+    value="${value#\"}"; value="${value%\"}"
+    case "$key" in
+      SATURN_BRIDGE_MANAGED_PURESIGNAL|SATURN_BRIDGE_REVIEWED_WDSP_DIR)
+        if [[ ! -v "$key" ]]; then export "$key=$value"; fi ;;
+      *) die "unsupported PureSignal build profile setting: $key" ;;
+    esac
+  done <"$config"
+}
+load_puresignal_build_profile
+
+
 usage(){
   cat <<'EOF'
 Usage: saturn-release-build.sh [--output-root DIR] [--dry-run] [--expect-commit COMMIT]
@@ -381,6 +404,11 @@ build_release_components(){
     SATURN_BRIDGE_OUTPUT_BIN="$REPO_ROOT/update_manager/saturn-bridge/target-local/staged/saturn-bridge" \
     SATURN_BRIDGE_BUILD_JOBS="$BUILD_JOBS" \
       bash "$BRIDGE_INSTALLER"
+  fi
+
+  if [[ "${SATURN_BRIDGE_MANAGED_PURESIGNAL:-0}" == "1" ]] && (( ! DRY_RUN )); then
+    "$REPO_ROOT/update_manager/saturn-bridge/target-local/staged/saturn-bridge" --native-build-info \
+      | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["productionManagedWiring"] != "not-built" and v["wdspVersion"]==210 and not v["stubNative"], "Persistent PS profile requires a matched managed WDSP build"'
   fi
 
   log "Building Protocol 2 and normal-release native tools"

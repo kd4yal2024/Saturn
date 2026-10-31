@@ -22,6 +22,8 @@ export type NonSettingControl = {
 const control = (value: NonSettingControl): NonSettingControl => value;
 
 export const NON_SETTING_CONTROLS: readonly NonSettingControl[] = [
+  control({ id: 'ps-reset-panel-layout', reason: 'navigation', note: 'Restores docked PS views and clears their saved window sizes; no radio setting or TX action.' }),
+  control({ id: 'ps-two-tone-btn', reason: 'duplicate', coveredBy: 'transmit.twoToneEnable', note: 'PS-tab start/stop uses the same authorized generator action as Setup.' }),
   // Phone overflow menu chrome (Phase 2 component).
   control({ id: 'phone-menu-btn', reason: 'navigation', note: 'Trigger for the phone overflow sheet.' }),
   control({ id: 'phone-menu-back-btn', reason: 'navigation', note: 'Returns from the hosted System view.' }),
@@ -88,6 +90,11 @@ export const NON_SETTING_CONTROLS: readonly NonSettingControl[] = [
   control({ id: 'two-tone-level', reason: 'child-of-indexed', coveredBy: 'transmit.twoToneEnable', note: 'Two-tone generator parameter.' }),
   control({ id: 'two-tone-delay', reason: 'child-of-indexed', coveredBy: 'transmit.twoToneEnable', note: 'Two-tone generator parameter.' }),
   control({ id: 'two-tone-invert-lsb', reason: 'child-of-indexed', coveredBy: 'transmit.twoToneEnable', note: 'Two-tone generator parameter.' }),
+  control({ id: 'setup-ps-duration-ms', reason: 'child-of-indexed', coveredBy: 'transmit.psMeasure', note: 'Host-bounded measurement duration, never persisted as authorization.' }),
+  control({ id: 'setup-ps-commanded-watts', reason: 'child-of-indexed', coveredBy: 'transmit.psMeasure', note: 'Host-ceiling-bounded commanded measurement power; applied receipt and owner commit required. Not measured RF power.' }),
+  control({ id: 'setup-ps-measurement-kind', reason: 'child-of-indexed', coveredBy: 'transmit.psMeasure', note: 'Explicit negotiated diagnostic stimulus; never calibration or RF authorization.' }),
+  control({ id: 'setup-ps-attended', reason: 'child-of-indexed', coveredBy: 'transmit.psMeasure', note: 'Fresh attended confirmation consumed by one action.' }),
+  control({ id: 'setup-ps-measure-stop', reason: 'child-of-indexed', coveredBy: 'transmit.psMeasure', note: 'Immediate local inhibition and host stop request, not a cleanup receipt.' }),
   control({ id: 'rx-spectrum-duration', reason: 'child-of-indexed', coveredBy: 'display.rxMeasure', note: 'Duration for an RX spectrum capture.' }),
   control({ id: 'rx-spectrum-start-btn', reason: 'child-of-indexed', coveredBy: 'display.rxMeasure', note: 'Starts the RX spectrum capture.' }),
   control({ id: 'rx-spectrum-download-btn', reason: 'child-of-indexed', coveredBy: 'display.rxMeasure', note: 'Downloads the completed RX spectrum capture.' }),

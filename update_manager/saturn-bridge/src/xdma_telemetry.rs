@@ -224,9 +224,33 @@ pub(crate) fn record_shared_review_status(
     phase: &str,
     counter_json: Option<String>,
 ) -> io::Result<()> {
+    record_shared_host_status(path, backend, phase, counter_json, false, 0, 0)
+}
+
+/// Operational receive readiness is separate from RF qualification. Progress
+/// counters come from actual received frames; no Legacy DMA metrics or RF-safe
+/// claims are fabricated for the shared owner.
+#[cfg(feature = "managed-puresignal")]
+pub(crate) fn record_shared_host_status(
+    path: &Path,
+    backend: &str,
+    phase: &str,
+    counter_json: Option<String>,
+    clean_idle: bool,
+    rx_frames: u64,
+    rx_iq_pairs: u64,
+) -> io::Result<()> {
+    let host = format!("{{\"schema\":\"shared-owner-v1\",\"clean_idle\":{clean_idle},\"receive_ready\":{},\"rx_frames\":{rx_frames},\"rx_iq_pairs\":{rx_iq_pairs}}}",
+        clean_idle && phase == "shared-ready-off" && rx_frames >= 4 && rx_iq_pairs >= 1024);
     let document=format!("{{\"schema_version\":1,\"updated_at_ms\":{},\"source\":\"saturn-bridge\",\"backend\":{},\"status\":\"review-only\",\"tx_owner\":\"shared\",\"rf_safe\":null,\"rf_qualified\":false,\"phase\":{},\"metrics\":{{\"pid\":{},\"build_git_sha\":{},\"source_pin\":{},\"legacy_performance_available\":false,\"rx_counter_v31\":{}}}}}\n",
         unix_time_ms(),json_string(backend),json_string(phase),std::process::id(),json_string(env!("SATURN_BRIDGE_GIT_SHA")),
         json_string(env!("SATURN_BRIDGE_SOURCE_PIN")),counter_json.unwrap_or_else(||"null".into()));
+    // The base schema remains unchanged; append an explicitly named host-only
+    // readiness object rather than changing review-only/RF qualification.
+    let document = format!(
+        "{},\"shared_host\":{host}}}\n",
+        document.trim_end().strip_suffix('}').unwrap()
+    );
     write_snapshot_atomic(path, document.as_bytes(), false)
 }
 
@@ -351,6 +375,30 @@ mod tests {
     use super::{serialize_snapshot, write_snapshot_atomic, LatencyHistogram, TelemetryValue};
     use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    #[cfg(feature = "managed-puresignal")]
+    #[test]
+    fn shared_host_receive_readiness_requires_idle_and_actual_progress_without_rf_claims() {
+        let path = std::env::temp_dir().join(format!(
+            "saturn-shared-host-ready-{}.json",
+            std::process::id()
+        ));
+        for (phase, idle, frames, pairs, ready) in [
+            ("shared-ready-off", true, 8, 2048, true),
+            ("shared-ready-off", false, 8, 2048, false),
+            ("shared-keyed", true, 8, 2048, false),
+            ("shared-ready-off", true, 0, 0, false),
+        ] {
+            super::record_shared_host_status(&path, "xdma", phase, None, idle, frames, pairs)
+                .unwrap();
+            let s = fs::read_to_string(&path).unwrap();
+            assert!(s.contains(&format!("\"receive_ready\":{ready}")));
+            assert!(s.contains("\"status\":\"review-only\""));
+            assert!(s.contains("\"rf_safe\":null"));
+            assert!(s.contains("\"rf_qualified\":false"));
+            assert!(!s.contains("\"dma_reads\":"));
+        }
+        fs::remove_file(path).unwrap();
+    }
     #[cfg(feature = "managed-puresignal")]
     #[test]
     fn selected_review_owner_cannot_leave_stale_legacy_ready_or_fake_rf_safe_metrics() {

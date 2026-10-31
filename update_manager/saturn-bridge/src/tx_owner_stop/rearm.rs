@@ -14,20 +14,23 @@ pub(crate) struct OutputStamp {
 }
 #[derive(Default)]
 pub(super) struct Rearm {
+    pub(super) capture_scope: Option<crate::tx_thread::feedback_owner::Scope>,
     enabled: bool,
     ready: Option<(u64, Fence, u64)>,
     grant: Option<Credential>,
     active: Option<(FreshTxAction, OutputStamp, Credential)>,
     qualification: Option<KeyQualification>,
     last_mic: Option<u64>,
+    last_source: Option<u64>,
     queued_observed: Option<u64>,
     iq_spans: VecDeque<(usize, u64)>, // at most one partial tail plus one native block
     pending_mic_observed: Option<u64>,
     keyed: bool,
-    direct_stage: u8,
+    direct_stage: crate::xdma_tx_radio::DirectKeyStage,
     model: Option<RadioModel>,
     max_watts: u8,
     production_rf_permission: Option<bool>,
+    stimulus: crate::tx_thread::feedback_owner::Stimulus,
 }
 impl Rearm {
     pub(super) fn installed_model(&self) -> Option<&RadioModel> {
@@ -37,13 +40,16 @@ impl Rearm {
         self.ready = None;
         self.grant = None;
         self.active = None;
+        self.capture_scope = None;
         self.qualification = None;
         self.last_mic = None;
+        self.last_source = None;
         self.queued_observed = None;
         self.iq_spans.clear();
         self.pending_mic_observed = None;
         self.keyed = false;
-        self.direct_stage = 0;
+        self.stimulus = Default::default();
+        self.direct_stage = Default::default();
     }
     fn consume_iq(&mut self, mut count: usize) {
         while count > 0 {
@@ -62,6 +68,20 @@ impl Rearm {
     }
 }
 impl OwnerStopAdapter<'_> {
+    /// Only the existing owner sets this before arm_generation creates the
+    /// acquisition scope. Cancellation clears it along with queued output.
+    pub(crate) fn measurement_stimulus(
+        &mut self,
+        stimulus: crate::tx_thread::feedback_owner::Stimulus,
+    ) {
+        self.rearm.stimulus = stimulus;
+    }
+    #[cfg(test)]
+    pub(crate) fn set_test_key_time(&self, now_ns: u64) {
+        if let OutputOwner::Direct(radio) = &self.owner {
+            radio.set_test_key_time(now_ns);
+        }
+    }
     #[cfg(feature = "managed-puresignal")]
     pub(crate) fn enable_production_handoff(
         &mut self,
@@ -220,7 +240,7 @@ impl OwnerStopAdapter<'_> {
             },
             grant,
         ));
-        if let Some((link, route)) = &self.feedback {
+        {
             let mut keyed_fence = action.expected_fence;
             // Controller::on_tx_state retires the pre-key acquisition
             // generation as well as advancing the TX epoch at key receipt.
@@ -232,9 +252,10 @@ impl OwnerStopAdapter<'_> {
                 .tx_epoch
                 .checked_add(1)
                 .ok_or(Fault::GenerationMismatch)?;
-            link.request(Some(crate::tx_thread::feedback_owner::Scope {
+            let scope = crate::tx_thread::feedback_owner::Scope {
+                stimulus: self.rearm.stimulus,
                 fence: keyed_fence,
-                route: *route,
+                route: self.feedback.as_ref().map_or(1, |(_, route)| *route),
                 frequency_hz: self
                     .rearm
                     .model
@@ -254,7 +275,11 @@ impl OwnerStopAdapter<'_> {
                     generation,
                     revision,
                 },
-            }))?;
+            };
+            self.rearm.capture_scope = Some(scope);
+            if let Some((link, _)) = &self.feedback {
+                link.request(Some(scope))?;
+            }
         }
         self.complete = None; // stale stop receipts cannot appear after reopening
         self.request = None;
@@ -302,6 +327,13 @@ impl OwnerStopAdapter<'_> {
         self.pending_mic.clear();
         self.pending_mic.extend(samples.iter().copied());
         self.rearm.pending_mic_observed = Some(observed);
+        Ok(())
+    }
+    /// Original ingress observation only, after format/age/generation checks.
+    /// Rendering silence and draining queues cannot refresh this evidence.
+    pub(crate) fn note_source(&mut self, stamp: OutputStamp, observed: u64) -> Result<(), Fault> {
+        self.validate_stamp(stamp)?;
+        self.rearm.last_source = Some(self.rearm.last_source.unwrap_or(0).max(observed));
         Ok(())
     }
     pub(crate) fn take_mic(&mut self, stamp: OutputStamp) -> Result<Vec<f32>, Fault> {
@@ -398,6 +430,28 @@ impl OwnerStopAdapter<'_> {
             .rearm
             .last_mic
             .is_some_and(|t| t <= now && now - t <= window.as_nanos() as u64);
+        let source_recent = self
+            .rearm
+            .last_source
+            .is_some_and(|t| t <= now && now - t <= window.as_nanos() as u64);
+        // Only the sealed, versioned diagnostic action can replace SSB mic
+        // level with its genuine zero-input ingress liveness. Nonzero native
+        // IQ and the existing consecutive-packet gate remain required below.
+        let qualified =
+            if self.rearm.stimulus == crate::tx_thread::feedback_owner::Stimulus::NativeTwoTone {
+                source_recent
+            } else {
+                crate::tx_thread::key_source_qualified(
+                    self.rearm
+                        .model
+                        .as_ref()
+                        .ok_or(Fault::InvalidConfig)?
+                        .desired
+                        .mode,
+                    recent,
+                    source_recent,
+                )
+            };
         let observed = self.rearm.queued_observed.ok_or(Fault::TxAuthority)?;
         if observed > now || now - observed > window.as_nanos() as u64 {
             return Err(Fault::Stale);
@@ -409,7 +463,7 @@ impl OwnerStopAdapter<'_> {
             .qualification
             .as_mut()
             .unwrap()
-            .observe(can_key_rf(true, peak, recent, two_tone))
+            .observe(can_key_rf(true, peak, qualified, two_tone))
         {
             self.pending_iq.drain(..480);
             self.rearm.consume_iq(480);
@@ -419,17 +473,19 @@ impl OwnerStopAdapter<'_> {
         if let Some(boundary) = self.before_key_permit.take() {
             boundary();
         }
+        let diagnostic = self.diagnostic_submission(Some(observed));
         let keyed = match &self.owner {
             OutputOwner::P2 { session, .. } => session.offline_key_generation(
                 stamp.generation,
                 self.rearm.model.as_ref().unwrap(),
                 &iq,
             ),
-            OutputOwner::Direct(r) => r.offline_key_generation(
+            OutputOwner::Direct(r) => r.offline_key_generation_captured(
                 stamp.generation,
                 self.rearm.model.as_ref().unwrap(),
                 &mut self.rearm.direct_stage,
                 &iq,
+                diagnostic.as_ref(),
             ),
         };
         let keyed = match keyed {
@@ -464,16 +520,30 @@ impl OwnerStopAdapter<'_> {
             return Err(Fault::Stale);
         }
         let iq: Vec<f32> = self.pending_iq.iter().take(480).copied().collect();
+        let diagnostic = self.diagnostic_submission(Some(t));
         let done = match &self.owner {
             OutputOwner::P2 { session, .. } => session
                 .offline_iq_generation(stamp.generation, &iq)
                 .map_err(|_| Fault::TxAuthority)?,
-            OutputOwner::Direct(r) => r.offline_iq_generation(stamp.generation, &iq)?,
+            OutputOwner::Direct(r) => {
+                r.offline_iq_generation_captured(stamp.generation, &iq, diagnostic.as_ref())?
+            }
         };
         if done {
             self.pending_iq.drain(..480);
             self.rearm.consume_iq(480);
         }
         Ok(done)
+    }
+    pub(crate) fn iq_period_ns(&self) -> u64 {
+        match self.owner {
+            // UDP has no hardware FIFO-space readback; retain packet pacing.
+            OutputOwner::P2 { .. } => 240_000_000_000 / 192_000,
+            // The direct writer already checks real FIFO room before EVERY
+            // write. A second nominal-rate timer accumulates scheduling jitter
+            // into old mic/IQ output. Service it cooperatively each turn;
+            // full FIFO remains backpressure, never permission to overwrite.
+            OutputOwner::Direct(_) => 0,
+        }
     }
 }

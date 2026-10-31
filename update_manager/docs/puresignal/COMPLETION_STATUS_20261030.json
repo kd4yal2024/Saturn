@@ -1,0 +1,784 @@
+{
+  "format": "saturn-ps-project-completion-v1",
+  "reviewedAt": "2026-10-30",
+  "basis": "Saturn_PureSignal_SilverForge_Brief_20261012.pdf",
+  "projectComplete": false,
+  "currentInstalledSourcePin": "367232aa55b68226ff8141e8b0d3551ac70ce9889cf2798fed6c490454656f7e",
+  "installedFirmware": "1.31.002 / 0x53460004",
+  "worktree": "silverforge/ps-external-feedback-measurement",
+  "mainFetched": "9bc0140a",
+  "completed": [
+    {
+      "area": "Shared owner and both acquisition adapters",
+      "evidence": "Real native runtime replay through P2 and Direct file/loopback fixtures; Direct receive-only CM4 session; live Direct single-fit preliminary observations; controlled P2 CM4 nine-case RF sequence at 7.200 MHz / 5 commanded W passed with the documented P2 app audio runtime profile.",
+      "limit": "Evidence is bounded to the recorded bench conditions; calibrated RF IMD, broader envelope and physical release timing remain unqualified."
+    },
+    {
+      "area": "Connection recovery",
+      "evidence": "Operator-slot recovery plus actual-page reconnect routing fix. Three same-page Windows Chrome reconnects through authenticated Go TLS passed, retaining manual attenuation and Auto capabilities without RF.",
+      "limit": "No RF commands sent by these checks"
+    },
+    {
+      "area": "Signal diagnostics and RF/IMD displays",
+      "evidence": "Raw reference/RF capture, explicit scaling and timestamps, complex FFT, relative two-tone IMD3/5/7, correction magnitude/phase plots",
+      "limit": "Independent RF path linearity/noise floor, overload interval coverage and sideband orientation need bench verification"
+    }
+  ],
+  "readyForValidation": [
+    {
+      "area": "Power policy",
+      "change": "Explicit host max, separate from startup drive; normal 1..100 W while generated comparison remains 5 W"
+    },
+    {
+      "area": "Manual feedback attenuation",
+      "change": "0..31 dB ordered config, capability-gated and committed host echo; runtime P2/Direct replay passed"
+    },
+    {
+      "area": "UI monitoring and layout",
+      "change": "Freshness-checked native status, raw native information, live PS Monitor and three dockable/resizable popouts, reset and persisted sizes; Chrome passed with a recorded ResizeObserver delivery warning"
+    }
+  ],
+  "remaining": [
+    {
+      "area": "Matched RF comparison",
+      "requires": "Direct and P2 controlled low-power off -> Auto -> off observations completed. Independent RF-chain/overload calibration, continuous spectrum-confidence characterization and broader band/power comparisons remain."
+    },
+    {
+      "area": "Feedback calibration and protection characterization",
+      "requires": "Observed reference scaling, signed delay/uncertainty, physical sideband, attenuation and nonlinear/clipping floor; slow counters remain supplemental"
+    },
+    {
+      "area": "Auto adaptation / Auto ATT and advanced profiles",
+      "requires": "Direct and P2 finite 45-second Auto, stop/rearm and disconnect/reconnect checks passed within their recorded profiles. Broader-envelope reliability, Auto ATT and advanced ESSB profiles remain open."
+    },
+    {
+      "area": "Subscription and performance",
+      "requires": "Add optional plot-demand gating; record ARM CPU/RAM/queues/audio and release timing with plots on/off and slow/disconnected viewers"
+    },
+    {
+      "area": "Bench coverage",
+      "requires": "Matched power/band runs including requested 27.385 MHz on dummy load; speech/broadband ESSB and AM silence-carrier behavior; P2 external-client compatibility"
+    },
+    {
+      "area": "Release closure",
+      "requires": "Normal installer enablement and rollback/settings validation, scoped source review/commit, then merge readiness; preserve Legacy usability. Runtime trial overrides alone are not release packaging."
+    }
+  ],
+  "radioUsabilityPolicy": "Keep existing ordinary RX/TX and backend selection available; no new firmware/driver/polling restrictions. Project remains open until corresponding evidence exists.",
+  "preparedSourcePin": "367232aa55b68226ff8141e8b0d3551ac70ce9889cf2798fed6c490454656f7e",
+  "preparedBinarySha256": "d0564e2536b74d4537670aaf08aeec594fbd9bc9e354ae29f9e26f08856e9b00",
+  "preparedUpdateInstalled": true,
+  "executedArmNativeEvidence": {
+    "cases": 17,
+    "passed": true,
+    "backends": "P2 loopback / Direct files",
+    "physicalRf": false,
+    "binarySourcePin": "367232aa55b68226ff8141e8b0d3551ac70ce9889cf2798fed6c490454656f7e"
+  },
+  "softwareValidation": {
+    "managedLibraryTestsPassed": 80,
+    "managedBinaryTestsPassed": 650,
+    "webTestsPassed": 956,
+    "realChromePanels": true,
+    "independentArmRebuildMatches": true,
+    "chromeWarnings": [
+      "ResizeObserver loop completed with undelivered notifications."
+    ],
+    "defaultLegacyLibraryTestsPassed": 48,
+    "defaultLegacyBinaryTestsPassed": 482,
+    "autoCombinedNativeRuntimeBothBackends": true
+  },
+  "liveReceiveAfterArmFixtures": {
+    "sameBridgePid": 998690,
+    "readOnlyProbe": "SSH authenticated loopback, not Go TLS",
+    "iqPairsInSixSeconds": 2291200,
+    "audioFrames": 1122,
+    "meterUpdates": 30,
+    "pttCommandsSent": 0
+  },
+  "postInstallValidation": {
+    "authenticatedProxy": true,
+    "operatorReconnectCyclesWithViewer": 3,
+    "fullRateIqPairsInSixSeconds": 2265600,
+    "rxMeterReports": 29,
+    "audioFrames": 1106,
+    "driveCeilingWatts": 100,
+    "manualFeedbackAttenuationCapability": true,
+    "nativeInfoReports": 11,
+    "pttCommandsSent": 0
+  },
+  "liveRfExecuted": true,
+  "postInstallActualBrowser": {
+    "platform": "Windows Chrome",
+    "authenticatedProxy": true,
+    "samePageReconnectCycles": 3,
+    "manualFeedbackAttenuationCapability": true,
+    "autoSettingsCommittedWithoutKey": true,
+    "lpReportedZeroThroughoutSettingsChecks": true,
+    "sourcePin": "071f05d63f5a6818988503d2323a71bb525ebec51aa383fad0d46a3ba9afa628",
+    "latestSourcePin": "433ca92f9f3300484b3d3964813051b41a915d34b8e41d0ee7417fc51beaa113",
+    "latestSamePageReconnectCycles": 3
+  },
+  "preliminaryRfEvidence": {
+    "sourcePin": "6e99eda3a7e14d6a498d7d34eca231ce624c844a3154a76303f1b9f2912a94b1",
+    "psOff45SecondsPassed": true,
+    "singleInterruptedByBrowserScheduler": true,
+    "retainedCorrectedWindowAtSeconds": 15.104,
+    "approximateImd3Dbc": [
+      -50.97,
+      -50.39
+    ],
+    "lpDisplayMappingCrosscheck": {
+      "watts": 4.6,
+      "swr": 1.57
+    },
+    "rfImdQualified": false,
+    "evidenceDirectory": "Downloads/Saturn_PS_RF_Comparison_20261030.kghk16p3",
+    "note": "Native fit/run observed; not a completed matched correction qualification."
+  },
+  "liveDirectComparison": {
+    "sourcePin": "071f05d63f5a6818988503d2323a71bb525ebec51aa383fad0d46a3ba9afa628",
+    "commonIntervalSeconds": [
+      10,
+      30
+    ],
+    "reference": "weaker fundamental, not PEP",
+    "offAImd3Dbc": [
+      -30.827,
+      -30.869
+    ],
+    "singleImd3Dbc": [
+      -49.783,
+      -49.278
+    ],
+    "offBImd3Dbc": [
+      -31.055,
+      -31.094
+    ],
+    "lpMedianWatts": [
+      4.6,
+      4.6,
+      4.4
+    ],
+    "lpMedianSwr": [
+      1.54,
+      1.53,
+      1.52
+    ],
+    "limitations": [
+      "Off A terminated after 33.4 seconds on a harness LP file-read error; common interval retained, not a full-duration pass.",
+      "LP USB mapping cross-checked with manufacturer Virtual Meter; independent absolute calibration not established.",
+      "Relative observation-path IMD only; overload interval coverage unknown.",
+      "Single and Off B completed 45-second runs; P2 RF remains untested."
+    ]
+  },
+  "liveAutoStatus": {
+    "reliable": false,
+    "oneFull45SecondRun": {
+      "fits": 29,
+      "sourcePin": "4fb7b6eec80b25ab9bd1fda59bebf56bbf414c2f5d5075236e50d2c67dad10b4",
+      "completedCleanup": true,
+      "lpReturnedToZero": true,
+      "separateViewerConnected": false
+    },
+    "failuresPreserved": [
+      "Audio-ingress QueueOverrun",
+      "Feedback-ingress QueueOverrun",
+      "Browser two-tone scheduling deadline; no catch-up burst"
+    ],
+    "disposition": "Current source passed matched off/Auto/off 45-second windows, including a deliberate 100 ms browser pause and separate UI Stop at 15 s. Historical ingress queue-fault cause remains unproven; long-duration/broader-envelope reliability remains unqualified.",
+    "full45SecondRuns": [
+      {
+        "artifact": "windows-auto-AlB5SM",
+        "fits": 29,
+        "viewer": false,
+        "cleanup": true
+      },
+      {
+        "artifact": "windows-auto-krMoRs",
+        "fits": 29,
+        "viewer": false,
+        "cleanup": true
+      },
+      {
+        "artifact": "windows-auto-6OhH11",
+        "fits": 25,
+        "viewer": true,
+        "receiveSettlingSeconds": 5,
+        "cleanup": true
+      }
+    ],
+    "additionalRfCompletionWithFailedFinalInstrumentCheck": {
+      "artifact": "windows-auto-UhqoGN",
+      "fits": 28,
+      "viewer": true,
+      "rfActionCompleted": true,
+      "lpReportedZeroBeforeCleanupCheck": true,
+      "fullHarnessPassed": false,
+      "reason": "Final LP report was 3031 ms old; freshness rejected it.",
+      "settingsRestoredToOff": true
+    },
+    "currentBuild45SecondRun": {
+      "artifact": "windows-auto-Jso1Yy",
+      "sourcePin": "10fb8b1b0c8f02f8c7052cc02bae4f56610ac8e22ee34b8b6da0aa4973fd1d81",
+      "viewer": true,
+      "receiveSettlingSeconds": 5,
+      "completedCleanup": true,
+      "lpReturnedToZero": true,
+      "activeMaxTurnNs": 1032756,
+      "allPhasesMaxTurnNs": 494305841
+    },
+    "currentBuildUnprofiled45SecondRun": {
+      "artifact": "windows-auto-waeY5B",
+      "sourcePin": "10fb8b1b0c8f02f8c7052cc02bae4f56610ac8e22ee34b8b6da0aa4973fd1d81",
+      "viewer": true,
+      "receiveSettlingSeconds": 5,
+      "completedCleanup": true,
+      "lpReturnedToZero": true,
+      "activeMaxTurnNs": 4328506,
+      "activeMaxHookNs": 5087214
+    },
+    "currentBuildUiStopTest": {
+      "artifact": "windows-auto-ZvIVNY",
+      "sourcePin": "10fb8b1b0c8f02f8c7052cc02bae4f56610ac8e22ee34b8b6da0aa4973fd1d81",
+      "plannedStopAtMs": 15000,
+      "completed": true,
+      "nativeFitsBeforeStop": 9,
+      "completedCleanup": true,
+      "lpReturnedToZero": true,
+      "physicalStopLatencyQualified": false
+    },
+    "currentSourceNoFaultWindow": {
+      "sourcePin": "433ca92f9f3300484b3d3964813051b41a915d34b8e41d0ee7417fc51beaa113",
+      "artifacts": [
+        "windows-off-yQ9pgE",
+        "windows-auto-4HeF07",
+        "windows-off-fIQZrI"
+      ],
+      "all45SecondWindowsCompleted": true,
+      "autoFits": 29,
+      "deliberateBrowserPauseMs": 100,
+      "lpReturnedToZeroAfterEach": true,
+      "historicalQueueFaultCauseStillUnproven": true
+    },
+    "currentSourceUiStop": {
+      "sourcePin": "433ca92f9f3300484b3d3964813051b41a915d34b8e41d0ee7417fc51beaa113",
+      "artifact": "windows-auto-5g6VF2",
+      "plannedStopAtMs": 15000,
+      "completedCleanup": true,
+      "lpReturnedToZero": true,
+      "nativeFits": 9,
+      "physicalStopLatencyQualified": false
+    }
+  },
+  "latestDiagnosticCandidate": {
+    "sourcePin": "10fb8b1b0c8f02f8c7052cc02bae4f56610ac8e22ee34b8b6da0aa4973fd1d81",
+    "installed": true,
+    "purpose": "Preserve final active-turn duration and queue detection/notification times; established lifecycle log remains compatible.",
+    "armCasesPassed": 8,
+    "lifecycleCompatibilityReadyOffRecords": 15
+  },
+  "deploymentRehearsal": {
+    "rejectedCandidate": "75c780a8bb448f9a30c70665a7d85cd93fa2f4e4b3c85fddf6115bb8cb32e4f6",
+    "reason": "Additional lifecycle log fields rejected by existing exact readiness regex.",
+    "automaticRollbackCompleted": true,
+    "restoredSourcePin": "4fb7b6eec80b25ab9bd1fda59bebf56bbf414c2f5d5075236e50d2c67dad10b4",
+    "actualBrowserReconnectChecks": 3,
+    "rfCommandsSentDuringRollbackChecks": 0,
+    "rfPermissionPreserved": true
+  },
+  "latestTrialBackup": "/var/lib/saturn-state/ps-trial-backups/ps-native-keepalive-before-zhtuykp0",
+  "pendingP2Coordination": "Thetis process is open on desktop; awaiting confirmation it is powered off/disconnected before sharing P2 with Bridge.",
+  "offlineQueueCandidate": {
+    "installed": true,
+    "purpose": "Fixed-capacity consumer try_lock; a paused producer cannot hold receive. Same capacities, unchanged sample ages and lifecycle deadlines.",
+    "causeOfHistoricalLiveQueueFaultsEstablished": false,
+    "managedBinaryTestsPassed": 650,
+    "combinedNativeActualRuntimeBothBackends": [
+      "PS-off two-tone",
+      "Auto release/re-arm",
+      "Sustained Auto, two 15-second generations per backend"
+    ],
+    "sourcePin": "282353fa312e503c36d60cac128a53b5c3d2b4e18da1e2a770e47f65dd434050",
+    "pausedProducerScheduledReleaseCompleted": true,
+    "armCasesPassed": 14,
+    "armPassed": true,
+    "binarySha256": "1e781445a951e8b90edb8c9eab7dd510f2064ca388d6b2286c9a1b74460c1869",
+    "remoteStage": "/home/pi/saturn-ps-owner-mailbox-20261030.ZNsGSkP3",
+    "firstLiveBaseline": {
+      "artifact": "windows-off-QrxmpS",
+      "passed": false,
+      "reason": "Browser 50 ms scheduling deadline; host returned ReadyOff without fault; LP returned to zero.",
+      "measuredLpWatts": 4.4,
+      "measuredLpSwrApprox": 1.49,
+      "historicalQueueFaultCauseProven": false
+    }
+  },
+  "nativeKeepaliveCandidate": {
+    "sourcePin": "433ca92f9f3300484b3d3964813051b41a915d34b8e41d0ee7417fc51beaa113",
+    "binarySha256": "cd3974ac6e2d98c5c6ba3d0a88b890980753e2e58f3d02edac299aacbaac9a9c",
+    "installed": true,
+    "webTestsPassed": 956,
+    "managedBinaryTestsPassed": 650,
+    "nativeLivenessBothBackendsPassed": true,
+    "policy": "PCM stimuli retain 50 ms scheduling limit; native-generator zero keepalive uses existing 500 ms source liveness, one fresh zero block, no catch-up. Host source watchdog and 150 ms frame-age limits unchanged.",
+    "armSelectedCasesPassed": 3,
+    "baseline45SecondPassed": true,
+    "baselineArtifact": "windows-off-yQ9pgE",
+    "liveAuto45SecondPassed": true,
+    "liveAutoArtifact": "windows-auto-4HeF07",
+    "liveAutoNativeFits": 29,
+    "deliberateBrowserPauseMs": 100,
+    "browserPauseSurvived": true,
+    "cleanupCompleted": true,
+    "lpReturnedToZero": true,
+    "offReturn45SecondPassed": true,
+    "offReturnArtifact": "windows-off-fIQZrI",
+    "liveUiStopPassed": true,
+    "liveUiStopArtifact": "windows-auto-5g6VF2",
+    "manualAttenuationRunsPassed": [
+      6,
+      12
+    ]
+  },
+  "liveDirectMatchedAutoComparison": {
+    "format": "saturn-ps-live-comparison-v1",
+    "sourcePin": "433ca92f9f3300484b3d3964813051b41a915d34b8e41d0ee7417fc51beaa113",
+    "frequencyHz": 7200000,
+    "commandedWatts": 5,
+    "backend": "DirectXdma",
+    "rfImdQualified": false,
+    "reference": "weaker fundamental; not PEP",
+    "lpDisplayMappingCrossChecked": true,
+    "lpAbsoluteCalibrationIndependentlyVerified": false,
+    "rawEvidenceSha256": "498ad412536ec5c80c8e049ba06abdbf2de7e3863377b63a239f5e35b0d3d44a",
+    "cases": [
+      {
+        "role": "off-before",
+        "artifact": "windows-off-yQ9pgE",
+        "passed": true,
+        "generation": "39",
+        "config": "25",
+        "txEpoch": "14",
+        "selectedSpectra": 176,
+        "selection": "10..30 s of Bridge observation after first spectrum in generation; not RF acquisition time. LP uses 10..30 s after browser request. Exact cross-clock alignment not qualified.",
+        "nativeApplied": false,
+        "maximumCalibrations": 0,
+        "browserPauseExercised": false,
+        "lpMedianWatts": 4.4,
+        "lpMedianSwr": 1.48,
+        "sampleClippedComponents": 0,
+        "overload": [
+          "unknown"
+        ],
+        "continuity": [
+          "contiguous"
+        ],
+        "products": [
+          {
+            "order": 3,
+            "offsetHz": -3100.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -30.777,
+            "medianDetectedOnlyDbc": -30.777,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 3,
+            "offsetHz": 500.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -30.82,
+            "medianDetectedOnlyDbc": -30.82,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 5,
+            "offsetHz": -4300.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -42.398,
+            "medianDetectedOnlyDbc": -42.398,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 5,
+            "offsetHz": 1700.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -42.41,
+            "medianDetectedOnlyDbc": -42.41,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 7,
+            "offsetHz": -5500.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -60.353,
+            "medianDetectedOnlyDbc": -60.353,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 7,
+            "offsetHz": 2900.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -60.03,
+            "medianDetectedOnlyDbc": -60.03,
+            "medianUpperBoundDbc": null
+          }
+        ]
+      },
+      {
+        "role": "auto-with-browser-pause",
+        "artifact": "windows-auto-4HeF07",
+        "passed": true,
+        "generation": "53",
+        "config": "34",
+        "txEpoch": "19",
+        "selectedSpectra": 176,
+        "selection": "10..30 s of Bridge observation after first spectrum in generation; not RF acquisition time. LP uses 10..30 s after browser request. Exact cross-clock alignment not qualified.",
+        "nativeApplied": true,
+        "maximumCalibrations": 29,
+        "browserPauseExercised": true,
+        "lpMedianWatts": 4.4,
+        "lpMedianSwr": 1.48,
+        "sampleClippedComponents": 0,
+        "overload": [
+          "unknown"
+        ],
+        "continuity": [
+          "contiguous"
+        ],
+        "products": [
+          {
+            "order": 3,
+            "offsetHz": -3100.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -56.324,
+            "medianDetectedOnlyDbc": -56.324,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 3,
+            "offsetHz": 500.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -55.323,
+            "medianDetectedOnlyDbc": -55.323,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 5,
+            "offsetHz": -4300.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -83.942,
+            "medianDetectedOnlyDbc": -83.942,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 5,
+            "offsetHz": 1700.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -82.26,
+            "medianDetectedOnlyDbc": -82.26,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 7,
+            "offsetHz": -5500.0,
+            "detections": 160,
+            "upperBoundOnly": 16,
+            "unavailable": 0,
+            "medianDbc": null,
+            "medianDetectedOnlyDbc": -83.901,
+            "medianUpperBoundDbc": -89.962
+          },
+          {
+            "order": 7,
+            "offsetHz": 2900.0,
+            "detections": 176,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -82.059,
+            "medianDetectedOnlyDbc": -82.059,
+            "medianUpperBoundDbc": null
+          }
+        ]
+      },
+      {
+        "role": "off-after",
+        "artifact": "windows-off-fIQZrI",
+        "passed": true,
+        "generation": "68",
+        "config": "42",
+        "txEpoch": "26",
+        "selectedSpectra": 177,
+        "selection": "10..30 s of Bridge observation after first spectrum in generation; not RF acquisition time. LP uses 10..30 s after browser request. Exact cross-clock alignment not qualified.",
+        "nativeApplied": false,
+        "maximumCalibrations": 0,
+        "browserPauseExercised": false,
+        "lpMedianWatts": 4.4,
+        "lpMedianSwr": 1.49,
+        "sampleClippedComponents": 0,
+        "overload": [
+          "unknown"
+        ],
+        "continuity": [
+          "contiguous"
+        ],
+        "products": [
+          {
+            "order": 3,
+            "offsetHz": -3100.0,
+            "detections": 177,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -30.895,
+            "medianDetectedOnlyDbc": -30.895,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 3,
+            "offsetHz": 500.0,
+            "detections": 177,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -30.935,
+            "medianDetectedOnlyDbc": -30.935,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 5,
+            "offsetHz": -4300.0,
+            "detections": 177,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -42.459,
+            "medianDetectedOnlyDbc": -42.459,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 5,
+            "offsetHz": 1700.0,
+            "detections": 177,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -42.472,
+            "medianDetectedOnlyDbc": -42.472,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 7,
+            "offsetHz": -5500.0,
+            "detections": 177,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -60.463,
+            "medianDetectedOnlyDbc": -60.463,
+            "medianUpperBoundDbc": null
+          },
+          {
+            "order": 7,
+            "offsetHz": 2900.0,
+            "detections": 177,
+            "upperBoundOnly": 0,
+            "unavailable": 0,
+            "medianDbc": -60.132,
+            "medianDetectedOnlyDbc": -60.132,
+            "medianUpperBoundDbc": null
+          }
+        ]
+      }
+    ],
+    "limitations": [
+      "Relative observation-path estimates only.",
+      "Overload coverage unknown; zero sample clipping is not hardware unclipped qualification.",
+      "IQ sign/physical sideband orientation not bench-qualified.",
+      "Measured output differs by LP quantization steps; targets were identical, not proven perfectly equal RF power.",
+      "Higher-order floor-censored data retain upper bounds; no unconditional median for partly censored products."
+    ]
+  },
+  "liveFeedbackAttenuationCheck": {
+    "format": "saturn-feedback-attenuation-review-v1",
+    "sourcePin": "433ca92f9f3300484b3d3964813051b41a915d34b8e41d0ee7417fc51beaa113",
+    "frequencyHz": 7200000,
+    "commandedWatts": 5,
+    "psMode": "off",
+    "rfImdQualified": false,
+    "cases": [
+      {
+        "artifact": "windows-off-fIQZrI",
+        "generation": "68",
+        "config": "42",
+        "txEpoch": "26",
+        "spectra": 177,
+        "attenuationCommandDb": 0,
+        "rfToneDbfs": [
+          -15.454,
+          -15.4564
+        ],
+        "referenceToneDbfs": [
+          -9.8633,
+          -9.8634
+        ],
+        "imd3Dbc": [
+          -30.8945,
+          -30.9354
+        ],
+        "clippedComponents": 0,
+        "overload": [
+          "unknown"
+        ],
+        "continuity": [
+          "contiguous"
+        ],
+        "lpMedianWatts": 4.4,
+        "lpMedianSwr": 1.49,
+        "rfDeltaFromBaselineDb": [
+          0.0,
+          0.0
+        ],
+        "referenceDeltaFromBaselineDb": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "artifact": "windows-off-OVF7GD",
+        "generation": "98",
+        "config": "60",
+        "txEpoch": "38",
+        "spectra": 177,
+        "attenuationCommandDb": 6,
+        "rfToneDbfs": [
+          -21.2985,
+          -21.3009
+        ],
+        "referenceToneDbfs": [
+          -9.8633,
+          -9.8634
+        ],
+        "imd3Dbc": [
+          -30.8912,
+          -30.9309
+        ],
+        "clippedComponents": 0,
+        "overload": [
+          "unknown"
+        ],
+        "continuity": [
+          "contiguous"
+        ],
+        "lpMedianWatts": 4.4,
+        "lpMedianSwr": 1.48,
+        "rfDeltaFromBaselineDb": [
+          -5.8445,
+          -5.8445
+        ],
+        "referenceDeltaFromBaselineDb": [
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "artifact": "windows-off-gEpmaS",
+        "generation": "112",
+        "config": "70",
+        "txEpoch": "42",
+        "spectra": 176,
+        "attenuationCommandDb": 12,
+        "rfToneDbfs": [
+          -27.1309,
+          -27.1334
+        ],
+        "referenceToneDbfs": [
+          -9.8633,
+          -9.8634
+        ],
+        "imd3Dbc": [
+          -30.8717,
+          -30.9106
+        ],
+        "clippedComponents": 0,
+        "overload": [
+          "unknown"
+        ],
+        "continuity": [
+          "contiguous"
+        ],
+        "lpMedianWatts": 4.4,
+        "lpMedianSwr": 1.46,
+        "rfDeltaFromBaselineDb": [
+          -11.6769,
+          -11.677
+        ],
+        "referenceDeltaFromBaselineDb": [
+          0.0,
+          0.0
+        ]
+      }
+    ],
+    "selection": "10..30 seconds after first retained spectrum per generation. Attenuation viewer joined during first run, so intervals are steady-window comparisons, not synchronized RF acquisition.",
+    "limitations": [
+      "LP mapping crosschecked with manufacturer Virtual Meter, no independent calibration.",
+      "Overload coverage unknown.",
+      "No physical sideband sign qualification.",
+      "Only 7.2 MHz and this power/load tested.",
+      "Attenuator readback plus observed level change does not independently establish absolute attenuation accuracy."
+    ],
+    "rawEvidenceSha256": {
+      "bench-evidence-433.jsonl": "498ad412536ec5c80c8e049ba06abdbf2de7e3863377b63a239f5e35b0d3d44a",
+      "bench-evidence-attenuation-433.jsonl": "adcfee224a37269b4cbab736dea0dbc167169aa48266fc4fa4338927dd70e6ba"
+    }
+  },
+  "p2ControlledBench20261030": {
+    "passed": true,
+    "sourcePin": "367232aa55b68226ff8141e8b0d3551ac70ce9889cf2798fed6c490454656f7e",
+    "frequencyHz": 7200000,
+    "commandedWatts": 5,
+    "checks": 9,
+    "autoFits": 27,
+    "profile": "P2 app v52 existing audio RR/10 CPU2; explicit CM4 runtime trial",
+    "criticalTxCounters": "No reported queue drops, sequence gaps, FIFO underruns or DMA errors across final profile runs",
+    "relativeImdOnly": true,
+    "report": "Downloads/Saturn_PS_P2_Test_20261030_jvslrgfo/REPORT.html"
+  },
+  "installedP2RuntimeProfile": {
+    "installed": true,
+    "scope": "Existing CM4 P2 audio thread scheduling only; runtime trial profile",
+    "path": "/run/systemd/system/p2app.service.d/70-puresignal-cm4-audio-runtime.conf",
+    "profileSha256": "d7b708bbce25a7c7b5256c481dd65bb45d10bcd43df5916a4f22d5b3691dbe0a",
+    "previousConfigurationBackup": "/var/lib/saturn-state/ps-trial-backups/p2-tested-runtime-before-6pzuz1no",
+    "runtimeEnvironment": {
+      "SATURN_P3_RT_AUDIO_ENABLE": "1",
+      "SATURN_P3_RT_AUDIO_POLICY": "rr",
+      "SATURN_P3_RT_AUDIO_PRIORITY": "10",
+      "SATURN_P3_RT_AUDIO_CPUS": "2"
+    },
+    "allOtherP2EnvironmentPreserved": true,
+    "directBridgePidUnchanged": 1457021,
+    "p2AppRemainsInactiveUntilSelected": true,
+    "rfPermissionPowerSettingsChanged": false,
+    "firmwareDriverPollingChanged": false,
+    "pttCommandsSent": 0,
+    "clearsOnReboot": true,
+    "rollback": "Remove this drop-in and daemon-reload while off; restart P2 through the existing broker if selected."
+  },
+  "evidenceScopeNotice": "Direct RF comparisons below retain their original explicit source pin 433ca92f...; they are historical evidence, not RF qualification of the newly installed 367232aa... candidate. Current candidate Direct receive and both-backend native replay passed."
+}

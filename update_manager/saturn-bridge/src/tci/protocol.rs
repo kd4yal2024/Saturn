@@ -126,6 +126,7 @@ pub enum TciCommand {
     SetTxPhaseRotatorAuto(bool),
     SetTxPhaseRotatorCorner(f64),
     SetPureSignalEnabled(bool),
+    SetPureSignalMode(u8), // 0 off, 1 single, 2 auto; shared-owner capability required
     SetPureSignalAutoAttenuate(bool),
     SetPureSignalAttenuation(u8),
     ResetPureSignal,
@@ -255,6 +256,18 @@ pub(crate) fn parse_tci_command_with_roles(
         return;
     }
     if !allow_control && !viewer_tci_command_allowed(&name) {
+        if name == "tx_two_tone" {
+            if let Some(requested) = args
+                .get(if args.len() >= 2 { 1 } else { 0 })
+                .and_then(|v| parse_tci_bool(v))
+            {
+                send_text_to_client(
+                    clients,
+                    client_id,
+                    format!("tx_two_tone_result:0,{requested},rejected,NotOperator,false;"),
+                );
+            }
+        }
         return;
     }
     // Numeric controls must be finite. `f64::from_str` accepts "NaN", "inf"
@@ -1074,6 +1087,19 @@ pub(crate) fn parse_tci_command_with_roles(
             if let Some(enabled_text) = enabled_arg {
                 if let Some(enabled) = parse_tci_bool(enabled_text) {
                     let _ = command_tx.send(TciCommand::SetPureSignalEnabled(enabled));
+                }
+            }
+        }
+        "tx_puresignal_mode" => {
+            if let ["0", mode] = args.as_slice() {
+                let mode = match mode.to_ascii_lowercase().as_str() {
+                    "off" => Some(0),
+                    "single" => Some(1),
+                    "auto" => Some(2),
+                    _ => None,
+                };
+                if let Some(mode) = mode {
+                    let _ = command_tx.send(TciCommand::SetPureSignalMode(mode));
                 }
             }
         }

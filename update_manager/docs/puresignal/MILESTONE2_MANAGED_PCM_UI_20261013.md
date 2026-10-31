@@ -1,5 +1,51 @@
 # Milestone 2 — selectable managed tagged-PCM Saturn Remote UI
 
+## 2026-10-16 operator UI reconciliation (local, not deployed)
+
+Re-read all nine pages of `Saturn_PureSignal_SilverForge_Brief_20261012.pdf`.
+Its primary navigation is **RX / DSP / TX / PS**, not a PS settings-only page.
+The main control rail now adds PS immediately after TX, relocates the existing
+PS controls into that panel without cloning their authoritative DOM nodes,
+and leaves a compact PS state/navigation badge in TX. Settings search routes to
+the same main PS panel. Opening or restoring the tab performs no TX command.
+
+This implements the controls/status portion, **not milestone 3 in full**.
+PS Monitor, Distortion Analyzer and AmpView with actual qualified products,
+independent authenticated read-only dock/pop-out subscriptions and remembered
+window layout remain unfinished. No plots, IMD numbers, ADC-clear evidence or
+calibrated LP700 watts were fabricated. Advanced PS3 controls and separate
+validated PA/feedback profiles remain subject to their host contracts.
+
+Existing enable, auto/manual attenuation and reset requests remain host-gated.
+UI edits require a ready connection, operator role, RX/off and, when managed is
+selected, completed owner/settings readiness. No host RF permission or owner
+selection can be enabled by opening the tab. The path selector remains
+disconnected-only and Legacy by default. Defaults are not measurements: readouts
+remain unavailable until a matching current-connection host message arrives;
+received-message age is labeled separately from unverified observation/transit
+age. Requested enable is shown separately from the host's enable report.
+
+The PS diagnostics copy is a whitelist of non-secret presentation fields:
+no SATP pairing keys, sockets, retained audio or authorization tokens.
+The operator clarified that the earlier Native SATP symptom was a desktop-app
+pairing conflict; it is not a confirmed SATP transport failure.
+
+Validation: TypeScript and production IIFE build passed, including asset budget;
+826 web tests passed. `scripts/validate-puresignal-tab.mjs` exercises the actual
+template plus built IIFE in isolated Chromium at 1440 and 390 px: RX/DSP/TX/PS
+order, one moved control surface, read-only edit refusal, settings navigation,
+reload persistence, unavailable data on reconnect, no script errors and zero
+TX/control commands. Network and sockets are replaced locally; no G2 access or
+RF occurs. This does not qualify live controls or any measurement product.
+
+Testing remains separated into basic uncorrected TX, managed-path bring-up and
+PS/IMD qualification. Missing optional telemetry limits a measurement claim; it
+must not be silently converted into clear evidence or used indiscriminately to
+block an unrelated test. The earlier blanket statement that installer exclusion
+was still open is stale: the integrated headless-validation report records the
+corrected broker/recovery gate and its hardware rehearsal. No specific new
+exclusion defect was established in this TX investigation.
+
 2026-10-13. Isolated SilverForge worktree, base
 `861f0fbc79e0e36c68a5c8ddc157e010b8be20df`. Uncommitted, no push or deployment.
 
@@ -174,3 +220,38 @@ gates before authorizing a production host selection. SATP stays with the same
 sole owner. Continuous Opus design/qualification remains separate and does not
 hold up PCM; banked Opus stays stopped. No FPGA, driver or polling assignment
 is justified by this slice.
+# 2026-10-16: explicit PS bring-up actions
+
+The PS tab now negotiates `saturn_ps_control_caps` and displays the committed
+`saturn_ps_mode` separately from requests and calibration results. A shared
+normal host accepts a single-fit configuration using the existing ordered
+`tx_puresignal` transaction; that configuration does not key RF. A
+MeasurementOnly host advertises that restriction and refuses calibration and
+ordinary PTT. Neither client selection nor opening the PS tab changes the
+host owner or RF permission.
+
+The distinct attended Measure Only action uses the existing finite
+`saturn_ps_measurement` transaction, with a new generation-scoped browser
+700/1900 Hz PCM generator (48 kHz, 512 samples, nominal peak <= 0.4 plus float32
+rounding). It does not acquire a microphone, reuse audio history or use Opus.
+It accepts only the advertised RX BYPASS frequency, 1–5 commanded W, and the
+host's capture-duration bound: raw <=1000 ms or summary-only <=45000 ms.
+Summary-only has no retained raw pairs. No power, overload-clear or RF IMD
+qualification is inferred. Host attenuation remains fixed; unsupported
+auto/manual setters are disabled rather than submitted and rejected.
+
+Local duration expiry and release inhibit the generator and request stop.
+Cleanup and export remain distinct acknowledgments. Zero captured blocks,
+timeouts, configuration changes, queue failures and disconnect cannot produce
+a successful measurement or reuse authorization. A fresh attended action is
+required after cleanup; reconnect clears the confirmation.
+
+The actual browser / actual `run_inner` / matched x86 WDSP test exercises both
+P2 UDP and Direct XDMA file-backed adapters, not radio hardware. It exposed and
+fixed a browser timer receiver error and an early-start race with scheduled RX
+restore. Measurement and managed PTT now wait for that restore and its ordered
+settings commits; no arbitrary additional settling sleep was introduced.
+
+This does not qualify G2 RF output, adaptation thresholds, physical RF-off or
+IMD improvement. The initial installed trial must remain MeasurementOnly;
+single-fit hardware admission is a subsequent explicit configuration decision.

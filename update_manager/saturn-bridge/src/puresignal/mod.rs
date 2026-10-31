@@ -160,6 +160,8 @@ pub struct BlockMeta {
     pub interval: Interval,
     pub observed_ns: u64,
     pub sequence: Option<u32>,
+    /// Contiguous original P2 datagrams beginning at `sequence`; zero for XDMA.
+    pub sequence_packets: u16,
     // Exactly the selected physical ADC and both reserved DDCs, never cached
     // instantaneous booleans. None is unknown, not zero overload events.
     pub overload: [Option<CounterBracket>; 3],
@@ -178,6 +180,7 @@ impl Default for BlockMeta {
             },
             observed_ns: 0,
             sequence: None,
+            sequence_packets: 0,
             overload: [None; 3],
         }
     }

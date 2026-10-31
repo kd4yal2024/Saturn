@@ -105,6 +105,7 @@ export type TciRadioState = {
   remoteClientRole: TciClientRole | null;
   remoteClientId: string | null;
   txDrive: number;
+  txMicGainDb?: number;
   txMonitorSupported?: boolean;
   txMonitorEnabled?: boolean;
   txMonitorLevelDb?: number;
@@ -136,6 +137,7 @@ export type TciRadioState = {
   pureSignalFeedbackPackets: number;
   pureSignalFeedbackGaps: number;
   twoToneEnabled: boolean;
+  twoToneHostResult?: string;
   txTwoToneFreq1: number;
   txTwoToneFreq2: number;
   txTwoToneLevelDb: number;

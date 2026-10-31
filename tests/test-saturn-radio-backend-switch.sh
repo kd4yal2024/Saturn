@@ -43,7 +43,11 @@ case "${1:-}" in
     [[ -f "$(service_enabled_state "$1")" ]]
     ;;
   show)
-    printf 'SATURN_BRIDGE_RADIO_BACKEND=%s\n' "$(backend_from_dropin)"
+    if [[ "${2:-}" == "--property=MainPID" ]]; then
+      printf '424242\n'
+    else
+      printf 'SATURN_BRIDGE_RADIO_BACKEND=%s\n' "$(backend_from_dropin)"
+    fi
     ;;
   stop)
     service="$2"
@@ -72,6 +76,24 @@ case "${1:-}" in
       mkdir -p "$(dirname "$MOCK_XDMA_READY_FILE")"
       printf '{"schema_version":1,"updated_at_ms":%s,"source":"saturn-bridge","backend":"xdma","status":"ready","rf_safe":true,"error":null,"metrics":{"dma_reads":8,"iq_pairs":2048,"tx_capable":true}}\n' \
         "$(date +%s%3N)" >"$MOCK_XDMA_READY_FILE"
+      if [[ -f "$MOCK_STATE/shared-ready-kind" ]]; then
+        python3 - "$MOCK_XDMA_READY_FILE" "$MOCK_STATE/shared-ready-kind" <<'PY'
+import json,sys,time
+kind=open(sys.argv[2]).read().strip()
+value={'schema_version':1,'updated_at_ms':int(time.time()*1000),'source':'saturn-bridge',
+       'backend':'xdma','status':'review-only','tx_owner':'shared','rf_safe':None,
+       'rf_qualified':False,'phase':'shared-ready-off',
+       'metrics':{'pid':424242,'source_pin':'a'*64},
+       'shared_host':{'schema':'shared-owner-v1','clean_idle':True,'receive_ready':True,'rx_frames':8,'rx_iq_pairs':2048}}
+if kind=='wrong-pid':value['metrics']['pid']=424243
+if kind=='fault':value['shared_host']['clean_idle']=False
+if kind=='keyed':value['phase']='shared-keyed'
+if kind=='stale':value['updated_at_ms']-=10000
+if kind=='no-rx':value['shared_host']['rx_frames']=0
+if kind=='unknown-schema':value['shared_host']['schema']='unknown'
+with open(sys.argv[1],'w') as f:json.dump(value,f)
+PY
+      fi
     fi
     printf 'start %s\n' "$service" >>"$MOCK_STATE/calls"
     ;;
@@ -281,6 +303,34 @@ cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
 [[ ! -e "$TMP_DIR/run/transaction.json" ]]
 
 # A bridge start failure restores the prior service, drop-in, and state.
+reset_fixture 1
+printf 'healthy\n' >"$TMP_DIR/mock/shared-ready-kind"
+run_helper switch p2 >/dev/null
+run_helper switch xdma >/dev/null
+assert_state_backend xdma
+run_helper switch p2 >/dev/null
+run_helper start xdma >/dev/null
+assert_state_backend xdma
+python3 - "$TMP_DIR/run/xdma-ready.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+assert d['status']=='review-only' and d['rf_safe'] is None and d['rf_qualified'] is False
+PY
+
+for failure in wrong-pid fault keyed stale no-rx unknown-schema; do
+  reset_fixture 1
+  run_helper switch p2 >/dev/null
+  cp "$TMP_DIR/state/radio-backend.json" "$TMP_DIR/original-state"
+  printf '%s\n' "$failure" >"$TMP_DIR/mock/shared-ready-kind"
+  if run_helper switch xdma >"$TMP_DIR/shared-$failure.log" 2>&1; then
+    printf 'invalid shared readiness accepted: %s\n' "$failure" >&2
+    exit 1
+  fi
+  cmp "$TMP_DIR/original-state" "$TMP_DIR/state/radio-backend.json"
+  [[ -f "$TMP_DIR/mock/p2app.service.active" ]]
+  [[ ! -f "$TMP_DIR/mock/saturn-bridge.service.active" ]]
+done
+
 reset_fixture 1
 mkdir -p "$TMP_DIR/systemd/saturn-bridge.service.d"
 printf '%s\n' \

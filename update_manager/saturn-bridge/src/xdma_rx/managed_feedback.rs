@@ -56,7 +56,8 @@ pub(super) struct Saved {
 }
 pub(crate) struct ManagedFeedback {
     link: Link,
-    ingress: SharedIngress,
+    ingress: Option<SharedIngress>,
+    monitor: Option<crate::rf_monitor::Input>,
     origin: Instant,
     completed: Request,
     pub(super) saved: Option<Saved>,
@@ -66,11 +67,35 @@ pub(crate) struct ManagedFeedback {
     before_readback: Option<Box<dyn FnOnce() + Send>>,
 }
 impl ManagedFeedback {
+    /// Only the passive Legacy observer needs to preserve receive edits made
+    /// while its temporary RX BYPASS layout is active. Shared lifecycle settings
+    /// already apply after its restoration barrier and retain their behavior.
+    pub(super) fn observer_receive_filter(&mut self, requested: u32) -> u32 {
+        if self.monitor.is_some() {
+            if let Some(saved) = &mut self.saved {
+                saved.rx_filter = requested;
+                return (requested & 0xffff_0000) | 0x1800;
+            }
+        }
+        requested
+    }
+    pub(super) fn observer_receive_attenuation(&mut self, requested: u8) {
+        if self.monitor.is_some() {
+            if let Some(saved) = &mut self.saved {
+                saved.adc_control = (saved.adc_control & !31) | u32::from(requested);
+            }
+        }
+    }
     pub(super) fn accepts(&self, scope: Scope) -> bool {
         self.link.desired().scope == Some(scope)
     }
     pub(super) fn data_fault(&self, scope: Scope, fault: Fault) {
-        self.ingress.stop_feedback(scope.output, fault);
+        if let Some(ingress) = &self.ingress {
+            ingress.stop_feedback(scope.output, fault);
+        }
+        if let Some(monitor) = &self.monitor {
+            monitor.invalidate();
+        }
     }
 }
 impl OperationalRxSession {
@@ -78,6 +103,23 @@ impl OperationalRxSession {
         &mut self,
         link: Link,
         ingress: SharedIngress,
+        origin: Instant,
+    ) -> Result<(), XdmaError> {
+        self.attach_feedback(link, Some(ingress), None, origin)
+    }
+    pub(crate) fn attach_observer_feedback(
+        &mut self,
+        link: Link,
+        monitor: crate::rf_monitor::Input,
+        origin: Instant,
+    ) -> Result<(), XdmaError> {
+        self.attach_feedback(link, None, Some(monitor), origin)
+    }
+    fn attach_feedback(
+        &mut self,
+        link: Link,
+        ingress: Option<SharedIngress>,
+        monitor: Option<crate::rf_monitor::Input>,
         origin: Instant,
     ) -> Result<(), XdmaError> {
         if self.identity.firmware_major != 1
@@ -98,6 +140,7 @@ impl OperationalRxSession {
             completed: link.desired(),
             link,
             ingress,
+            monitor,
             origin,
             saved: None,
             stream: None,
@@ -202,15 +245,19 @@ impl OperationalRxSession {
             }
             drop(regs);
             if let Some(scope) = desired.scope {
-                managed.stream = Some(
+                managed.stream = Some(if let Some(monitor) = &managed.monitor {
+                    Stream::observer(scope, managed.origin, monitor.clone())
+                } else {
                     Stream::new(
                         scope,
                         Backend::DirectXdma,
                         managed.origin,
-                        managed.ingress.clone(),
+                        managed.ingress.clone().ok_or_else(|| {
+                            XdmaError::Incompatible("missing feedback destination".into())
+                        })?,
                     )
-                    .map_err(|f| XdmaError::Incompatible(format!("feedback buffers: {f:?}")))?,
-                );
+                    .map_err(|f| XdmaError::Incompatible(format!("feedback buffers: {f:?}")))?
+                });
             } else {
                 managed.saved = None;
                 let stats = self.parser.stats.clone();
@@ -235,7 +282,12 @@ impl OperationalRxSession {
                     let _ = regs.write_register(offset, value);
                 }
             }
-            managed.ingress.stop(Fault::DmaFraming);
+            if let Some(ingress) = &managed.ingress {
+                ingress.stop(Fault::DmaFraming);
+            }
+            if let Some(monitor) = &managed.monitor {
+                monitor.invalidate();
+            }
             managed.link.fail();
             self.managed_feedback = Some(managed);
             return Err(error);

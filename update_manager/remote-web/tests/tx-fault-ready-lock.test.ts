@@ -5,6 +5,8 @@ import { createAppState } from '../src/state/app-state';
 import { applyTciText } from '../src/tci/apply';
 import type { TciRadioState } from '../src/tci/state';
 import { txActionAvailability, txControlPresentationState } from '../src/ui/tx-presentation';
+import { RfMonitorState } from '../src/puresignal/rf-monitor';
+import { CorrectionMonitorState } from '../src/puresignal/correction-monitor';
 
 const template = readFileSync(
   new URL('../../templates/saturn-remote-next.html', import.meta.url),
@@ -37,6 +39,8 @@ function txHarness() {
   let rxRecoveries = 0;
   let rfBlocked = false;
   const context = {
+    rfMonitor: new RfMonitorState(),
+    correctionMonitor: new CorrectionMonitorState(),
     managedPcmSelected: () => false,
     state,
     performance: { now: () => 1_000 },

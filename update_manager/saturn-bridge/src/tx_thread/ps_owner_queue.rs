@@ -12,7 +12,10 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 
 // Public wrapper for the public command enum; the credential stays sealed and
 // non-Clone. Neither the producer nor the consumer can refresh its revision.
-pub struct AuthorizedArm(Credential);
+pub struct AuthorizedArm {
+    pub(super) credential: Credential,
+    pub(super) trial: Option<super::ps_ingress::TwoToneTrial>,
+}
 /// Sealed, explicit diagnostic request. No boolean arm or settings completion
 /// can become this action at dequeue. Capacity/context are fixed before queue.
 pub struct AuthorizedMeasurement {
@@ -21,6 +24,7 @@ pub struct AuthorizedMeasurement {
     pub(super) requested_at: std::time::Instant,
     pub(super) recorder: saturn_bridge::puresignal::measurement::MeasurementRecorder,
     pub(super) diagnostic: Option<super::ps_measurement::Ticket>,
+    pub(super) stimulus: super::feedback_owner::Stimulus,
 }
 impl AuthorizedMeasurement {
     pub(crate) fn new(
@@ -40,15 +44,22 @@ impl AuthorizedMeasurement {
             requested_at,
             recorder,
             diagnostic: None,
+            stimulus: Default::default(),
         })
     }
 }
 impl AuthorizedArm {
     pub(crate) fn new(credential: Credential) -> Self {
-        Self(credential)
+        Self {
+            credential,
+            trial: None,
+        }
     }
-    pub(super) fn into_credential(self) -> Credential {
-        self.0
+    pub(super) fn two_tone(credential: Credential, trial: super::ps_ingress::TwoToneTrial) -> Self {
+        Self {
+            credential,
+            trial: Some(trial),
+        }
     }
 }
 
@@ -75,12 +86,18 @@ pub(crate) fn service_next<N: CooperativeNative>(
             return Err(Fault::TxAuthority);
         }
     };
-    let TxCommand::PureSignalAuthorizedArm(AuthorizedArm(credential)) = command else {
+    let TxCommand::PureSignalAuthorizedArm(arm) = command else {
         // Legacy Arm has no ingress identity/generation; do not restamp it.
         // Other commands must migrate explicitly rather than silently invoking
         // the legacy native owner. Release is an out-of-band mailbox, not this.
         return Err(Fault::TxAuthority);
     };
+    // This small legacy arm harness cannot service a generated trial's
+    // host deadline/replies. Only the actual scheduled owner may consume it.
+    if arm.trial.is_some() {
+        return Err(Fault::InvalidConfig);
+    }
+    let credential = arm.credential;
     if life.status().phase != Phase::ReadyOff {
         return Err(Fault::CleanupPending);
     }

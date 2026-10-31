@@ -6,6 +6,7 @@ use super::*;
 pub const PS_RATE_WORD: u32 = 0x1f;
 pub const PS_WITH_DDC6_RATE_WORD: u32 = 0x10_001f;
 pub const P2_PAIR_COUNT: usize = 119;
+pub const P2_BATCH_PACKETS: usize = 8;
 pub const XDMA_PAIR_COUNT: usize = 4;
 
 /// Explicit desired layout, to be applied/rolled back by the existing owner in
@@ -106,6 +107,7 @@ impl P2Adapter {
         let sequence = u32::from_be_bytes(bytes[..4].try_into().unwrap());
         if let Some(next) = self.next_sequence {
             if sequence != next {
+                eprintln!("saturn-bridge: P2 feedback sequence discontinuity expected={next} received={sequence} pair_ordinal={}", self.next_pair);
                 return Err(if sequence == next.wrapping_sub(1) {
                     Fault::Duplicate
                 } else if sequence.wrapping_sub(next) < 0x8000_0000 {
@@ -143,6 +145,7 @@ impl P2Adapter {
             rate_hz: RATE_HZ,
             observed_ns,
             sequence: Some(sequence),
+            sequence_packets: 1,
             overload,
             interval: Interval {
                 fence: self.fence,
@@ -244,6 +247,7 @@ impl DirectXdmaAdapter {
             route: self.route,
             observed_ns: self.pending_oldest_ns,
             sequence: None,
+            sequence_packets: 0,
             overload,
             interval: Interval {
                 fence: self.fence,

@@ -68,12 +68,18 @@ impl TciCommandQueues {
     }
 
     fn cancel_session_commands(&mut self) {
-        let queued_arms = self.control.len();
-        self.control
-            .retain(|queued| !matches!(queued, TciCommand::SetTxEnabled(true)));
-        self.arm_cancelled = self
-            .arm_cancelled
-            .saturating_add((queued_arms - self.control.len()) as u64);
+        let queued_arms = self
+            .control
+            .iter()
+            .filter(|c| matches!(c, TciCommand::SetTxEnabled(true)))
+            .count();
+        self.control.retain(|queued| {
+            !matches!(
+                queued,
+                TciCommand::SetTxEnabled(true) | TciCommand::SetTxTwoToneTest(true)
+            )
+        });
+        self.arm_cancelled = self.arm_cancelled.saturating_add(queued_arms as u64);
         self.mic_cancelled = self.mic_cancelled.saturating_add(self.mic.len() as u64);
         self.mic.clear();
     }
@@ -231,6 +237,24 @@ fn command_coalesce_key(command: &TciCommand) -> Option<CommandCoalesceKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn release_and_disconnect_cancel_queued_generator_selection() {
+        for stop in [
+            TciCommand::SetTxEnabled(false),
+            TciCommand::ClientDisconnected,
+        ] {
+            let (tx, rx) = tci_command_mailbox();
+            tx.send(TciCommand::SetTxTwoToneTest(true)).unwrap();
+            tx.send(TciCommand::SetTxEnabled(true)).unwrap();
+            tx.send(stop).unwrap();
+            assert!(matches!(
+                rx.try_recv().unwrap(),
+                TciCommand::SetTxEnabled(false) | TciCommand::ClientDisconnected
+            ));
+            assert!(rx.try_recv().is_err());
+            assert_eq!(rx.snapshot().arm_cancelled, 1);
+        }
+    }
 
     #[test]
     fn mailbox_flood_keeps_tx_release_latency_below_ten_ms() {

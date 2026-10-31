@@ -1,0 +1,29 @@
+{
+  "format": "saturn-managed-p2-cm4-trial-runtime-v1",
+  "scope": "Explicit opt-in CM4 G2 shared-owner trial, not a universal scheduler default",
+  "requires": {
+    "p2AppVersion": 52,
+    "existingAudioRuntimeSupport": true,
+    "capability": "CAP_SYS_NICE",
+    "cpu": 2,
+    "hardware": "CM4 with CPUs 0..3 available"
+  },
+  "policy": {
+    "threads": "Existing DUC I/Q ingress, DUC I/Q writer and speaker audio",
+    "scheduler": "RR",
+    "priority": 10,
+    "cpuAffinity": [
+      2
+    ]
+  },
+  "otherThreadsUnchanged": true,
+  "bridgeOwnerSchedulingUnchanged": true,
+  "firmwareDriverPollingChanges": false,
+  "rfPermissionPowerSettingsUnchanged": true,
+  "normalBackendSelectionRemainsAvailable": true,
+  "trialInstall": "/run/systemd/system/p2app.service.d/70-puresignal-cm4-audio-runtime.conf",
+  "restart": "Only after current TX owner is clean/off; use existing backend owner broker",
+  "rollback": "Remove this runtime drop-in, daemon-reload, and restart P2 through the existing broker while off. Reboot also clears the runtime trial profile.",
+  "productionInstallerWiringComplete": false,
+  "liveResults": "Downloads/Saturn_PS_P2_Test_20261030_jvslrgfo/APP_RT_BENCH_RESULTS.json"
+}

@@ -82,6 +82,7 @@ struct CommandEffects {
 #[derive(Debug, Default)]
 struct DirectTxControl {
     requested: bool,
+    stopping: bool,
     last_mic_at: Option<Instant>,
 }
 
@@ -138,7 +139,7 @@ struct DirectIqTransportTotals {
 /// so the high-rate hardware read cadence does not become the WebSocket frame
 /// or allocation cadence.
 #[derive(Debug)]
-struct DirectIqPacketizer {
+pub(crate) struct DirectIqPacketizer {
     samples: Box<[f32]>,
     filled: usize,
 }
@@ -157,7 +158,14 @@ impl Default for DirectIqPacketizer {
 }
 
 impl DirectIqPacketizer {
-    fn push(&mut self, mut input: &[f32], mut publish: impl FnMut(&[f32])) {
+    /// Reuse full-stream batching for small P2 datagrams at its configured rate.
+    pub(crate) fn for_rate(rate: u32) -> Self {
+        Self {
+            samples: vec![0.; (rate as usize / DIRECT_TCI_IQ_FRAME_RATE_HZ).max(1) * 2].into_boxed_slice(),
+            filled: 0,
+        }
+    }
+    pub(crate) fn push(&mut self, mut input: &[f32], mut publish: impl FnMut(&[f32])) {
         while !input.is_empty() {
             let available = self.samples.len() - self.filled;
             let copied = available.min(input.len());
@@ -172,7 +180,7 @@ impl DirectIqPacketizer {
         }
     }
 
-    fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.filled = 0;
     }
 
@@ -405,6 +413,13 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let (tx_audio_ingress, tx_audio_rx, tx_audio_stats) = TxAudioIngress::bounded();
     let (tx_event_tx, tx_event_rx) = mpsc::channel();
     let tx_stop = Arc::new(AtomicBool::new(false));
+    #[cfg(feature = "managed-puresignal")]
+    let _correction_worker =
+        crate::correction_monitor::Worker::optional(tci.clone(), "DirectXdma")?;
+    #[cfg(feature = "managed-puresignal")]
+    if _correction_worker.is_some() {
+        tci.set_correction_monitor_available();
+    }
     let tx_worker = tx_thread::spawn(
         tx_radio.clone(),
         radio_model.clone(),
@@ -449,6 +464,17 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let identity = rx.identity().clone();
     let mut iq_samples = Vec::with_capacity(8_192);
     rx.drain_startup_fifo(&mut iq_samples)?;
+    #[cfg(feature = "managed-puresignal")]
+    let (_rf_monitor_worker, mut rf_monitor_route) =
+        if env::var("SATURN_PS_LIVE_MONITOR").as_deref() == Ok("1") {
+            let input = crate::rf_monitor::Input::new();
+            let worker = crate::rf_monitor::Worker::spawn(tci.clone(), input.clone())?;
+            let route = crate::rf_monitor::legacy::Route::attach(&mut rx, input)?;
+            tci.set_rf_monitor_available();
+            (Some(worker), Some(route))
+        } else {
+            (None, None)
+        };
     let mut readiness_state = "starting";
     let mut last_readiness = Instant::now();
     let mut last_status = Instant::now();
@@ -521,6 +547,15 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                         u64::from(radio_model.lock_unpoisoned().desired.iq_center_hz);
                     spectrum_ring.restart(spectrum_center_hz);
                 }
+            }
+            #[cfg(feature = "managed-puresignal")]
+            if let Some(route) = &mut rf_monitor_route {
+                let model = radio_model.lock_unpoisoned();
+                route.step(
+                    tx_radio.snapshot().keyed,
+                    model.desired.two_tone_enabled,
+                    crate::rf_monitor::Settings::model(&model),
+                )?;
             }
             // Consume a bounded slice of the host ring before client control
             // work. The dedicated reader continues servicing the hardware FIFO
@@ -706,11 +741,15 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                 did_work = true;
                 match event {
                     TxEvent::Keyed => {
+                        if !tx_control.requested || tx_control.stopping {
+                            continue;
+                        }
                         let mut model = radio_model.lock_unpoisoned();
                         model.desired.tx_phase = TxPhase::Keyed;
                         tci.publish_radio_state(&model);
                     }
                     TxEvent::Unkeyed => {
+                        tx_control.stopping = false;
                         tx_control.requested = false;
                         tx_control.last_mic_at = None;
                         tci.mark_split_released(Instant::now());
@@ -756,6 +795,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                     mic_stale, control_stale
                 );
                     tx_control.requested = false;
+                    tx_control.stopping = true;
                     tx_control.last_mic_at = None;
                     tci.mark_split_released(now);
                     let _ = tx_cmd_tx.send(TxCommand::Disarm);
@@ -976,9 +1016,20 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
     let _ = tx_cmd_tx.send(TxCommand::Shutdown);
     tx_stop.store(true, Ordering::Relaxed);
     let tx_join = tx_worker.join();
+    #[cfg(feature = "managed-puresignal")]
+    let monitor_restore = if tx_join.is_ok() && !tx_radio.snapshot().keyed {
+        rf_monitor_route
+            .as_mut()
+            .map(|r| r.finish(&mut rx))
+            .transpose()
+    } else {
+        Ok(None)
+    };
     let rx_stop = rx.stop();
     runtime_result?;
     tx_join.map_err(|_| "direct XDMA TX thread panicked")?;
+    #[cfg(feature = "managed-puresignal")]
+    monitor_restore?;
     rx_stop?;
     record_runtime_readiness(
         ready_path,
@@ -1351,6 +1402,7 @@ fn handle_command(
         }
         TciCommand::ClientConnected => model.desired.running = true,
         TciCommand::ClientDisconnected => {
+            tx_control.stopping |= tx_control.requested || model.desired.tx_phase != TxPhase::Rx;
             model.desired.tx_monitor_enabled = false;
             model.desired.rx_headphones_enabled = false;
             tx_control.requested = false;
@@ -1358,8 +1410,20 @@ fn handle_command(
             let _ = tx_cmd_tx.send(TxCommand::Disarm);
             model.desired.tx_enabled = false;
             model.desired.tx_phase = TxPhase::Rx;
+            model.desired.two_tone_enabled = false;
         }
         TciCommand::SetTxEnabled(enabled) => {
+            if enabled && tx_control.stopping {
+                // Consume the previous stop event before accepting a fresh
+                // request; it must not clear the new request's watchdog.
+                tci.publish_tx_state(&model);
+                eprintln!("saturn-bridge: direct XDMA arm rejected while previous stop is pending");
+                return Ok(effects);
+            }
+            if !enabled {
+                tx_control.stopping |= tx_control.requested || model.desired.tx_phase != TxPhase::Rx;
+                model.desired.two_tone_enabled = false;
+            }
             if enabled && !model.satp.permits_tx(model.desired.two_tone_enabled, Instant::now()) {
                 tci.publish_satp_not_ready();
                 return Ok(effects);
@@ -1517,12 +1581,36 @@ fn handle_command(
             let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
         }
         TciCommand::SetTxTwoToneTest(enabled) => {
-            if enabled && remote_tx_rf_enabled {
-                eprintln!("saturn-bridge: direct XDMA production two-tone is disabled");
-                model.desired.two_tone_enabled = false;
+            // Configuration only: never creates an Arm or TX authority. The
+            // existing authorized PTT request, RF gate, key qualification and
+            // watchdogs still decide whether the hardware can key.
+            let was_enabled = model.desired.two_tone_enabled;
+            let rejected = enabled && (tx_control.stopping || model.desired.mode == DemodMode::Wfm
+                || (model.desired.tx_phase == TxPhase::Keyed && !was_enabled));
+            if rejected {
+                tci.publish_two_tone_result(enabled, false, if tx_control.stopping {"Stopping"} else {"ReleaseFirst"}, was_enabled);
             } else {
                 model.desired.two_tone_enabled = enabled;
-                let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+                let stopping = !enabled && was_enabled &&
+                    (tx_control.requested || model.desired.tx_phase != TxPhase::Rx);
+                let command = if stopping {TxCommand::Disarm} else {TxCommand::ModelChanged};
+                if stopping {
+                    tx_control.stopping = true;
+                    tx_control.requested = false;
+                    tx_control.last_mic_at = None;
+                    model.desired.tx_enabled = false;
+                    model.desired.tx_phase = TxPhase::Rx;
+                    effects.tx_state_dirty = true;
+                    tci.mark_split_released(Instant::now());
+                    tci.set_tx_media_priority_active(false);
+                }
+                if tx_cmd_tx.send(command).is_err() {
+                    model.desired.two_tone_enabled = false;
+                    tci.publish_two_tone_result(enabled, false, "OwnerUnavailable", false);
+                } else {
+                    tci.publish_two_tone_result(enabled, true,
+                        if stopping {"Stopping"} else {"Configured"}, enabled);
+                }
             }
         }
         TciCommand::SetTxTwoToneFreq1(value) => {
@@ -1556,6 +1644,7 @@ fn handle_command(
         }
         TciCommand::MicAudioFrame(_) => unreachable!("mic media is handled before model locking"),
         TciCommand::SetPureSignalEnabled(_)
+        | TciCommand::SetPureSignalMode(_)
         | TciCommand::SetPureSignalAutoAttenuate(_)
         | TciCommand::SetPureSignalAttenuation(_)
         | TciCommand::ResetPureSignal => {
@@ -2713,6 +2802,22 @@ mod tests {
     }
 
     #[test]
+    fn p2_display_packetizer_preserves_small_datagrams_and_partial_tail() {
+        let mut packetizer = DirectIqPacketizer::for_rate(192_000);
+        let input: Vec<f32> = (0..(6_400 * 3 + 17) * 2).map(|n| n as f32).collect();
+        let mut frames = Vec::new();
+        for datagram in input.chunks(238 * 2) {
+            packetizer.push(datagram, |frame| frames.push(frame.to_vec()));
+        }
+        assert_eq!(frames.len(), 3);
+        assert!(frames.iter().all(|f| f.len() == 6_400 * 2));
+        assert_eq!(frames.concat(), input[..6_400 * 3 * 2]);
+        assert_eq!(packetizer.pending_pairs(), 17);
+        packetizer.reset();
+        assert_eq!(packetizer.pending_pairs(), 0);
+    }
+
+    #[test]
     fn direct_iq_packetizer_geometry_is_exact_and_bounded() {
         assert_eq!(
             DIRECT_TCI_IQ_PAIRS_PER_FRAME * DIRECT_TCI_IQ_FRAME_RATE_HZ,
@@ -2786,7 +2891,7 @@ mod tests {
 /// The command handler run for real: `handle_command` and
 /// `publish_command_effects` with the stub DSP, a real TCI frontend and a
 /// loopback client, and a recording fake in place of the receive hardware.
-#[cfg(all(test, saturn_bridge_stub_native))]
+#[cfg(test)]
 mod command_handler_tests {
     use super::*;
     use crate::config::BridgeConfig;
@@ -2826,6 +2931,7 @@ mod command_handler_tests {
         rx: FakeRx,
         tx_cmd_tx: mpsc::Sender<TxCommand>,
         _tx_cmd_rx: mpsc::Receiver<TxCommand>,
+        commands: crate::tci::TciCommandMailboxReceiver,
         tx_control: DirectTxControl,
         ingress: TxAudioIngress,
         client: WebSocket<TcpStream>,
@@ -2879,10 +2985,11 @@ mod command_handler_tests {
                 rx: FakeRx::default(),
                 tx_cmd_tx,
                 _tx_cmd_rx: tx_cmd_rx,
+                commands,
                 tx_control: DirectTxControl::default(),
                 ingress,
                 client,
-                _keep: Box::new((commands, audio_rx)),
+                _keep: Box::new(audio_rx),
             };
             // The greeting ends with "ready;"; read it so later reads see only
             // what the commands publish.
@@ -2930,6 +3037,13 @@ mod command_handler_tests {
 
         /// The handler, then the publication the control loop performs.
         fn run(&mut self, command: TciCommand) -> Result<CommandEffects, Box<dyn Error>> {
+            self.run_with_permission(command, false)
+        }
+        fn run_with_permission(
+            &mut self,
+            command: TciCommand,
+            rf: bool,
+        ) -> Result<CommandEffects, Box<dyn Error>> {
             let effects = handle_command(
                 command,
                 &self.model,
@@ -2938,7 +3052,7 @@ mod command_handler_tests {
                 &mut self.rx,
                 &self.tx_cmd_tx,
                 &mut self.tx_control,
-                false,
+                rf,
                 &self.ingress,
             )?;
             publish_command_effects(&effects, &self.model, &mut self.wdsp, &self.tci)?;
@@ -2954,6 +3068,442 @@ mod command_handler_tests {
             thread::sleep(Duration::from_millis(20));
         }
         panic!("TCI frontend never started listening on {port}");
+    }
+
+    #[test]
+    fn production_dispatch_accepts_tones_but_never_arms_from_configuration() {
+        let mut f = Fixture::new();
+        for permission in [false, true] {
+            f.run_with_permission(TciCommand::SetTxTwoToneTest(true), permission)
+                .unwrap();
+            assert!(f.model.lock_unpoisoned().desired.two_tone_enabled);
+            assert!(!f.tx_control.requested);
+            assert!(matches!(
+                f._tx_cmd_rx.try_recv().unwrap(),
+                TxCommand::ModelChanged
+            ));
+            let messages = f.read_messages(
+                Duration::from_secs(2),
+                Some("tx_two_tone_result:0,true,accepted,Configured,true;"),
+            );
+            assert!(messages
+                .iter()
+                .any(|s| s == "tx_two_tone_result:0,true,accepted,Configured,true;"));
+            f.run_with_permission(TciCommand::SetTxTwoToneTest(false), permission)
+                .unwrap();
+            assert!(!f.model.lock_unpoisoned().desired.two_tone_enabled);
+            assert!(matches!(
+                f._tx_cmd_rx.try_recv().unwrap(),
+                TxCommand::ModelChanged
+            ));
+        }
+    }
+    #[test]
+    fn generator_selection_before_ptt_does_not_require_paired_satp_audio() {
+        let mut f = Fixture::new();
+        f.model.lock_unpoisoned().satp.source = TxAudioSource::Satp;
+        f.run_with_permission(TciCommand::SetTxTwoToneTest(true), true)
+            .unwrap();
+        assert!(!f.tx_control.requested);
+        f.run_with_permission(TciCommand::SetTxEnabled(true), true)
+            .unwrap();
+        assert!(f.tx_control.requested);
+        assert!(matches!(
+            f._tx_cmd_rx.try_recv().unwrap(),
+            TxCommand::ModelChanged
+        ));
+        assert!(matches!(
+            f._tx_cmd_rx.try_recv().unwrap(),
+            TxCommand::Arm { rf_enabled: true }
+        ));
+        f.run_with_permission(TciCommand::SetTxEnabled(false), true)
+            .unwrap();
+    }
+
+    #[test]
+    fn production_dispatch_clears_tones_on_disable_release_and_disconnect() {
+        for cancellation in [
+            TciCommand::SetTxTwoToneTest(false),
+            TciCommand::SetTxEnabled(false),
+            TciCommand::ClientDisconnected,
+        ] {
+            let mut f = Fixture::new();
+            f.run_with_permission(TciCommand::SetTxTwoToneTest(true), true)
+                .unwrap();
+            f.run_with_permission(TciCommand::SetTxEnabled(true), true)
+                .unwrap();
+            assert!(f.tx_control.requested);
+            f._tx_cmd_rx.try_iter().for_each(drop);
+            f.run_with_permission(cancellation, true).unwrap();
+            let model = f.model.lock_unpoisoned();
+            assert!(!model.desired.two_tone_enabled && !model.desired.tx_enabled);
+            assert_eq!(model.desired.tx_phase, TxPhase::Rx);
+            assert!(!f.tx_control.requested);
+            assert!(matches!(
+                f._tx_cmd_rx.try_recv().unwrap(),
+                TxCommand::Disarm
+            ));
+        }
+    }
+
+    #[test]
+    fn production_dispatch_rejects_keyed_source_switch_and_closed_owner() {
+        let mut f = Fixture::new();
+        f.model.lock_unpoisoned().desired.tx_phase = TxPhase::Keyed;
+        f.run_with_permission(TciCommand::SetTxTwoToneTest(true), true)
+            .unwrap();
+        assert!(!f.model.lock_unpoisoned().desired.two_tone_enabled);
+        assert!(f._tx_cmd_rx.try_recv().is_err());
+        let messages = f.read_messages(
+            Duration::from_secs(2),
+            Some("tx_two_tone_result:0,true,rejected,ReleaseFirst,false;"),
+        );
+        assert!(messages
+            .iter()
+            .any(|s| s.contains("rejected,ReleaseFirst,false")));
+        f.model.lock_unpoisoned().desired.tx_phase = TxPhase::Rx;
+        let (closed, rx) = mpsc::channel();
+        drop(rx);
+        f.tx_cmd_tx = closed;
+        f.run_with_permission(TciCommand::SetTxTwoToneTest(true), true)
+            .unwrap();
+        assert!(!f.model.lock_unpoisoned().desired.two_tone_enabled);
+        let messages = f.read_messages(
+            Duration::from_secs(2),
+            Some("tx_two_tone_result:0,true,rejected,OwnerUnavailable,false;"),
+        );
+        assert!(messages
+            .iter()
+            .any(|s| s.contains("rejected,OwnerUnavailable,false")));
+    }
+
+    #[test]
+    fn websocket_operator_route_accepts_tones_and_viewer_cannot_change_them() {
+        let mut f = Fixture::new();
+        f.client
+            .send(tungstenite::Message::Text("tx_two_tone:0,true;".into()))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut got = false;
+        while Instant::now() < deadline {
+            if let Ok(c) = f.commands.try_recv() {
+                got |= matches!(c, TciCommand::SetTxTwoToneTest(true));
+                f.run_with_permission(c, true).unwrap();
+                if got {
+                    break;
+                }
+            } else {
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+        assert!(got && f.model.lock_unpoisoned().desired.two_tone_enabled);
+        f.client
+            .send(tungstenite::Message::Text(
+                "session_open:diag-viewer,viewer;".into(),
+            ))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut viewer = false;
+        while Instant::now() < deadline {
+            if let Ok(c) = f.commands.try_recv() {
+                viewer |= matches!(c, TciCommand::SplitSessionOpen { .. });
+                f.run_with_permission(c, true).unwrap();
+                if viewer {
+                    break;
+                }
+            } else {
+                thread::sleep(Duration::from_millis(2));
+            }
+        }
+        assert!(viewer);
+        f.client
+            .send(tungstenite::Message::Text("tx_two_tone:0,true;".into()))
+            .unwrap();
+        thread::sleep(Duration::from_millis(100));
+        while let Ok(c) = f.commands.try_recv() {
+            assert!(!matches!(c, TciCommand::SetTxTwoToneTest(true)));
+            f.run_with_permission(c, true).unwrap();
+        }
+        assert!(!f.model.lock_unpoisoned().desired.two_tone_enabled);
+    }
+
+    #[test]
+    fn stop_pending_does_not_accept_an_arm_or_generator_for_a_new_watchdog_epoch() {
+        let mut f = Fixture::new();
+        f.tx_control.stopping = true;
+        f.run_with_permission(TciCommand::SetTxTwoToneTest(true), true)
+            .unwrap();
+        f.run_with_permission(TciCommand::SetTxEnabled(true), true)
+            .unwrap();
+        assert!(!f.tx_control.requested && f.tx_control.stopping);
+        assert!(!f.model.lock_unpoisoned().desired.two_tone_enabled);
+        assert!(f._tx_cmd_rx.try_recv().is_err());
+    }
+
+    #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+    #[test]
+    #[ignore = "real native production dispatch + owner + ordinary-file H2C; no radio"]
+    fn two_tone_websocket_dispatch_native_owner_and_h2c_complete_without_mic() {
+        use crate::xdma_tx_radio::offline_fixture::DirectFixture;
+        use saturn_bridge::signal_diagnostics as d;
+        unsafe extern "C" {
+            fn fftw_set_timelimit(seconds: f64);
+        }
+        unsafe {
+            fftw_set_timelimit(0.01);
+        }
+        let root = std::env::var_os("SATURN_TWO_TONE_ROUTE_EVIDENCE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!(
+                    "saturn-tone-route-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos()
+                ))
+            });
+        std::fs::create_dir(&root).unwrap();
+        for fail in [false, true] {
+            let mut f = Fixture::new();
+            {
+                let mut m = f.model.lock_unpoisoned();
+                m.desired.mode = DemodMode::Lsb;
+                m.desired.tx_mic_gain_db = 0.;
+                m.desired.tx_drive = 5;
+                m.desired.tx_noise_gate_enabled = false;
+            }
+            let hardware = DirectFixture::new();
+            let path = root.join(if fail { "failed-write" } else { "normal" });
+            hardware.prepare_legacy_capture(
+                crate::tx_signal_capture::Worker::start_offline(&path).unwrap(),
+            );
+            if fail {
+                hardware.fail_dma_writes();
+            }
+            let (_, placeholder) = mpsc::channel();
+            let commands = std::mem::replace(&mut f._tx_cmd_rx, placeholder);
+            let (audio_keep, audio) = mpsc::channel();
+            let (events_send, events) = mpsc::channel();
+            let stop = Arc::new(AtomicBool::new(false));
+            let (radio, model, stopping) = (hardware.radio.clone(), f.model.clone(), stop.clone());
+            let worker = thread::spawn(move || {
+                tx_thread::run(
+                    radio,
+                    model,
+                    commands,
+                    audio,
+                    Arc::new(crate::tx_audio::TxAudioIngressStats::default()),
+                    TxAudioSource::Tci,
+                    events_send,
+                    stopping,
+                )
+            });
+            struct OwnerJoin {
+                commands: mpsc::Sender<TxCommand>,
+                worker: Option<thread::JoinHandle<()>>,
+            }
+            impl Drop for OwnerJoin {
+                fn drop(&mut self) {
+                    let _ = self.commands.send(TxCommand::Shutdown);
+                    if let Some(w) = self.worker.take() {
+                        let _ = w.join();
+                    }
+                }
+            }
+            let mut joined = OwnerJoin {
+                commands: f.tx_cmd_tx.clone(),
+                worker: Some(worker),
+            };
+            let service = |f: &mut Fixture| {
+                while let Ok(c) = f.commands.try_recv() {
+                    f.run_with_permission(c, true).unwrap();
+                }
+                while let Ok(e) = events.try_recv() {
+                    match e {
+                        TxEvent::Keyed => {
+                            f.model.lock_unpoisoned().desired.tx_phase = TxPhase::Keyed
+                        }
+                        TxEvent::Unkeyed => {
+                            f.tx_control.stopping = false;
+                            f.tx_control.requested = false;
+                            let mut m = f.model.lock_unpoisoned();
+                            m.desired.tx_phase = TxPhase::Rx;
+                            m.desired.tx_enabled = false;
+                        }
+                        TxEvent::TxIqFrame {
+                            sample_rate_hz,
+                            iq_samples,
+                        } => {
+                            f.tci.publish_tx_iq_frame(sample_rate_hz, &iq_samples);
+                        }
+                        _ => {}
+                    }
+                }
+            };
+            f.client
+                .send(tungstenite::Message::Text(
+                    "iq_start:0;tx_two_tone:0,true;trx:0,true;".into(),
+                ))
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut keyed = false;
+            while Instant::now() < deadline {
+                service(&mut f);
+                let snapshot = hardware.radio.snapshot();
+                keyed |= snapshot.keyed;
+                if (!fail && snapshot.keyed && snapshot.dma_writes > 25)
+                    || (fail && snapshot.last_session.is_some())
+                {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(2));
+            }
+            if !fail {
+                assert!(
+                    keyed,
+                    "actual dispatch never produced keyed file-backed output"
+                );
+                assert!(hardware.radio.snapshot().dma_writes > 25);
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let mut display_seen = false;
+                while Instant::now() < deadline {
+                    service(&mut f);
+                    if let Ok(tungstenite::Message::Binary(bytes)) = f.client.read() {
+                        if bytes.len() > 64
+                            && u32::from_le_bytes(bytes[24..28].try_into().unwrap()) == 3
+                        {
+                            assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 192000);
+                            assert!(bytes.len() <= 32832);
+                            display_seen = bytes[64..]
+                                .chunks_exact(4)
+                                .any(|b| f32::from_le_bytes(b.try_into().unwrap()).abs() > 0.05);
+                            if display_seen {
+                                std::fs::write(root.join("native-live-tx-frame.bin"), &bytes)
+                                    .unwrap();
+                                break;
+                            }
+                        }
+                    }
+                }
+                assert!(
+                    display_seen,
+                    "native nonzero TX IQ never reached actual WebSocket during TX priority"
+                );
+                // Disable traverses the same production handler and stops the
+                // actual owner. Do not treat the early Unkeyed event as done.
+                f.client
+                    .send(tungstenite::Message::Text("tx_two_tone:0,false;".into()))
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    service(&mut f);
+                    if !hardware.radio.snapshot().stream_active && !f.tx_control.stopping {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+                hardware.assert_off();
+                assert!(!f.model.lock_unpoisoned().desired.two_tone_enabled);
+                // Fresh PTT alone must not inherit the old generator, nor key
+                // from native retained samples without microphone input.
+                f.client
+                    .send(tungstenite::Message::Text("trx:0,true;".into()))
+                    .unwrap();
+                let until = Instant::now() + Duration::from_millis(250);
+                while Instant::now() < until {
+                    service(&mut f);
+                    assert!(!hardware.radio.snapshot().keyed);
+                    thread::sleep(Duration::from_millis(2));
+                }
+                f.client
+                    .send(tungstenite::Message::Text("tx_two_tone:0,true;".into()))
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    service(&mut f);
+                    if hardware.radio.snapshot().keyed {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+                assert!(
+                    hardware.radio.snapshot().keyed,
+                    "fresh authorized PTT and fresh tone selection failed"
+                );
+                f.client
+                    .send(tungstenite::Message::Text("trx:0,false;".into()))
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    service(&mut f);
+                    if !hardware.radio.snapshot().stream_active && !f.tx_control.stopping {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+                hardware.assert_off();
+                // Third run ends by actual operator WebSocket disconnect.
+                f.client
+                    .send(tungstenite::Message::Text(
+                        "tx_two_tone:0,true;trx:0,true;".into(),
+                    ))
+                    .unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    service(&mut f);
+                    if hardware.radio.snapshot().keyed {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+                assert!(hardware.radio.snapshot().keyed);
+                f.client.close(None).unwrap();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while Instant::now() < deadline {
+                    service(&mut f);
+                    if !hardware.radio.snapshot().stream_active && !f.tx_control.stopping {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+                hardware.assert_off();
+            } else {
+                assert!(!keyed, "failed H2C path must never key");
+                hardware.assert_off();
+            }
+            f.tx_cmd_tx.send(TxCommand::Shutdown).unwrap();
+            joined.worker.take().unwrap().join().unwrap();
+            drop(audio_keep);
+            hardware.finish_capture();
+            let records: Vec<_> = std::fs::read_dir(&path)
+                .unwrap()
+                .map(|p| p.unwrap().path())
+                .filter(|p| p.extension().is_some_and(|e| e == "satdiag"))
+                .map(|p| d::read_record(std::fs::File::open(p).unwrap()).unwrap())
+                .collect();
+            assert!(records
+                .iter()
+                .any(|r| r.meta.point == d::Point::WdspIq
+                    && r.samples.iter().any(|x| x.abs() > 0.05)));
+            assert!(records.iter().any(|r| r.meta.event
+                == if fail {
+                    d::Event::Rejected
+                } else {
+                    d::Event::OutputCompleted
+                }));
+            if !fail {
+                assert!(records
+                    .iter()
+                    .any(|r| r.meta.event == d::Event::KeyAsserted && r.samples.len() == 5));
+                assert!(records
+                    .iter()
+                    .any(|r| r.meta.point == d::Point::BeforeOutputIq
+                        && r.meta.keyed == Some(true)
+                        && r.meta.completed_bytes == r.meta.requested_bytes
+                        && r.samples.iter().any(|x| x.abs() > 100000.)));
+            }
+        }
     }
 
     #[test]

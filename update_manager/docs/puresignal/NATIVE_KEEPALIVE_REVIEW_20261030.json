@@ -1,0 +1,28 @@
+{
+  "format": "saturn-native-generator-keepalive-review-v1",
+  "status": "Installed; selected ARM native replay and bounded Direct live validation passed; full project qualification open",
+  "trigger": "PS-off baseline windows-off-QrxmpS stopped after ~13 s on browser 50 ms PCM scheduler deadline; host completed cleanup without TX fault; LP returned to zero.",
+  "change": "Only explicit native-generator keepalive capture uses existing 500 ms source-liveness bound. Each callback creates one new zero block at current time and rebases its next timer. No backlog, saved samples or catch-up burst.",
+  "unchanged": [
+    "50 ms sample-clock failure for PCM two-tone, timing and AM-carrier producers",
+    "150 ms packet-age checks",
+    "500 ms ManagedPcmSession and host source watchdogs",
+    "Finite authorized generation and duration",
+    "Release/disconnect fences, fault latch and fresh re-arm",
+    "Firmware, driver, RXC1 polling and normal RF permissions"
+  ],
+  "hostBehavior": "Existing owner fixed-clock zero fill advances native DSP independently of callback packet cadence; never refreshes source-arrival evidence. No host scheduling change was needed.",
+  "evidence": {
+    "webTestsPassed": 956,
+    "managedBinaryTestsPassed": 650,
+    "nativeRuntimeBothBackends": "150 ms keepalive pause maintains output beyond retained input; missing source stops on original watchdog with completed cleanup.",
+    "physicalRfQualified": false,
+    "armSelectedCasesPassed": 3,
+    "liveOffAutoOff45SecondsPassed": true,
+    "liveAutoFits": 29,
+    "deliberateBrowserPauseMs": 100,
+    "liveUiStopAt15SecondsPassed": true,
+    "physicalReleaseLatencyQualified": false,
+    "rfImdQualified": false
+  }
+}

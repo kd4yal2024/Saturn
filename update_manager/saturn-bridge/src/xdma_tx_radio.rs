@@ -32,6 +32,9 @@ const DEFAULT_DUC_DEVICE: &str = "/dev/xdma0_h2c_0";
 #[path = "xdma_tx_radio/offline_fixture.rs"]
 pub(crate) mod offline_fixture;
 const DEFAULT_USER_DEVICE: &str = "/dev/xdma0_user";
+#[cfg(all(test, feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+#[path = "xdma_tx_radio/tx_spectrum_review.rs"]
+mod tx_spectrum_review;
 const DIRECT_RUNTIME_MIN_FIRMWARE_MINOR: u16 = 27;
 const DIRECT_RUNTIME_MAX_FIRMWARE_MINOR: u16 = 30;
 const IDENTIFIED_FIRMWARE_131_MINOR: u16 = 31;
@@ -83,6 +86,24 @@ const DUC_FIFO_WRITE_HEADROOM_FRAMES: usize = 3;
 const XDMA_COMPLETION_RT_PRIORITY: i32 = 20;
 const DIRECT_TX_RT_PRIORITY: i32 = XDMA_COMPLETION_RT_PRIORITY + 1;
 const DMA_BUFFER_BYTES: usize = DUC_MAX_DMA_BATCH_FRAMES * DUC_FRAME_BYTES;
+/// Progress belongs to one authorized output generation and is discarded on
+/// cancellation. Every stage performs at most one H2C write, with no busy wait.
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum DirectKeyStage {
+    #[default]
+    Initial,
+    Prefill {
+        attempts: usize,
+        check_after: Instant,
+        startup_underflow_seen: bool,
+    },
+    LiveFrame {
+        check_after: Instant,
+        startup_underflow_seen: bool,
+    },
+    Keyed,
+}
 const DIRECT_TX_MAX_WATTS: u8 = 100;
 const REVERSE_POWER_TRIP_WATTS: f32 = 25.0;
 const FORWARD_POWER_TRIP_WATTS: f32 = 110.0;
@@ -180,6 +201,9 @@ fn zero_frames_needed_for_prefill(occupied_words: usize) -> usize {
 }
 
 struct DirectTxState {
+    capture_worker: Option<crate::tx_signal_capture::Worker>,
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    shared_submission: Option<crate::tx_signal_capture::shared::Submission>,
     registers: XdmaRegisterDevice,
     dma: File,
     buffer: AlignedBuffer,
@@ -202,6 +226,10 @@ struct DirectTxState {
     mux_resets: u64,
     active_session: Option<ActiveTxSession>,
     last_session: Option<DirectTxSessionSnapshot>,
+    #[cfg(test)]
+    completed_write_fifo_fixture: bool,
+    #[cfg(test)]
+    legacy_streaming_fifo_fixture: bool,
 }
 
 impl DirectTxState {
@@ -237,6 +265,9 @@ impl DirectTxState {
         buffer.lock_memory()?;
         let fifo_depth_words = 4_096;
         let mut state = Self {
+            capture_worker: None,
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            shared_submission: None,
             registers,
             dma,
             buffer,
@@ -259,8 +290,13 @@ impl DirectTxState {
             mux_resets: 0,
             active_session: None,
             last_session: None,
+            #[cfg(test)]
+            completed_write_fifo_fixture: false,
+            #[cfg(test)]
+            legacy_streaming_fifo_fixture: false,
         };
         state.shutdown()?;
+        state.capture_worker = crate::tx_signal_capture::Worker::from_env();
         Ok(state)
     }
 
@@ -383,15 +419,24 @@ impl DirectTxState {
             .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))?;
         self.verify_keyed(model)?;
         println!(
-            "saturn-bridge: direct XDMA TX keyed carrier={}Hz mode={} filter={}..{}Hz phase_word=0x{:08x} iq_pack=Q,I fifo_words={}",
+            "saturn-bridge: direct XDMA TX keyed carrier={}Hz mode={} filter={}..{}Hz phase_word=0x{:08x} iq_pack=Q,I fifo_words={} commanded_watts={} dac_drive_code={} physical_rf=unverified",
             model.desired.tx_frequency_hz,
             model.desired.mode,
             model.desired.tx_filter_low_hz,
             model.desired.tx_filter_high_hz,
             frequency_to_phase_word(model.desired.tx_frequency_hz),
-            fifo.occupied_words
+            fifo.occupied_words,
+            model.desired.tx_drive,
+            drive
         );
         self.keyed = true;
+        #[cfg(test)]
+        if self.legacy_streaming_fifo_fixture {
+            // Ordinary-file consumer model only: free space after keying.
+            // Files do not drain like an FPGA. No hardware timing claim.
+            self.registers
+                .write_register(DUC_FIFO_MONITOR_REGISTER, 2340)?;
+        }
         if let Some(session) = self.active_session.as_mut() {
             session.keyed = true;
         }
@@ -568,13 +613,32 @@ impl DirectTxState {
     }
 
     fn write_buffer(&mut self, bytes: usize, frames: usize) -> Result<(), XdmaError> {
-        let written = self
-            .dma
-            .write_at(self.buffer.as_slice(bytes), 0)
-            .map_err(|source| XdmaError::Io {
-                action: "could not write production IQ to XDMA DUC stream",
-                source,
-            })?;
+        let capture = self.capture_worker.as_ref().map(|w| w.producer());
+        let submitted = capture.as_ref().map(|c| c.now());
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let shared_submitted = self.shared_submission.as_ref().map(|s| s.producer.now());
+        let result = self.dma.write_at(self.buffer.as_slice(bytes), 0);
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(c) = &self.shared_submission {
+            c.completed(
+                shared_submitted.unwrap(),
+                self.buffer.as_slice(bytes),
+                result.as_ref().ok().copied(),
+                self.keyed,
+            );
+        }
+        if let Some(c) = &capture {
+            c.completed(
+                submitted.unwrap(),
+                self.buffer.as_slice(bytes),
+                result.as_ref().ok().copied(),
+                self.keyed,
+            );
+        }
+        let written = result.map_err(|source| XdmaError::Io {
+            action: "could not write production IQ to XDMA DUC stream",
+            source,
+        })?;
         if written != bytes {
             return Err(XdmaError::Io {
                 action: "production XDMA DUC stream returned a short write",
@@ -586,6 +650,28 @@ impl DirectTxState {
         }
         self.dma_writes = self.dma_writes.saturating_add(1);
         self.frames_written = self.frames_written.saturating_add(frames as u64);
+        #[cfg(test)]
+        if self.completed_write_fifo_fixture {
+            // Explicit ordinary-file model only: make successful file DMA
+            // completion visible synchronously, not on another thread's next
+            // timer turn. No hardware draining/latency claim is implied.
+            let first = self
+                .active_session
+                .as_ref()
+                .map_or(0, |s| s.frames_written_start);
+            let words = if self.keyed {
+                if self.legacy_streaming_fifo_fixture {
+                    2340
+                } else {
+                    DUC_PREFILL_TARGET_WORDS
+                }
+            } else {
+                ((self.frames_written.saturating_sub(first) as usize) * DUC_FIFO_WORDS_PER_FRAME)
+                    .min(self.fifo_depth_words)
+            };
+            self.registers
+                .write_register(DUC_FIFO_MONITOR_REGISTER, words as u32)?;
+        }
         Ok(())
     }
 
@@ -729,6 +815,10 @@ impl DirectTxState {
         let gpio = self.registers.read_register(RF_GPIO_REGISTER)?;
         let tx = self.registers.read_register(TX_CONFIG_REGISTER)?;
         let tx_duc = self.registers.read_register(TX_DUC_REGISTER)?;
+        // Verify the applied DAC code, not just MOX/stream bits. This is one
+        // key-boundary read, not a new periodic poll or RF power measurement.
+        let dac = self.registers.read_register(DAC_CONTROL_REGISTER)?;
+        let expected_dac = dac_control_word(tx_drive_watts_to_byte(model.desired.tx_drive));
         let expected_tx_duc = frequency_to_phase_word(model.desired.tx_frequency_hz);
         let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
         let alex = self
@@ -741,11 +831,20 @@ impl DirectTxState {
             || tx & (DUC_MUX_RESET_BIT | TX_IQ_DEINTERLEAVE_BIT) != 0
             || tx & TX_AMPLITUDE_MASK == 0
             || tx_duc != expected_tx_duc
+            || dac != expected_dac
             || alex != u32::from(filter | ALEX_ANT1_BIT | ALEX_TX_RELAY_BIT)
         {
             return Err(XdmaError::Incompatible(format!(
-                "production direct TX readback failed: gpio=0x{gpio:08x} tx=0x{tx:08x} tx_duc=0x{tx_duc:08x} expected_tx_duc=0x{expected_tx_duc:08x} alex=0x{alex:08x}"
+                "production direct TX readback failed: gpio=0x{gpio:08x} tx=0x{tx:08x} tx_duc=0x{tx_duc:08x} expected_tx_duc=0x{expected_tx_duc:08x} dac=0x{dac:08x} expected_dac=0x{expected_dac:08x} alex=0x{alex:08x}"
             )));
+        }
+        eprintln!("saturn-bridge: direct TX key readback gpio=0x{gpio:08x} tx=0x{tx:08x} tx_duc=0x{tx_duc:08x} dac=0x{dac:08x} alex=0x{alex:08x} physical_rf=unverified");
+        if let Some(w) = &self.capture_worker {
+            w.producer().key_readback(&[gpio, tx, tx_duc, dac, alex]);
+        }
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        if let Some(c) = &self.shared_submission {
+            c.key_readback(&[gpio, tx, tx_duc, dac, alex]);
         }
         Ok(())
     }
@@ -813,6 +912,16 @@ impl DirectTxState {
         self.stream_active = false;
         self.keyed = false;
         let result = drive.and(amplitude).and(gpio).and(alex).and(reset);
+        if let Some(w) = &self.capture_worker {
+            w.producer().event(
+                if result.is_ok() {
+                    saturn_bridge::signal_diagnostics::Event::ControlChanged
+                } else {
+                    saturn_bridge::signal_diagnostics::Event::Rejected
+                },
+                result.is_ok().then_some(false),
+            );
+        }
         self.finish_session();
         result
     }
@@ -900,6 +1009,8 @@ pub(crate) struct DirectXdmaTxRadio {
     state: Mutex<DirectTxState>,
     #[cfg(feature = "offline-puresignal-owner-adapters")]
     offline_output_fence: Option<std::sync::Arc<crate::tx_owner_stop::OutputFence>>,
+    #[cfg(test)]
+    test_key_clock: Option<Mutex<(Instant, Instant)>>,
 }
 
 impl DirectXdmaTxRadio {
@@ -926,6 +1037,8 @@ impl DirectXdmaTxRadio {
             monitor,
             #[cfg(feature = "offline-puresignal-owner-adapters")]
             offline_output_fence: None,
+            #[cfg(test)]
+            test_key_clock: None,
         })
     }
 
@@ -971,16 +1084,46 @@ impl DirectXdmaTxRadio {
     ) -> Option<std::sync::Arc<crate::tx_owner_stop::OutputFence>> {
         self.offline_output_fence.clone()
     }
-    /// Cooperative offline handoff: one stage per call; no FIFO pacing loop,
-    /// sleep, blocking mutex or prefill wait. Actual configure/write/key/readback
-    /// functions run against the explicitly attached ordinary-file fixture.
+    /// Real clock in production; an explicitly selected ordinary-file unit
+    /// fixture may use a controlled clock to test each DMA visibility boundary.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    fn key_startup_time(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(clock) = &self.test_key_clock {
+            return clock.lock().unwrap().1;
+        }
+        Instant::now()
+    }
+    /// Explicit synthetic clock for ordinary-file tests only. Production and
+    /// the actual-runtime replay keep the real clock; no hardware age changes.
+    #[cfg(all(test, feature = "offline-puresignal-owner-adapters"))]
+    pub(crate) fn set_test_key_time(&self, now_ns: u64) {
+        if let Some(clock) = &self.test_key_clock {
+            let mut time = clock.lock().unwrap();
+            time.1 = time.0 + Duration::from_nanos(now_ns);
+        }
+    }
+    /// Cooperative handoff: one stage per call, no polling loop, sleep, or
+    /// blocking mutex. Real H2C writes can still block in the driver; this does
+    /// not claim a measured bound on DMA completion or physical RF timing.
     #[cfg(feature = "offline-puresignal-owner-adapters")]
     pub(crate) fn offline_key_generation(
         &self,
         generation: u64,
         model: &RadioModel,
-        stage: &mut u8,
+        stage: &mut DirectKeyStage,
         iq: &[f32],
+    ) -> Result<bool, saturn_bridge::puresignal::Fault> {
+        self.offline_key_generation_captured(generation, model, stage, iq, None)
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_key_generation_captured(
+        &self,
+        generation: u64,
+        model: &RadioModel,
+        stage: &mut DirectKeyStage,
+        iq: &[f32],
+        capture: Option<&crate::tx_signal_capture::shared::Submission>,
     ) -> Result<bool, saturn_bridge::puresignal::Fault> {
         use saturn_bridge::puresignal::Fault;
         let fence = self
@@ -996,33 +1139,109 @@ impl DirectXdmaTxRadio {
             Err(_) => return Err(Fault::TxAuthority),
         };
         let result = (|| match *stage {
-            0 => {
+            DirectKeyStage::Initial => {
                 state.configure_stream(model)?;
                 state.write_zero_frames(DUC_MAX_DMA_BATCH_FRAMES)?;
-                *stage = 1;
+                *stage = DirectKeyStage::Prefill {
+                    attempts: 1,
+                    check_after: self.key_startup_time() + DUC_PREFILL_DMA_SETTLE,
+                    startup_underflow_seen: false,
+                };
+                eprintln!("saturn-bridge: managed DUC prefill seed zero_frames={DUC_MAX_DMA_BATCH_FRAMES} target_words={DUC_PREFILL_TARGET_WORDS} rf_inhibited=true");
                 Ok(false)
             }
-            1 => {
-                let fifo = state.observe_fifo(false)?;
-                if fifo.occupied_words < DUC_PREFILL_TARGET_WORDS {
+            DirectKeyStage::Prefill {
+                attempts,
+                check_after,
+                mut startup_underflow_seen,
+            } => {
+                if self.key_startup_time() < check_after {
                     return Ok(false);
                 }
+                let fifo = state.observe_fifo(false)?;
+                if fifo.underflow {
+                    startup_underflow_seen = true;
+                    state.fifo_startup_underflows = state.fifo_startup_underflows.saturating_add(1);
+                }
+                // The seed is deliberately smaller than the target (11 vs
+                // 19 frames). Close the measured deficit just as the installed
+                // Legacy prefill does, but one bounded write per owner turn.
+                if fifo.occupied_words < DUC_PREFILL_TARGET_WORDS {
+                    let room_before_live = state
+                        .fifo_depth_words
+                        .saturating_sub(DUC_FIFO_WORDS_PER_FRAME)
+                        .saturating_sub(fifo.occupied_words)
+                        / DUC_FIFO_WORDS_PER_FRAME;
+                    let frames = zero_frames_needed_for_prefill(fifo.occupied_words)
+                        .min(DUC_MAX_DMA_BATCH_FRAMES)
+                        .min(room_before_live);
+                    if attempts >= DUC_PREFILL_MAX_ATTEMPTS || frames == 0 {
+                        return state.prefill_fault(fifo, startup_underflow_seen);
+                    }
+                    state.write_zero_frames(frames)?;
+                    *stage = DirectKeyStage::Prefill {
+                        attempts: attempts + 1,
+                        check_after: self.key_startup_time() + DUC_PREFILL_DMA_SETTLE,
+                        startup_underflow_seen,
+                    };
+                    eprintln!("saturn-bridge: managed DUC prefill refill occupied_words={} zero_frames={frames} attempt={} rf_inhibited=true", fifo.occupied_words, attempts + 1);
+                    return Ok(false);
+                }
+                if fifo.occupied_words
+                    > state
+                        .fifo_depth_words
+                        .saturating_sub(DUC_FIFO_WORDS_PER_FRAME)
+                {
+                    return state.prefill_fault(fifo, startup_underflow_seen);
+                }
+                state.shared_submission = capture.cloned();
                 state.write_frame_batch(iq)?;
-                *stage = 2;
+                *stage = DirectKeyStage::LiveFrame {
+                    check_after: self.key_startup_time() + DUC_PREFILL_DMA_SETTLE,
+                    startup_underflow_seen,
+                };
+                let peak = iq.iter().fold(0.0_f32, |p, v| p.max(v.abs()));
+                eprintln!("saturn-bridge: managed DUC first live frame occupied_words={} iq_component_peak={peak:.8} rf_inhibited=true", fifo.occupied_words);
                 Ok(false)
             }
-            _ => {
+            DirectKeyStage::LiveFrame {
+                check_after,
+                startup_underflow_seen,
+            } => {
+                if self.key_startup_time() < check_after {
+                    return Ok(false);
+                }
+                let ready = state.observe_fifo(false)?;
+                if ready.underflow || ready.occupied_words < DUC_PREFILL_MINIMUM_WORDS {
+                    return state.prefill_fault(ready, startup_underflow_seen);
+                }
+                state.shared_submission = capture.cloned();
                 state.key_with_frame(model, iq)?;
+                *stage = DirectKeyStage::Keyed;
                 Ok(true)
             }
+            DirectKeyStage::Keyed => Ok(true),
         })();
-        result.map_err(|_: XdmaError| Fault::TxAuthority)
+        state.shared_submission = None;
+        result.map_err(|error: XdmaError| {
+            eprintln!("saturn-bridge: managed DUC startup failed: {error}");
+            Fault::TxAuthority
+        })
     }
     #[cfg(feature = "offline-puresignal-owner-adapters")]
     pub(crate) fn offline_iq_generation(
         &self,
         generation: u64,
         iq: &[f32],
+    ) -> Result<bool, saturn_bridge::puresignal::Fault> {
+        self.offline_iq_generation_captured(generation, iq, None)
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(crate) fn offline_iq_generation_captured(
+        &self,
+        generation: u64,
+        iq: &[f32],
+        capture: Option<&crate::tx_signal_capture::shared::Submission>,
     ) -> Result<bool, saturn_bridge::puresignal::Fault> {
         use saturn_bridge::puresignal::Fault;
         let fence = self
@@ -1047,9 +1266,10 @@ impl DirectXdmaTxRadio {
         if state.fifo_depth_words.saturating_sub(fifo.occupied_words) < DUC_FIFO_WORDS_PER_FRAME {
             return Ok(false);
         }
-        state
-            .write_frame_batch(iq)
-            .map_err(|_| Fault::TxAuthority)?;
+        state.shared_submission = capture.cloned();
+        let result = state.write_frame_batch(iq);
+        state.shared_submission = None;
+        result.map_err(|_| Fault::TxAuthority)?;
         Ok(true)
     }
 
@@ -1098,6 +1318,14 @@ impl DirectXdmaTxRadio {
 }
 
 impl TxRadio for DirectXdmaTxRadio {
+    fn signal_capture(&self) -> Option<crate::tx_signal_capture::Producer> {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .capture_worker
+            .as_ref()
+            .map(|w| w.producer())
+    }
     fn monitor_iq(&self, iq: &[f32], mode: crate::radio_model::DemodMode) {
         self.monitor.push(iq, mode);
     }
@@ -1121,7 +1349,12 @@ impl TxRadio for DirectXdmaTxRadio {
                 let drive = tx_drive_watts_to_byte(model.desired.tx_drive);
                 state
                     .registers
-                    .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))
+                    .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))?;
+                if let Some(w) = &state.capture_worker {
+                    w.producer()
+                        .control_completed(model.desired.tx_frequency_hz, u32::from(drive));
+                }
+                Ok(())
             } else {
                 Ok(())
             }
@@ -1451,6 +1684,41 @@ mod tests {
         encode_iq_frame(&mut frame, &[1.0, -1.0]);
         assert_eq!(&frame[..3], &[0x80, 0x00, 0x01]);
         assert_eq!(&frame[3..], &[0x7f, 0xff, 0xff]);
+    }
+
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[test]
+    fn keyed_readback_rejects_zero_or_wrong_dac_drive_even_with_mox_and_iq_enabled() {
+        let fixture = offline_fixture::DirectFixture::new();
+        let mut model = crate::tx_owner_stop::tests::model();
+        model.desired.tx_drive = 5;
+        fixture.write(
+            RF_GPIO_REGISTER,
+            MOX_BIT | TX_ENABLE_BIT | RF_DATA_NETWORK_ENDIAN_BIT,
+        );
+        fixture.write(TX_CONFIG_REGISTER, keyed_stream_config(0));
+        fixture.write(
+            TX_DUC_REGISTER,
+            frequency_to_phase_word(model.desired.tx_frequency_hz),
+        );
+        fixture.write(
+            ALEX_TX_FILTER_TX_ANTENNA_REGISTER,
+            u32::from(
+                alex_tx_filter_bits(model.desired.tx_frequency_hz)
+                    | ALEX_ANT1_BIT
+                    | ALEX_TX_RELAY_BIT,
+            ),
+        );
+        fixture.write(DAC_CONTROL_REGISTER, dac_control_word(18));
+        let state = fixture.radio.state.lock().unwrap();
+        assert!(state.verify_keyed(&model).is_ok());
+        for wrong in [0, 5, 23] {
+            fixture.write(DAC_CONTROL_REGISTER, dac_control_word(wrong));
+            assert!(
+                state.verify_keyed(&model).is_err(),
+                "wrong DAC drive {wrong} must not certify keyed state"
+            );
+        }
     }
 
     #[test]

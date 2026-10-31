@@ -22,6 +22,32 @@ use std::{
 pub(crate) const MAX_DURATION_MS: u64 = 1_000;
 pub(crate) const MAX_DRIVE_WATTS: u8 = 5;
 pub(crate) const CAPACITY_BLOCKS: usize = 2048;
+#[derive(Clone, Copy)]
+pub(crate) enum CaptureMode {
+    Raw,
+    SummaryOnly,
+}
+impl CaptureMode {
+    pub(crate) fn from_env() -> Result<Self, String> {
+        match std::env::var("SATURN_PS_MEASUREMENT_CAPTURE").as_deref() {
+            Err(std::env::VarError::NotPresent) | Ok("raw") => Ok(Self::Raw),
+            Ok("summary-only") => Ok(Self::SummaryOnly),
+            _ => Err("SATURN_PS_MEASUREMENT_CAPTURE must be raw or summary-only".into()),
+        }
+    }
+    pub(crate) fn max_duration_ms(self) -> u64 {
+        match self {
+            Self::Raw => MAX_DURATION_MS,
+            Self::SummaryOnly => 45_000,
+        }
+    }
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::SummaryOnly => "summary-only",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PhaseRecord {
@@ -39,11 +65,13 @@ struct Slot {
     phase: PhaseRecord,
     records: Option<MeasurementRecorder>,
     export_attempt: u64,
+    stimulus: super::feedback_owner::Stimulus,
 }
 pub(crate) struct Host {
     directory: File,
     display_path: PathBuf,
     pub(crate) frequency_hz: u32,
+    pub(crate) capture_mode: CaptureMode,
     slot: Mutex<Slot>,
 }
 impl Host {
@@ -52,6 +80,13 @@ impl Host {
         format!("{},status,{:?}", slot.id, slot.phase)
     }
     pub(crate) fn open(path: &Path, frequency_hz: u32) -> io::Result<Arc<Self>> {
+        Self::open_mode(path, frequency_hz, CaptureMode::Raw)
+    }
+    pub(crate) fn open_mode(
+        path: &Path,
+        frequency_hz: u32,
+        capture_mode: CaptureMode,
+    ) -> io::Result<Arc<Self>> {
         if !path.is_absolute()
             || path
                 .as_os_str()
@@ -78,11 +113,13 @@ impl Host {
             directory,
             display_path: path.to_owned(),
             frequency_hz,
+            capture_mode,
             slot: Mutex::new(Slot {
                 id: 0,
                 phase: PhaseRecord::Idle,
                 records: None,
                 export_attempt: 0,
+                stimulus: Default::default(),
             }),
         }))
     }
@@ -91,6 +128,7 @@ impl Host {
         client: u64,
         operator: Arc<OperatorIngress>,
         cancel: Cancel,
+        stimulus: super::feedback_owner::Stimulus,
     ) -> Result<Ticket, Fault> {
         let mut slot = self.slot.lock_unpoisoned();
         if !matches!(
@@ -103,6 +141,7 @@ impl Host {
         slot.phase = PhaseRecord::Queued;
         slot.records = None;
         slot.export_attempt = 0;
+        slot.stimulus = stimulus;
         Ok(Ticket {
             host: self.clone(),
             id: slot.id,
@@ -114,7 +153,7 @@ impl Host {
     /// Runs on the control thread, never inside the native/TX scheduling loop.
     /// Paths are host-selected; a client supplies only a checked numeric ID.
     pub(crate) fn export(&self, id: u64) -> Result<String, String> {
-        let (records, attempt) = {
+        let (records, attempt, stimulus) = {
             let mut slot = self.slot.lock_unpoisoned();
             if slot.id != id || slot.phase != PhaseRecord::Complete {
                 return Err("CleanupPendingOrUnknownCapture".into());
@@ -126,7 +165,7 @@ impl Host {
             let records = slot.records.take().ok_or("MissingRecorder")?;
             slot.export_attempt = attempt;
             slot.phase = PhaseRecord::Exporting;
-            (records, attempt)
+            (records, attempt, slot.stimulus)
         };
         let name = format!("measurement-{id}-{attempt}.json");
         let temporary = format!("{name}.partial");
@@ -150,7 +189,7 @@ impl Host {
             let mut file = unsafe { File::from_raw_fd(fd) };
             // External coupling has NOT been calibrated. The recorder reports
             // commanded ADC attenuation separately; neither is LP700 RF power.
-            let json = format!("{{\"format\":\"saturn-live-measurement-envelope-v1\",\"id\":{id},\"frequencyHz\":{},\"feedbackInput\":\"rx-bypass\",\"externalCouplingDb\":null,\"lp700Measurement\":null,\"rfImdQualified\":false,\"measurement\":{}}}\n", self.frequency_hz, records.export_json());
+            let json = format!("{{\"format\":\"saturn-live-measurement-envelope-v1\",\"id\":{id},\"frequencyHz\":{},\"feedbackInput\":\"rx-bypass\",\"requestedStimulus\":{},\"externalCouplingDb\":null,\"lp700Measurement\":null,\"rfImdQualified\":false,\"measurement\":{}}}\n", self.frequency_hz, stimulus_json(stimulus), records.export_json());
             file.write_all(json.as_bytes())?;
             file.sync_all()?;
             let target = std::ffi::CString::new(name.as_str())?;
@@ -182,6 +221,18 @@ impl Host {
                 Err(format!("ExportIo:{:?}", error.kind()))
             }
         }
+    }
+}
+pub(crate) fn stimulus_json(stimulus: super::feedback_owner::Stimulus) -> String {
+    if stimulus == super::feedback_owner::Stimulus::Timing {
+        format!("{{\"version\":\"{}\",\"seed\":{},\"pcmRateHz\":48000,\"repeatMs\":1000,\"components\":32,\"lowHz\":400,\"highHz\":2600,\"componentPeakCeiling\":0.4,\"evidence\":\"requested browser waveform, not verified RF\",\"twoToneImdAvailable\":false}}", stimulus.label(), 0x53465031u32)
+    } else if stimulus == super::feedback_owner::Stimulus::NativeTwoTone {
+        "{\"version\":\"wdsp-postgen-two-tone-v1\",\"source\":\"WDSP gen1 after voice DSP, before IQC\",\"toneHz\":[700,1900],\"generatorMagnitudePerTone\":0.48,\"pcmRole\":\"fresh tagged zero-input keepalive, not tone audio\",\"evidence\":\"requested native waveform, not verified RF\"}".into()
+    } else {
+        format!(
+            "{{\"version\":\"{}\",\"evidence\":\"requested browser waveform, not verified RF\"}}",
+            stimulus.label()
+        )
     }
 }
 pub(crate) struct Ticket {
@@ -250,7 +301,7 @@ impl Ticket {
         let Ok(Some(records)) = life.take_measurement_records() else {
             return false;
         };
-        let count = records.records().len();
+        let count = records.recorded_blocks();
         slot.records = Some(records);
         slot.phase = PhaseRecord::Complete;
         drop(slot);
@@ -316,6 +367,15 @@ pub(crate) mod tests {
         slot.records = Some(finished_recorder());
     }
     #[test]
+    fn raw_remains_the_default_and_long_summary_requires_explicit_host_selection() {
+        let raw = Host::open(&directory(), 7_200_000).unwrap();
+        assert_eq!(raw.capture_mode.label(), "raw");
+        assert_eq!(raw.capture_mode.max_duration_ms(), 1000);
+        let summary = Host::open_mode(&directory(), 7_200_000, CaptureMode::SummaryOnly).unwrap();
+        assert_eq!(summary.capture_mode.label(), "summary-only");
+        assert_eq!(summary.capture_mode.max_duration_ms(), 45000);
+    }
+    #[test]
     fn evidence_directory_requires_private_absolute_nonsymlink_path_and_sampler_band() {
         let path = directory();
         assert!(Host::open(Path::new("relative"), 7_200_000).is_err());
@@ -355,6 +415,23 @@ pub(crate) mod tests {
         assert!(json.contains("\"terminalFault\":\"Stale\""));
         assert_eq!(std::fs::metadata(filename).unwrap().mode() & 0o777, 0o600);
         assert!(h.export(1).is_err());
+    }
+    #[test]
+    fn timing_export_preserves_requested_identity_after_cleanup_without_claiming_rf() {
+        let h = Host::open(&directory(), 7_200_000).unwrap();
+        complete(&h, 1);
+        h.slot.lock_unpoisoned().stimulus = super::super::feedback_owner::Stimulus::Timing;
+        let json = std::fs::read_to_string(h.export(1).unwrap()).unwrap();
+        for field in [
+            "\"version\":\"saturn-timing-multisine-v1\"",
+            "\"repeatMs\":1000",
+            "\"pcmRateHz\":48000",
+            "\"twoToneImdAvailable\":false",
+            "\"rfImdQualified\":false",
+            "requested browser waveform, not verified RF",
+        ] {
+            assert!(json.contains(field), "{field}");
+        }
     }
     #[test]
     fn failed_export_preserves_records_and_never_overwrites_previous_evidence() {

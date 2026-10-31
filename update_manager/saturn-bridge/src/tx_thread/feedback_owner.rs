@@ -5,6 +5,29 @@ use crate::tx_owner_stop::OutputStamp;
 use saturn_bridge::puresignal::{Fault, Fence};
 use std::sync::{Arc, Mutex};
 
+/// Requested stimulus, not proof of the signal observed in returned samples.
+/// Travels in the same generation-specific scope as feedback acquisition.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Stimulus {
+    #[default]
+    Unspecified,
+    TwoTone,
+    NativeTwoTone,
+    AmCarrier,
+    Timing,
+}
+impl Stimulus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::TwoTone => "two-tone-700-1900",
+            Self::NativeTwoTone => "wdsp-postgen-two-tone-v1",
+            Self::AmCarrier => "am-silent-carrier",
+            Self::Timing => "saturn-timing-multisine-v1",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Scope {
     pub(crate) fence: Fence,
@@ -12,6 +35,7 @@ pub(crate) struct Scope {
     pub(crate) frequency_hz: u32,
     pub(crate) attenuation_db: u8,
     pub(crate) output: OutputStamp,
+    pub(crate) stimulus: Stimulus,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Request {
@@ -118,6 +142,7 @@ pub(crate) mod tests {
             route: 1,
             frequency_hz: 7_200_000,
             attenuation_db: 9,
+            stimulus: Stimulus::Unspecified,
             output: OutputStamp {
                 generation,
                 revision: generation,

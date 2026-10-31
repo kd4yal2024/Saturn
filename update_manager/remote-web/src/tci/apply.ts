@@ -20,6 +20,7 @@ import {
   clampRxNbThreshold,
   clampRxVolumeDb,
   clampTxDriveWatts,
+  clampTxMicGainDb,
   clampTwoToneDelayMs,
   clampTwoToneFreqHz,
   clampTwoToneLevelDb,
@@ -71,6 +72,11 @@ function describeTxFault(args: readonly string[]): string {
       return `Uplink late ${Math.round(actual)} ms > ${Math.round(limit)} ms`;
     }
     return 'Uplink late';
+  }
+
+  if (['shared_config', 'shared_ingress', 'psg1'].includes(String(argAt(args, 1)))) {
+    const detail = String(argAt(args, 2) ?? '').trim();
+    return `Bridge fault: ${reason.replace(/[_-]+/g, ' ')}${detail ? ` (${detail})` : ''}`;
   }
 
   return `Bridge fault: ${reason.replace(/[_-]+/g, ' ') || 'TX fault'}`;
@@ -293,6 +299,11 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_drive') {
     const value = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (value != null) next.txDrive = clampTxDriveWatts(value);
+  } else if (command.name === 'tx_mic_gain') {
+    const value = numericArg(argAt(args, 1));
+    if (args.length === 2 && argAt(args, 0) === '0' && value != null && Number.isFinite(value)) {
+      next.txMicGainDb = clampTxMicGainDb(value);
+    }
   } else if (command.name === 'remote_tx_rf_enabled' || command.name === 'tx_rf_enabled') {
     const enabled = booleanArg(argAt(args, 1) ?? argAt(args, 0) ?? trailingArg(args));
     if (enabled != null) next.remoteTxRfEnabled = enabled;
@@ -469,6 +480,13 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'tx_cfc_band' && args.length >= 3) {
     const parsed = parseBandGain(args);
     if (parsed) next.cfcBands[parsed.band] = Math.max(0, Math.min(20, parsed.gain));
+  } else if (command.name === 'tx_two_tone_result') {
+    if (args.length === 5 && args[0] === '0' && ['true', 'false'].includes(args[1]!)
+      && ['accepted', 'rejected'].includes(args[2]!) && /^[A-Za-z]{1,40}$/.test(args[3]!)
+      && ['true', 'false'].includes(args[4]!)) {
+      next.twoToneEnabled = args[4] === 'true';
+      next.twoToneHostResult = `${args[2]}: ${args[3]} (configuration only; RF unverified)`;
+    }
   } else if (command.name === 'tx_two_tone') {
     next.twoToneEnabled = booleanArg(argAt(args, 1) ?? argAt(args, 0)) === true;
   } else if (command.name === 'tx_two_tone_freq1') {

@@ -19,6 +19,16 @@ use super::*;
 
 #[derive(Clone, Debug)]
 pub(crate) enum OutboundMessage {
+    #[cfg(feature = "managed-puresignal")]
+    PsCorrection {
+        text: Arc<str>,
+        enqueued: Instant,
+    },
+    #[cfg(feature = "managed-puresignal")]
+    RfSpectrum {
+        text: Arc<str>,
+        enqueued: Instant,
+    },
     Text(String),
     SafetyText(String),
     #[cfg(feature = "offline-puresignal-owner-adapters")]
@@ -89,6 +99,8 @@ pub(crate) enum IqDropReason {
 impl OutboundMessage {
     pub(crate) fn class(&self) -> OutboundClass {
         match self {
+            #[cfg(feature = "managed-puresignal")]
+            Self::RfSpectrum { .. } | Self::PsCorrection { .. } => OutboundClass::Display,
             Self::Close => OutboundClass::Safety,
             Self::SafetyText(_) => OutboundClass::Safety,
             Self::Text(_) => OutboundClass::Control,
@@ -104,6 +116,8 @@ impl OutboundMessage {
 
     pub(crate) fn estimated_bytes(&self) -> usize {
         match self {
+            #[cfg(feature = "managed-puresignal")]
+            Self::RfSpectrum { text, .. } | Self::PsCorrection { text, .. } => text.len(),
             Self::Close => 0,
             Self::Text(text) | Self::SafetyText(text) => text.len(),
             #[cfg(feature = "offline-puresignal-owner-adapters")]
@@ -551,6 +565,7 @@ pub(crate) struct OutboundQueues {
     pub(crate) audio: VecDeque<QueuedOutbound>,
     pub(crate) full_rate_iq: VecDeque<QueuedOutbound>,
     pub(crate) display: Option<QueuedOutbound>,
+    pub(crate) native_display: Option<QueuedOutbound>,
     pub(crate) queued_bytes: usize,
     pub(crate) audio_queued_frames: usize,
     pub(crate) audio_sequence: u32,
@@ -568,6 +583,7 @@ impl Default for OutboundQueues {
             audio: VecDeque::new(),
             full_rate_iq: VecDeque::new(),
             display: None,
+            native_display: None,
             queued_bytes: 0,
             audio_queued_frames: 0,
             audio_sequence: 0,
@@ -658,6 +674,16 @@ impl ClientOutbound {
         }
 
         let item = QueuedOutbound::new(message);
+        #[cfg(feature = "managed-puresignal")]
+        if matches!(item.message, OutboundMessage::PsCorrection { .. }) {
+            queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+            if let Some(old) = queues.native_display.replace(item) {
+                queues.queued_bytes = queues.queued_bytes.saturating_sub(old.estimated_bytes);
+                self.stats.record_display_replaced();
+            }
+            self.stats.record_high_watermark(queues.queued_bytes);
+            return 0;
+        }
         match item.class {
             OutboundClass::Safety => {
                 if let Some(key) = safety_coalesce_key(&item.message) {
@@ -823,6 +849,8 @@ impl ClientOutbound {
                 Some(item)
             } else if let Some(item) = queues.full_rate_iq.pop_front() {
                 Some(item)
+            } else if let Some(item) = queues.native_display.take() {
+                Some(item)
             } else {
                 self.take_display_locked(&mut queues)
             }
@@ -909,6 +937,17 @@ impl ClientOutbound {
 
     pub(crate) fn requeue_front(&self, item: QueuedOutbound) {
         let mut queues = self.queues.lock_unpoisoned();
+        #[cfg(feature = "managed-puresignal")]
+        if matches!(item.message, OutboundMessage::PsCorrection { .. }) {
+            // A newer diagnostic snapshot wins over an unwritten old one.
+            if queues.native_display.is_none() {
+                queues.queued_bytes = queues.queued_bytes.saturating_add(item.estimated_bytes);
+                queues.native_display = Some(item);
+            } else {
+                self.stats.record_display_dropped();
+            }
+            return;
+        }
         #[cfg(feature = "offline-puresignal-owner-adapters")]
         if matches!(item.message, OutboundMessage::TransactionText(_)) {
             // One writer may have a permitted reply in flight while producers
@@ -1198,6 +1237,12 @@ pub(crate) fn queued_bytes_without_audio(queues: &OutboundQueues) -> usize {
         .as_ref()
         .map(|item| item.estimated_bytes)
         .unwrap_or(0);
+    let display = display
+        + queues
+            .native_display
+            .as_ref()
+            .map(|item| item.estimated_bytes)
+            .unwrap_or(0);
     let full_rate_iq = queues
         .full_rate_iq
         .iter()
@@ -1242,8 +1287,9 @@ pub(crate) fn client_wants_outbound_message(
     // browser-side adapter as a protocol violation.
     //
     // While TX media priority is active, binary RX (IQ + audio) is additionally
-    // suppressed on the media lane to give uplink mic frames sole ownership of
-    // the media TCP send buffer. The bridge derives this from TX intent/armed/
+    // suppressed on the media lane to protect uplink mic traffic. Bounded TX
+    // baseband display frames remain available, not full-rate RX or feedback.
+    // The bridge derives this from TX intent/armed/
     // keyed state; when it returns to false the suppression lifts automatically.
     //
     // Before the in-band session_lane command arrives, the lane declared by
@@ -1257,15 +1303,24 @@ pub(crate) fn client_wants_outbound_message(
         .or(client.state.connect_lane_hint);
     match message {
         OutboundMessage::Close => true,
+        #[cfg(feature = "managed-puresignal")]
+        OutboundMessage::RfSpectrum { .. } | OutboundMessage::PsCorrection { .. } => {
+            lane != Some(SplitSocketKind::Media)
+        }
         OutboundMessage::Text(_) | OutboundMessage::SafetyText(_) => {
             lane != Some(SplitSocketKind::Media)
         }
         #[cfg(feature = "offline-puresignal-owner-adapters")]
         OutboundMessage::TransactionText(_) => lane != Some(SplitSocketKind::Media),
-        OutboundMessage::IqFrame { .. } | OutboundMessage::TxIqFrame { .. } => {
+        OutboundMessage::IqFrame { .. } => {
             lane != Some(SplitSocketKind::Control)
                 && client.state.iq_stream_enabled
                 && !tx_media_priority_active
+        }
+        OutboundMessage::TxIqFrame { .. } => {
+            lane != Some(SplitSocketKind::Control)
+                && client.state.iq_stream_enabled
+                && tx_media_priority_active
         }
         // A WAN spectrum client never also receives the full-rate stream it
         // opted out of; every other client keeps raw IQ byte-for-byte.
@@ -1492,6 +1547,14 @@ pub(crate) fn send_outbound<S: io::Read + io::Write>(
 ) -> Result<(), WsError> {
     match message {
         OutboundMessage::Close => websocket.send(Message::Close(None)),
+        #[cfg(feature = "managed-puresignal")]
+        OutboundMessage::RfSpectrum { text, enqueued }
+        | OutboundMessage::PsCorrection { text, enqueued } => {
+            if enqueued.elapsed() > Duration::from_millis(250) {
+                return Ok(());
+            }
+            websocket.send(Message::Text(text.to_string().into()))
+        }
         OutboundMessage::Text(text) | OutboundMessage::SafetyText(text) => {
             websocket.send(Message::Text(text.clone().into()))
         }

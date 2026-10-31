@@ -6,6 +6,106 @@ use saturn_bridge::puresignal::{tx_lifecycle::StopCause, Fence};
 use std::{net::UdpSocket, sync::atomic::AtomicBool, thread};
 
 #[test]
+fn am_silent_source_keys_both_adapters_but_absent_or_stale_source_does_not() {
+    use crate::radio_model::DemodMode;
+    use crate::tci::ps_authorization::OperatorIngress;
+    for direct in [false, true] {
+        for source in [None, Some(0), Some(1_000_000_000)] {
+            let d = DirectFixture::with_key_clock();
+            d.fifo_ready();
+            let (session, _hp, _duc) = p2_separate_lanes();
+            let (mut iq, mut mic) = queues();
+            let mut m = model();
+            m.desired.mode = DemodMode::Am;
+            m.desired.tx_drive = 5;
+            let backend = if direct {
+                Backend::DirectXdma
+            } else {
+                Backend::P2
+            };
+            let mut owner = if direct {
+                OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap()
+            } else {
+                OwnerStopAdapter::p2(session, &m, &mut iq, &mut mic).unwrap()
+            };
+            owner.enable_offline_handoff(&m, 5).unwrap();
+            let r = request(backend, 1);
+            owner.begin_stop(r).unwrap();
+            let mut stopped = false;
+            for _ in 1..200 {
+                if owner.poll_stop(1).unwrap().is_some() {
+                    stopped = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert!(stopped);
+            owner.cleanup_complete(1, r.fence).unwrap();
+            let ingress = OperatorIngress::fixture();
+            let credential = ingress
+                .receive(7, "trx:0,true", 0, r.fence, owner.ready_revision().unwrap())
+                .unwrap();
+            let action = owner.authorize(credential).unwrap();
+            owner.begin_arm(action, 1).unwrap();
+            let stamp = owner.output_stamp().unwrap();
+            if let Some(observed) = source {
+                owner.note_source(stamp, observed).unwrap();
+            }
+            let mut keyed = false;
+            for i in 0..35 {
+                let now = 1_001_000_000 + i * 1_000_000;
+                owner.set_test_key_time(now);
+                if !owner.has_iq_packet() {
+                    owner.enqueue_mic(stamp, now, &[0.; 512]).unwrap();
+                    assert!(owner.take_mic(stamp).unwrap().iter().all(|v| *v == 0.));
+                    owner.enqueue_iq(stamp, now, &[0.353553; 480]).unwrap();
+                }
+                if owner.poll_key(now).unwrap().is_some() {
+                    keyed = true;
+                    break;
+                }
+            }
+            assert_eq!(
+                keyed,
+                source == Some(1_000_000_000),
+                "direct={direct} source={source:?}"
+            );
+            owner.begin_stop(request(backend, 2)).unwrap();
+            let mut stopped = false;
+            for _ in 0..200 {
+                if owner.poll_stop(2).unwrap().is_some() {
+                    stopped = true;
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            assert!(stopped);
+            assert!(
+                owner.note_source(stamp, 240_000_000).is_err(),
+                "old source cannot cross cancellation"
+            );
+            assert!(owner.queues_empty());
+            if direct {
+                d.assert_off();
+            }
+        }
+    }
+}
+
+#[test]
+fn direct_uses_fifo_backpressure_while_p2_retains_udp_packet_clock() {
+    let fixture = DirectFixture::new();
+    let (mut iq, mut mic) = queues();
+    let owner = OwnerStopAdapter::direct(fixture.radio.clone(), &mut iq, &mut mic).unwrap();
+    assert_eq!(owner.iq_period_ns(), 0);
+    drop(owner);
+    let (session, _) = p2();
+    let model = model();
+    let owner = OwnerStopAdapter::p2(session, &model, &mut iq, &mut mic).unwrap();
+    assert_eq!(owner.iq_period_ns(), 1_250_000);
+}
+
+#[test]
 fn close_publishes_closed_and_revision_together_before_paused_reopen() {
     use std::sync::mpsc;
     let fence = Arc::new(OutputFence::new_open_for_offline_trial());
@@ -535,7 +635,7 @@ fn release_cancels_grant_and_stale_receipts_cannot_reopen_output() {
 #[test]
 fn direct_authenticated_generation_preserves_normal_mic_and_iq_gates() {
     use crate::tci::ps_authorization::OperatorIngress;
-    let d = DirectFixture::new();
+    let d = DirectFixture::with_key_clock();
     d.fifo_ready();
     let mut m = model();
     m.desired.tx_drive = 5;
@@ -568,6 +668,7 @@ fn direct_authenticated_generation_preserves_normal_mic_and_iq_gates() {
     }
     let mut keyed = false;
     for n in 10..24 {
+        d.radio.set_test_key_time(n * 1_000_000);
         owner.enqueue_mic(stamp, n, &[0.2; 512]).unwrap();
         owner.take_mic(stamp).unwrap();
         if owner.pending_iq.is_empty() {

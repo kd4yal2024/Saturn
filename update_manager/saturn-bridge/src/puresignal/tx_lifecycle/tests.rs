@@ -7,6 +7,7 @@ use authority_fixture::*;
 
 #[derive(Default)]
 struct NativeTrace {
+    release_on_configure: Option<ReleaseHandle>,
     measurement_disabled: bool,
     measurement_guard_fault: bool,
     events: Vec<&'static str>,
@@ -23,6 +24,9 @@ impl NativePs for Native {
         assert!(self.1.borrow().output_inhibited);
         self.0.borrow_mut().events.push("configure");
         self.0.borrow_mut().measurement_disabled = !c.enabled && !c.automatic;
+        if let Some(release) = self.0.borrow_mut().release_on_configure.take() {
+            release.release();
+        }
         Ok(c.requested_delay_seconds)
     }
     fn measurement_only_guard(&mut self) -> Result<(), Fault> {
@@ -161,6 +165,83 @@ fn ready(l: &mut Life) -> u64 {
     l.reconfigure(l.fence(), cfg(10), 1).unwrap();
     off(l, 1)
 }
+#[test]
+fn idle_bypass_updates_reuse_completed_cleanup_but_retire_old_authority() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        let (mut l, n, a) = make(backend);
+        let mut c = cfg(10);
+        c.enabled = false;
+        c.automatic = false;
+        l.reconfigure(l.fence(), c, 1).unwrap();
+        let mut now = off(&mut l, 1);
+        let stop = l.status().stop_id;
+        let cleaned = n
+            .borrow()
+            .events
+            .iter()
+            .filter(|e| **e == "begin-cleanup")
+            .count();
+        let old = l.fence();
+        for id in 11..1011 {
+            c.id = id;
+            now += 1;
+            l.reconfigure(l.fence(), c, now).unwrap();
+            assert_eq!(l.status().phase, Phase::ReadyOff);
+            assert_eq!(l.status().stop_id, stop);
+            assert_eq!(l.fence().config, id);
+            assert!(a.borrow().output_inhibited);
+        }
+        assert_ne!(l.fence(), old);
+        assert_eq!(
+            n.borrow()
+                .events
+                .iter()
+                .filter(|e| **e == "begin-cleanup")
+                .count(),
+            cleaned
+        );
+        assert_eq!(l.reconfigure(old, c, now), Err(Fault::GenerationMismatch));
+        // A concurrent release is serviced before another idle configuration.
+        l.release_handle().release();
+        now += 1;
+        l.reconfigure(l.fence(), c, now).unwrap();
+        assert_ne!(l.status().phase, Phase::ReadyOff);
+        off(&mut l, now);
+        assert!(l.status().stop_id > stop);
+        assert_eq!(l.status().primary_fault, None);
+    }
+}
+#[test]
+fn idle_bypass_update_services_release_during_configure_and_preserves_native_faults() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for cancel in [true, false] {
+            let (mut l, n, a) = make(backend);
+            let mut c = cfg(10);
+            c.enabled = false;
+            c.automatic = false;
+            l.reconfigure(l.fence(), c, 1).unwrap();
+            let now = off(&mut l, 1);
+            let stop = l.status().stop_id;
+            c.id = 11;
+            if cancel {
+                n.borrow_mut().release_on_configure = Some(l.release_handle());
+                l.reconfigure(l.fence(), c, now + 1).unwrap();
+                assert_eq!(l.status().primary_fault, None);
+            } else {
+                n.borrow_mut().info[14] = 1; // quiescence is no longer verified
+                assert_eq!(
+                    l.reconfigure(l.fence(), c, now + 1),
+                    Err(Fault::NativeFailure)
+                );
+                assert_eq!(l.status().primary_fault, Some(Fault::NativeFailure));
+            }
+            assert_ne!(l.status().phase, Phase::ReadyOff);
+            assert!(l.status().stop_id > stop);
+            assert!(a.borrow().output_inhibited);
+            off(&mut l, now + 1);
+        }
+    }
+}
 fn key(l: &mut Life, sequence: u64, now: u64) -> u64 {
     l.fresh_tx_action(
         FreshTxAction {
@@ -193,6 +274,7 @@ fn block(l: &Life, now: u64, missing: bool) -> PairBlock {
         },
         observed_ns: now,
         sequence: Some(0),
+        sequence_packets: 1,
         overload: [None; 3],
     };
     b
@@ -218,6 +300,58 @@ fn measurement_ready(l: &mut Life) -> u64 {
     l.reconfigure(l.fence(), config, 1).unwrap();
     off(l, 1)
 }
+#[test]
+fn explicit_bypass_requires_disabled_native_and_fresh_authority_without_adaptation() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        let (mut enabled, _, _) = make(backend);
+        let enabled_now = ready(&mut enabled);
+        assert_eq!(
+            enabled.fresh_bypass_tx_action(
+                FreshTxAction {
+                    sequence: 1,
+                    release_ticket: enabled.status().release_handled,
+                    expected_fence: enabled.fence()
+                },
+                enabled_now
+            ),
+            Err(Fault::InvalidConfig)
+        );
+        let (mut l, n, _) = make(backend);
+        let now = measurement_ready(&mut l);
+        let action = FreshTxAction {
+            sequence: 1,
+            release_ticket: l.status().release_handled,
+            expected_fence: l.fence(),
+        };
+        assert_eq!(l.fresh_tx_action(action, now), Err(Fault::InvalidConfig));
+        n.borrow_mut().measurement_guard_fault = true;
+        assert_eq!(
+            l.fresh_bypass_tx_action(action, now),
+            Err(Fault::NativeFailure)
+        );
+        n.borrow_mut().measurement_guard_fault = false;
+        assert_eq!(
+            l.fresh_bypass_tx_action(
+                FreshTxAction {
+                    expected_fence: Default::default(),
+                    ..action
+                },
+                now
+            ),
+            Err(Fault::GenerationMismatch)
+        );
+        l.fresh_bypass_tx_action(action, now).unwrap();
+        l.tick(now + 1).unwrap();
+        assert_eq!(l.status().phase, Phase::Active);
+        l.pump(now + 2).unwrap();
+        assert_eq!(n.borrow().processed, 0);
+        assert!(!n.borrow().events.contains(&"mox-on"));
+        l.release_handle().release();
+        off(&mut l, now + 2);
+        assert_eq!(l.status().phase, Phase::ReadyOff);
+        assert_eq!(l.status().mode, RunMode::Correction);
+    }
+}
 fn measurement_key(l: &mut Life, duration: u64, capacity: usize, now: u64) -> u64 {
     l.fresh_measurement_action(
         FreshTxAction {
@@ -238,6 +372,7 @@ fn measurement_block(l: &Life, backend: Backend, now: u64) -> PairBlock {
     let mut b = block(l, now, false);
     b.meta.backend = backend;
     b.meta.sequence = (backend == Backend::P2).then_some(0);
+    b.meta.sequence_packets = if backend == Backend::P2 { 1 } else { 0 };
     b.arrival_times_recorded = true;
     b.arrival_ns.fill(now);
     b
@@ -551,6 +686,7 @@ fn periodic_ticks_stop_established_correction_when_feedback_ceases() {
         let mut b = block(&l, now + 1, false);
         b.meta.backend = backend;
         b.meta.sequence = (backend == Backend::P2).then_some(0);
+    b.meta.sequence_packets = if backend == Backend::P2 { 1 } else { 0 };
         l.submit(&b, now + 1).unwrap();
         assert_eq!(l.pump(now + 1), Ok(1));
         assert_eq!(l.status().correction_applied, Some(true));

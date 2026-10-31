@@ -340,8 +340,11 @@ bridge_runtime_backend() {
 }
 
 read_xdma_ready_counters() {
-  python3 - "$XDMA_READY_FILE" <<'PY'
+  local main_pid
+  main_pid="$(systemctl show --property=MainPID --value "$BRIDGE_SERVICE")"
+  python3 - "$XDMA_READY_FILE" "$main_pid" <<'PY'
 import json
+import re
 import sys
 import time
 
@@ -350,17 +353,35 @@ try:
         value = json.load(handle)
     metrics = value["metrics"]
     updated_at_ms = int(value["updated_at_ms"])
-    dma_reads = int(metrics["dma_reads"])
-    iq_pairs = int(metrics["iq_pairs"])
+    shared = value.get("tx_owner") == "shared"
+    if shared:
+        host = value["shared_host"]
+        # This certifies operational receive/clean-idle progress ONLY. The
+        # shared owner's rf_safe=null and rf_qualified=false stay unchanged.
+        if (value.get("status") != "review-only"
+            or value.get("phase") != "shared-ready-off"
+            or value.get("rf_safe") is not None
+            or value.get("rf_qualified") is not False
+            or host.get("schema") != "shared-owner-v1"
+            or host.get("clean_idle") is not True
+            or host.get("receive_ready") is not True
+            or int(metrics["pid"]) != int(sys.argv[2]) or int(sys.argv[2]) <= 0
+            or not re.fullmatch(r"[0-9a-f]{64}", metrics.get("source_pin", ""))):
+            raise SystemExit(1)
+        dma_reads = int(host["rx_frames"])  # receive-progress counter, not DMA
+        iq_pairs = int(host["rx_iq_pairs"])
+    else:
+        if (value.get("status") != "ready" or value.get("rf_safe") is not True
+            or metrics.get("tx_capable") is not True):
+            raise SystemExit(1)
+        dma_reads = int(metrics["dma_reads"])
+        iq_pairs = int(metrics["iq_pairs"])
 except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
     raise SystemExit(1)
 
 age_ms = int(time.time() * 1000) - updated_at_ms
 if (
     value.get("backend") != "xdma"
-    or value.get("status") != "ready"
-    or value.get("rf_safe") is not True
-    or metrics.get("tx_capable") is not True
     or dma_reads < 4
     or iq_pairs < 1024
     or age_ms < -1000

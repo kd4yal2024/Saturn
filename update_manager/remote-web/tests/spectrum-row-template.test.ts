@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as spectrumRow from '../src/transport/spectrum-row';
+import * as txDisplay from '../src/dsp/tx-display';
 import { displaySpanHz, shiftBinsHorizontally, visibleBinsForDisplay } from '../src/dsp/display';
 
 const template = readFileSync(
@@ -134,7 +135,7 @@ function makeHarness(options: {
   const opusFrames: number[] = [];
   const iqFrames: number[] = [];
   const sandbox: Record<string, unknown> = {
-    _next: spectrumRow,
+    _next: { ...spectrumRow, ...txDisplay },
     state: {
       connected: true,
       bridgeReady: true,
@@ -248,7 +249,7 @@ function makeHarness(options: {
         };
       }
     }
-    sandbox._next = { ...spectrumRow, RxSpectrumAccumulator: FakeAccumulator, rxSpectrumSettingsMatch: () => true };
+    sandbox._next = { ...spectrumRow, ...txDisplay, RxSpectrumAccumulator: FakeAccumulator, rxSpectrumSettingsMatch: () => true };
     sandbox.$ = (id: string) =>
       (elements[id] ??= { textContent: '', disabled: false, hidden: false, value: '30' });
     sandbox.fftProcessor = { size: 2048 };
@@ -583,7 +584,7 @@ function makeDrawHarness() {
     terrainActive: false,
   };
   const sandbox: Record<string, unknown> = {
-    _next: spectrumRow,
+    _next: { ...spectrumRow, ...txDisplay },
     state,
     // The template has a one-arg wrapper over the two-arg helper.
     visibleBinsForDisplay: (bins: Float32Array | null) => visibleBinsForDisplay(bins, Number(state.displayZoom)),
@@ -1045,7 +1046,8 @@ describe('RX Measure readiness needs fresh raw RX IQ from this connection', () =
     h.api.handleBinaryFrame(iqFrame(3));
     h.api.handleBinaryFrame(iqFrame(3));
     await settle(300);
-    expect(h.state.iqFrameVersion).toBe(2);
+    // There is no active TX: late TX frames are now rejected altogether.
+    expect(h.state.iqFrameVersion).toBe(0);
     expect(h.state.rxIqFrameVersion).toBe(0);
     expect(status(h)).not.toContain('Capturing');
     h.api.handleBinaryFrame(iqFrame(0));

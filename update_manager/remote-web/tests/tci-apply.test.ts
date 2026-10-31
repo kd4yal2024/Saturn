@@ -139,6 +139,25 @@ function createState(): TciRadioState {
 }
 
 describe('applyTciText', () => {
+  it('uses committed microphone gain readback, including a genuine zero', () => {
+    let state = createState();
+    state.txMicGainDb = 0;
+    state = applyTciText('tx_mic_gain:0,-12.0;', state).state;
+    expect(state.txMicGainDb).toBe(-12);
+    state = applyTciText('tx_mic_gain:0,0.0;', state).state;
+    expect(state.txMicGainDb).toBe(0);
+    for (const value of ['NaN', 'Infinity', '']) {
+      expect(applyTciText(`tx_mic_gain:0,${value};`, state).state.txMicGainDb).toBe(0);
+    }
+    expect(applyTciText('tx_mic_gain:1,-12;', state).state.txMicGainDb).toBe(0);
+    expect(applyTciText('tx_mic_gain:0,-12,extra;', state).state.txMicGainDb).toBe(0);
+  });
+  it('preserves managed rejection details rather than displaying only their category', () => {
+    for (const [category, reason] of [['shared_config', 'GenerationMismatch'], ['shared_ingress', 'InvalidConfig'], ['psg1', 'WrongFormat']]) {
+      const result = applyTciText(`tx_fault:0,${category},${reason};`, createState());
+      expect(result.txFault).toBe(`Bridge fault: ${category!.replaceAll('_', ' ')} (${reason})`);
+    }
+  });
   it('acknowledges G2 MON independently of transmit and bounds its level', () => {
     const initial = createState();
     const { state } = applyTciText('tx_monitor_supported:0,true;tx_monitor:0,true;tx_monitor_level:0,-24;', initial);
@@ -463,6 +482,16 @@ describe('applyTciText', () => {
     expect(result.state.twoToneEnabled).toBe(true);
     expect(result.state.txTwoToneFreq1).toBe(850);
     expect(result.state.txTwoToneLevelDb).toBe(-6);
+  });
+  it('shows explicit two-tone acceptance/rejection without creating PTT authority', () => {
+    let state=applyTciText('tx_two_tone_result:0,true,accepted,Configured,true;',createState()).state;
+    expect(state.twoToneEnabled).toBe(true);expect(state.twoToneHostResult).toContain('configuration only');
+    expect(state.txEnabled).toBe(false);expect(state.txPhase).toBe('rx');
+    state=applyTciText('tx_two_tone_result:0,true,rejected,OwnerUnavailable,false;',state).state;
+    expect(state.twoToneEnabled).toBe(false);expect(state.twoToneHostResult).toContain('rejected: OwnerUnavailable');
+    const original=state.twoToneHostResult;
+    state=applyTciText('tx_two_tone_result:0,true,accepted,<script>,true;',state).state;
+    expect(state.twoToneHostResult).toBe(original);expect(state.twoToneEnabled).toBe(false);
   });
 
   it('updates NB3, DEXP, speech processor, and CESSB controls', () => {

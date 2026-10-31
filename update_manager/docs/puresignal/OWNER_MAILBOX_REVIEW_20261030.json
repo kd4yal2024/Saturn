@@ -1,0 +1,27 @@
+{
+  "format": "saturn-owner-mailbox-review-v1",
+  "status": "offline candidate, not installed",
+  "motivation": "Active TX queue receive must not wait for an ingress producer paused mid-enqueue. This is not an established diagnosis of the preserved historical RF queue faults.",
+  "sourceReference": "https://doc.rust-lang.org/src/std/sync/mpmc/array.rs.html",
+  "consumer": "try_lock once; contention returns temporary Empty, never Full/Disconnected and never discards/restamps a message. Exactly one non-Sync receiver.",
+  "producer": "Serialized, preallocated deque push; no I/O, sample processing, formatting, callbacks or payload destruction under the production lock. Producer enqueue can wait for its short queue mutex; it is not a wait-free producer API. Owner-local bootstrap enqueues only before RF.",
+  "capacity": "Unchanged: commands 16, audio 16, feedback FEEDBACK_QUEUE_BLOCKS=16. Existing original-age watchdogs, overload policy, output fences and fault latch unchanged.",
+  "regressions": [
+    "FIFO/capacity with original timestamps",
+    "Last sender closes only after pending messages drain",
+    "Paused producer cannot hold consumer receive",
+    "Receiver close during paused enqueue rejects original envelope",
+    "Payload destruction outside queue lock",
+    "Actual scheduled owner release/stop receipt/native cleanup while production feedback queue producer stays paused"
+  ],
+  "nativeIntegration": [
+    "PS-off two-tone through actual run_inner, both backend fixtures",
+    "Auto release/re-arm through actual run_inner, both backend fixtures",
+    "Sustained Auto, two 15-second generations per backend, actual run_inner, real WDSP"
+  ],
+  "limits": [
+    "No new ARM execution or live RF yet for this candidate.",
+    "This bounds consumer queue acquisition only; it does not claim the entire TX call graph is wait-free.",
+    "Historical live QueueOverrun and browser timing failures remain preserved and open pending investigation."
+  ]
+}

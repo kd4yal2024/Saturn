@@ -20,7 +20,7 @@ describe('responsive radio control context', () => {
     expect(template).toContain('rail.appendChild(rightRail)');
     expect(template).toContain('applyControlContext(controlContext)');
     expect(template).toContain('txPanel.hidden = context !== "tx"');
-    expect(template).toContain('audioStrip.hidden = context === "tx"');
+    expect(template).toContain('audioStrip.hidden = context === "tx" || context === "ps"');
     expect(template).toContain('control.hidden = control.dataset.controlContext !== context');
   });
 
@@ -35,5 +35,14 @@ describe('responsive radio control context', () => {
   it('persists a separate UI context preference', () => {
     expect(template).toContain('saturn.remote.controlContext');
     expect(template).toContain('normalizeRadioControlContext(value)');
+  });
+  it('places PS immediately after TX in the main rail, with one moved settings surface', () => {
+    expect(template).toContain('const contexts = ["rx", "dsp", "tx", "ps"]');
+    expect(template).toContain('$("ps-control-body").appendChild(psControls)');
+    expect(template).toContain('rail.appendChild(psPanel)');
+    expect(template).toContain('psPanel.hidden = context !== "ps"');
+    expect(template.match(/id="setup-tx-puresignal-enabled"/g)).toHaveLength(1);
+    expect(template.match(/id="ps-control-panel"/g)).toHaveLength(1);
+    expect(template).toContain('role="tabpanel" aria-labelledby="control-tab-ps"');
   });
 });

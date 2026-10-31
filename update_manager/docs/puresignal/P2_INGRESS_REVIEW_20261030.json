@@ -1,0 +1,142 @@
+{
+  "format": "saturn-p2-ingress-review-v1",
+  "status": "Controlled P2 CM4 bench sequence passed with explicit P2 audio runtime profile; production qualification remains scoped",
+  "originalFailure": {
+    "sourcePin": "433ca92f9f3300484b3d3964813051b41a915d34b8e41d0ee7417fc51beaa113",
+    "twoPsOffRunsStopped": "SequenceGap at about 27 / 23 seconds",
+    "missingPacketObservedAtLoopback": true,
+    "observerKernelDrops": 0,
+    "bridgeSocketDrops": {
+      "before": 1271,
+      "after": 1274
+    },
+    "p2CorrectionAttempted": false
+  },
+  "change": {
+    "sharedP2SocketReceiveBufferRequestedBytes": 524288,
+    "observedLinuxEffectiveBytes": 1048576,
+    "timestamping": "SO_TIMESTAMPING RX_SOFTWARE + SOFTWARE; no SO_TIMESTAMP[NS] dequeue fallback",
+    "startup": "Private loopback timestamp readiness probe, no radio commands",
+    "clock": "Lifetime realtime/monotonic anchor, reject shifts/uncertain mapping beyond 5 ms; subtract 5 ms from observation as conservative uncertainty",
+    "ingressAge": "Kernel network-stack arrival retained through socket queue; no userspace-now fallback",
+    "display": "Existing IQ packetizer batches full 192 kS/s into 6400-pair frames; old throttling published only individual 238-pair packets",
+    "p2FeedbackBatch": {
+      "packets": 8,
+      "pairs": 952,
+      "queuedBlocks": 16,
+      "queuePayloadMs": 79.3333,
+      "wireSequence": "First wire sequence plus explicit sequencePackets span; each UDP packet checked before assembly; controller validates span and wrap",
+      "ages": "Original per-packet timestamps copied for every pair; oldest retained; incomplete batch discarded on cancellation or fault",
+      "overload": "Packet-local evidence cannot certify wider batch; unknown preserved"
+    },
+    "acquisitionActivity": "Every consumed UDP datagram, including ignored 64-sample microphone packets, is work; timeout alone is idle. Removes about 750 unnecessary sleeps/second.",
+    "queueRetirement": "Bounded 256-datagram drain yields and continues on following turns; preparation/restoration completion requires an empty queue."
+  },
+  "unchanged": [
+    "Packet sequence/duplicate/reordering fault admission",
+    "150 ms feedback freshness deadline",
+    "Generation fences and source watchdog",
+    "Release/disconnect, stop receipt and native cleanup",
+    "WDSP correction engine and TX owner",
+    "Firmware, driver, RXC1 arm and polling",
+    "Normal TX ceiling and RF permission"
+  ],
+  "software": {
+    "libraryTestsPassed": 82,
+    "managedBinaryTestsPassed": 659,
+    "explicitNativeTestsIgnoredByOrdinarySuite": 51,
+    "armSelectedCasesPassed": 17,
+    "armLogsIndependentlyHashVerified": true,
+    "independentArmBuildsMatch": true,
+    "webAssetsUnchanged": true,
+    "pythonEvidenceTestsPassedOnPriorBatchCandidate": 8
+  },
+  "primaryReference": "https://docs.kernel.org/networking/timestamping.html",
+  "qualification": {
+    "controlledP2BenchPassed": true,
+    "rfImdCalibrated": false,
+    "physicalShutdownLatencyQualified": false,
+    "allBandsAndPowerLevelsQualified": false,
+    "productionInstallerComplete": false
+  },
+  "evidence": "Downloads/Saturn_PS_P2_Test_20261030_jvslrgfo",
+  "ingressOnlyCandidateSourcePin": "97f52ce96d68a1d567d6c6f8bf519c96f8df9580e11b456903be53177825220d",
+  "sourcePin": "367232aa55b68226ff8141e8b0d3551ac70ce9889cf2798fed6c490454656f7e",
+  "stressEvidence": {
+    "x86SustainedAutoWhileCrossBuildsRunning": "Direct audio-ingress QueueOverrun, completed cleanup; original failure retained",
+    "isolatedRepeat": "Two corrected generations per backend passed; not broad load qualification"
+  },
+  "instrumentLogger": {
+    "source": "Local Windows HID passive reader; original QPC completion timestamps",
+    "publication": "Dedicated reader plus bounded diagnostic archive queue and independent read-only memory loopback stream",
+    "staleLimitMs": 1000,
+    "diagnosticDrops": "Explicit counters; no USB queue flush, instrument settings or radio commands",
+    "clock": "Windows QPC verified against Node hrtime / .NET Stopwatch; no subprocess timing uncertainty during TX"
+  },
+  "binarySha256": "d0564e2536b74d4537670aaf08aeec594fbd9bc9e354ae29f9e26f08856e9b00",
+  "finalBench": {
+    "frequencyHz": 7200000,
+    "commandedWatts": 5,
+    "cases": 9,
+    "passed": true,
+    "autoFits": 27,
+    "singleFits": 1,
+    "backend": "P2",
+    "lpMedianRangeW": [
+      4.2,
+      4.4
+    ],
+    "lpSwrTypical": 1.46,
+    "results": "APP_RT_BENCH_RESULTS.json",
+    "relativeImdOnly": true
+  },
+  "runtimeProfile": {
+    "installed": true,
+    "scope": "Existing CM4 P2 audio thread scheduling only; runtime trial profile",
+    "path": "/run/systemd/system/p2app.service.d/70-puresignal-cm4-audio-runtime.conf",
+    "profileSha256": "d7b708bbce25a7c7b5256c481dd65bb45d10bcd43df5916a4f22d5b3691dbe0a",
+    "previousConfigurationBackup": "/var/lib/saturn-state/ps-trial-backups/p2-tested-runtime-before-6pzuz1no",
+    "runtimeEnvironment": {
+      "SATURN_P3_RT_AUDIO_ENABLE": "1",
+      "SATURN_P3_RT_AUDIO_POLICY": "rr",
+      "SATURN_P3_RT_AUDIO_PRIORITY": "10",
+      "SATURN_P3_RT_AUDIO_CPUS": "2"
+    },
+    "allOtherP2EnvironmentPreserved": true,
+    "directBridgePidUnchanged": 1457021,
+    "p2AppRemainsInactiveUntilSelected": true,
+    "rfPermissionPowerSettingsChanged": false,
+    "firmwareDriverPollingChanged": false,
+    "pttCommandsSent": 0,
+    "clearsOnReboot": true,
+    "rollback": "Remove this drop-in and daemon-reload while off; restart P2 through the existing broker if selected."
+  },
+  "finalState": {
+    "backend": "Direct XDMA",
+    "ps": "Off / ReadyOff",
+    "p2": "Available, inactive until selected",
+    "receiveVerified": true,
+    "powerCeilingUnchangedWatts": 100,
+    "rfPermissionPreserved": true
+  },
+  "p2AppSchedulingFinding": {
+    "original": "P2 app default audio scheduling discarded TX-IQ frames while keyed, even though UDP sequence gaps and DMA errors stayed zero. Spectrum confidence checks sometimes rejected windows.",
+    "bridgeOwnerOnlyExperiment": "Temporary FIFO/21 CPU3 on Bridge owner did not eliminate P2 app queue discards; original experiment retained.",
+    "successfulProfile": "Existing P2 app v52 RR/10 audio mode on CPU2; Bridge scheduling unchanged.",
+    "binaryUnchanged": {
+      "pid": 1452043,
+      "path": "/opt/saturn/releases/3f6c0d3c9aef2d4255f9bc19ee6ec1673d5030d3/bin/p2app",
+      "sha256": "20c64235efa71397408f49171cd23d61898a837ac775485b6a6042f2d7159d14"
+    },
+    "reportedCriticalCountersZeroAcrossFinalRuns": true,
+    "scope": "Explicit CM4 trial settings; not a universal scheduler default."
+  },
+  "sourcePaths": {
+    "receiveActivity": "update_manager/saturn-bridge/src/p2/session.rs: P2Session::recv_outcome; shared_backend.rs acquisition_wait",
+    "retirement": "update_manager/saturn-bridge/src/p2/managed_feedback.rs: service_managed_layout",
+    "kernelIngress": "update_manager/saturn-bridge/src/p2/ingress.rs",
+    "pairedBatching": "update_manager/saturn-bridge/src/tx_thread/feedback_stream.rs",
+    "batchSequenceContract": "update_manager/saturn-bridge/src/puresignal/controller.rs and mod.rs",
+    "optionalRuntimeProfile": "update_manager/release/puresignal-p2-profile/p2-cm4-audio-runtime.conf"
+  }
+}

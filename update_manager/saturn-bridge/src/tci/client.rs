@@ -493,20 +493,49 @@ pub(crate) fn handle_client(
                         .position(|m| m == "ready;")
                         .unwrap_or(snapshot.len());
                     snapshot.insert(ready_at, s.remote_media_caps().into());
+                    snapshot.insert(ready_at, s.ps_control_caps());
+                    if let Some(caps) = s.auto_mode_caps() {
+                        snapshot.insert(ready_at, caps.into());
+                    }
+                    snapshot.insert(ready_at, s.drive_limit_message());
+                    snapshot.insert(ready_at, "saturn_ps_manual_attenuation_caps:0,rx-off-ordered-v1;".into());
+                    snapshot.insert(ready_at, s.arm_policy_message());
+                    snapshot.insert(ready_at, "saturn_tx_fault_ack_caps:0,stop-fence-v1;".into());
+                    snapshot.insert(
+                        ready_at,
+                        "saturn_ps_native_two_tone_caps:0,wdsp-postgen-two-tone-v1;".into(),
+                    );
+                    if let Some(caps) = s.two_tone_caps() {
+                        snapshot.insert(ready_at, caps);
+                    }
                     if let Some(owner) = s.owner_status_message() {
                         snapshot.insert(ready_at + 1, owner);
                     }
                     snapshot.insert(
                         ready_at + 1,
                         format!(
-                            "saturn_ps_measurement_caps:0,{},{},rx-bypass,{},{},{};",
+                            "saturn_ps_measurement_caps:0,{},{},rx-bypass,{},{},{},{};",
                             s.measurement_only_mode(),
-                            crate::tx_thread::ps_measurement::MAX_DURATION_MS,
+                            s.measurement_duration_ms(),
                             env!("SATURN_BRIDGE_SOURCE_PIN"),
                             env!("SATURN_BRIDGE_WDSP_ARCHIVE_SHA256"),
-                            s.measurement_frequency_hz()
+                            s.measurement_frequency_hz(),
+                            s.measurement_capture_mode()
                         ),
                     );
+                    if s.measurement_only_mode() {
+                        snapshot.insert(
+                            ready_at + 1,
+                            "saturn_ps_stimulus_caps:0,saturn-timing-multisine-v1;".into(),
+                        );
+                        snapshot.insert(
+                            ready_at + 1,
+                            format!(
+                                "saturn_ps_measurement_mic_gain_db:0,{};",
+                                crate::wdsp::ps_native::MEASUREMENT_MIC_GAIN_DB
+                            ),
+                        );
+                    }
                 }
                 let drops = enqueue_initial_snapshot(&outbound, snapshot);
                 drop_count.fetch_add(drops, Ordering::Relaxed);
@@ -787,7 +816,13 @@ pub(crate) fn unregister_client(
     if was_operator {
         if let Some((&next_operator, _)) = clients
             .iter()
-            .find(|(_, client)| client.state.operator_eligible && !client_is_split_media(client))
+            .find(|(_, client)| {
+                client.state.operator_eligible
+                    && !client_is_split_media(client)
+                    && client.state.connect_lane_hint != Some(SplitSocketKind::Media)
+                    && client.state.split.as_ref().and_then(|split| split.role)
+                        != Some(TciClientRole::Viewer)
+            })
         {
             operator_client_id.store(next_operator, Ordering::SeqCst);
             promoted_operator = Some(next_operator);
@@ -1155,7 +1190,10 @@ pub(crate) fn handle_incoming_message_shared(
     let received_at = Instant::now();
     let capture = shared.capture(received_at);
     if let Message::Text(ref text) = message {
-        if shared.measurement_message(client, text.as_ref(), capture.as_ref()) {
+        if shared.fault_ack_message(client, text.as_ref(), capture.as_ref())
+            || shared.measurement_message(client, text.as_ref(), capture.as_ref())
+            || shared.two_tone_message(client, text.as_ref(), capture.as_ref())
+        {
             return true;
         }
     }

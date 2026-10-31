@@ -1,4 +1,4 @@
-export const RADIO_CONTROL_CONTEXTS = ['rx', 'dsp', 'tx'] as const;
+export const RADIO_CONTROL_CONTEXTS = ['rx', 'dsp', 'tx', 'ps'] as const;
 
 export type RadioControlContext = (typeof RADIO_CONTROL_CONTEXTS)[number];
 

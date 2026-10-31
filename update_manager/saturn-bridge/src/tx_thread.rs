@@ -38,6 +38,8 @@ pub(crate) mod ps_owner_loop;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod ps_owner_queue;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod owner_mailbox;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
 mod satp_provenance;
 mod scheduler;
 
@@ -54,7 +56,9 @@ pub(crate) const TX_KEY_MIC_PEAK_THRESHOLD: f32 = 0.005;
 /// If the operator stops speaking, the gate closes after this window,
 /// preventing stale mic detection from allowing RF keying on WDSP residuals.
 const TX_MIC_RECENCY_WINDOW: Duration = Duration::from_millis(500);
-const TX_DISPLAY_DUC_PACKETS_PER_FRAME: usize = 4;
+// One contiguous 20 ms window (3840 complex samples) for each display frame.
+// The frontend rate-limits snapshots; the browser must not concatenate gaps.
+const TX_DISPLAY_DUC_PACKETS_PER_FRAME: usize = 16;
 const TX_ZERO_IQ_LOG_INTERVAL: Duration = Duration::from_millis(500);
 const DEFAULT_TX_WATCHDOG: Duration = Duration::from_secs(180);
 const MIN_TX_WATCHDOG: Duration = Duration::from_secs(3);
@@ -84,6 +88,9 @@ pub type TxRadioResult = Result<(), String>;
 /// the same arm, mic/IQ, watchdog, unkey, and diagnostics logic while changing
 /// only how radio configuration and DUC IQ reach the FPGA.
 pub trait TxRadio: Send + Sync {
+    fn signal_capture(&self) -> Option<crate::tx_signal_capture::Producer> {
+        None
+    }
     /// Optional local headphone monitor. Implementations must never block TX.
     fn monitor_iq(&self, _iq: &[f32], _mode: crate::radio_model::DemodMode) {}
     fn stop_monitor(&self) {}
@@ -248,6 +255,21 @@ pub(crate) fn can_key_rf(rf_enabled: bool, iq_peak: f32, mic_recent: bool, two_t
     duc_iq_packet_can_key_rf(rf_enabled, iq_peak) && (mic_recent || two_tone)
 }
 
+/// AM/SAM intentionally carry RF during silence. An authorized arm still
+/// requires a live input source and nonzero native IQ; zero-fill alone must
+/// not manufacture source liveness. SSB/DSB retain speech-level qualification.
+pub(crate) fn key_source_qualified(
+    mode: crate::radio_model::DemodMode,
+    voiced_recent: bool,
+    source_recent: bool,
+) -> bool {
+    voiced_recent
+        || (matches!(
+            mode,
+            crate::radio_model::DemodMode::Am | crate::radio_model::DemodMode::Sam
+        ) && source_recent)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct KeyQualification {
     required: usize,
@@ -303,6 +325,8 @@ pub enum TxCommand {
     #[cfg(feature = "offline-puresignal-owner-adapters")]
     #[allow(dead_code)] // stamped configuration; no live producer selects it
     PureSignalOwnerConfig(Box<ps_owner_loop::Configuration>),
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    PureSignalFaultAck(ps_ingress::FaultAck),
     /// PTT released — unkey, send stop burst, deactivate WDSP.
     Disarm,
     PureSignalFeedback {
@@ -619,7 +643,7 @@ fn cancellation_check(
     CancellationCheck::Undetermined
 }
 
-fn run(
+pub(crate) fn run(
     session: Arc<dyn TxRadio>,
     radio_model: Arc<Mutex<RadioModel>>,
     cmd_rx: Receiver<TxCommand>,
@@ -633,6 +657,10 @@ fn run(
         let model = radio_model.lock_unpoisoned();
         WdspTxEngine::new(&model)
     };
+    let capture = session.signal_capture();
+    wdsp_tx.set_signal_capture(capture.clone());
+    #[cfg(feature = "managed-puresignal")]
+    let mut correction_poll = crate::correction_monitor::Poller::new();
 
     let mic_block_period = Duration::from_secs_f64(TX_MIC_SAMPLES_PER_DSP_BLOCK as f64 / 48_000.0);
     let duc_packet_period = duc_iq_packet_period();
@@ -742,6 +770,9 @@ fn run(
                     rf_enabled: arm_rf_enabled,
                 }) => {
                     if state == TxState::Idle {
+                        if let Some(p) = &capture {
+                            p.begin();
+                        }
                         state = TxState::Armed;
                         rf_enabled = arm_rf_enabled;
                         let now = Instant::now();
@@ -761,6 +792,9 @@ fn run(
                                 "saturn-bridge: TX native WDSP channel recreated for clean arm"
                             );
                         }
+                        // Startup-settling blocks are deliberately discarded,
+                        // not the running WDSP output diagnostic window.
+                        wdsp_tx.set_signal_capture(None);
                         wdsp_tx.set_active(true);
                         {
                             let model = radio_model.lock_unpoisoned();
@@ -771,6 +805,7 @@ fn run(
                             }
                         }
                         settle_wdsp_tx(&mut wdsp_tx, startup_settle_blocks);
+                        wdsp_tx.set_signal_capture(capture.clone());
                         if startup_settle_blocks != 0 {
                             println!(
                                 "saturn-bridge: TX startup filters settled with {} zero-input WDSP blocks",
@@ -833,6 +868,7 @@ fn run(
                 #[cfg(feature = "offline-puresignal-owner-adapters")]
                 Ok(TxCommand::PureSignalAuthorizedArm(_))
                 | Ok(TxCommand::MeasurementOnly(_))
+                | Ok(TxCommand::PureSignalFaultAck(_))
                 | Ok(TxCommand::PureSignalOwnerConfig(_)) => {
                     // This legacy native owner has NOT been migrated. Never
                     // fall back to Arm, create a second native owner or key on
@@ -1291,10 +1327,9 @@ fn run(
                     first_keyable_iq_at = Some(Instant::now());
                 }
 
-                if state == TxState::Armed {
-                    // Always publish TX IQ to the browser display, even
-                    // before keying — the operator should see the TX
-                    // spectrum as soon as MOX is armed.
+                {
+                    // Publish each contiguous chunk exactly once, including
+                    // the armed -> keyed transition. Display only, not RF proof.
                     for packet in chunk.chunks_exact(floats_per_packet) {
                         let packet_peak = packet
                             .iter()
@@ -1308,7 +1343,8 @@ fn run(
                             packet,
                         );
                     }
-
+                }
+                if state == TxState::Armed {
                     let mic_recent = last_keyable_mic_at
                         .map(|t| t.elapsed() < keyable_mic_window)
                         .unwrap_or(false);
@@ -1344,7 +1380,15 @@ fn run(
                     // AMSQ gate leakage when the operator is not speaking.
                     // Two-tone bypasses the mic check since it generates signal
                     // internally via PostGen.
-                    let can_key = can_key_rf(rf_enabled, peak, mic_recent, two_tone);
+                    let mode = wdsp_tx.monitor_mode();
+                    let source_recent = first_mic_audio_at.is_some()
+                        && last_mic_audio_at.elapsed() < keyable_mic_window;
+                    let can_key = can_key_rf(
+                        rf_enabled,
+                        peak,
+                        key_source_qualified(mode, mic_recent, source_recent),
+                        two_tone,
+                    );
                     let key_is_qualified = key_qualification.observe(can_key);
                     if !key_is_qualified {
                         if last_zero_iq_log_at.elapsed() >= TX_ZERO_IQ_LOG_INTERVAL {
@@ -1466,19 +1510,6 @@ fn run(
                 );
                 }
 
-                for packet in chunk.chunks_exact(floats_per_packet) {
-                    let packet_peak = packet
-                        .iter()
-                        .fold(0.0f32, |current, sample| current.max(sample.abs()));
-                    maybe_publish_tx_iq_display(
-                        &event_tx,
-                        &mut tx_display_buffer,
-                        &mut tx_display_peak,
-                        tx_display_frame_floats,
-                        packet_peak,
-                        packet,
-                    );
-                }
                 if !chunk_consumed_on_key {
                     // The transition packet is consumed by try_key_with_iq().
                     // Every later keyed packet uses the steady-state path.
@@ -1547,6 +1578,12 @@ fn run(
             audio_stats.mark_pipeline_idle();
         }
 
+        #[cfg(feature = "managed-puresignal")]
+        if let Some(input) = correction_poll.due() {
+            if let Ok(model) = radio_model.try_lock() {
+                wdsp_tx.observe_correction(&input, &model, state == TxState::Keyed);
+            }
+        }
         scheduler::Turn::Continue {
             worked: did_work,
             active: state != TxState::Idle,
@@ -1819,6 +1856,13 @@ fn do_unkey(
     event_tx: &Sender<TxEvent>,
     prev_state: TxState,
 ) {
+    if let Some(p) = session.signal_capture() {
+        p.event(
+            saturn_bridge::signal_diagnostics::Event::StopRequested,
+            None,
+        );
+    }
+    radio_model.lock_unpoisoned().desired.two_tone_enabled = false;
     session.stop_monitor();
     wdsp_tx.set_puresignal_mox(false);
     wdsp_tx.set_active(false);
@@ -1922,6 +1966,31 @@ mod tests {
 
         // IQ above threshold + both — key
         assert!(can_key_rf(true, iq_hi, true, true));
+    }
+
+    #[test]
+    fn am_silence_requires_live_source_but_not_speech() {
+        use crate::radio_model::DemodMode::*;
+        for mode in [Am, Sam] {
+            assert!(key_source_qualified(mode, false, true));
+            assert!(!key_source_qualified(mode, false, false));
+            assert!(!can_key_rf(
+                false,
+                0.5,
+                key_source_qualified(mode, false, true),
+                false
+            ));
+            assert!(!can_key_rf(
+                true,
+                0.,
+                key_source_qualified(mode, false, true),
+                false
+            ));
+        }
+        for mode in [Usb, Lsb, Dsb, DigU, DigL, Cwu, Cwl, Fm, Wfm, Unknown] {
+            assert!(!key_source_qualified(mode, false, true), "{mode:?}");
+            assert!(key_source_qualified(mode, true, true));
+        }
     }
 
     #[test]
