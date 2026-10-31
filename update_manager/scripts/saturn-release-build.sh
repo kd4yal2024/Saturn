@@ -58,6 +58,19 @@ load_puresignal_build_profile(){
 load_puresignal_build_profile
 
 
+verify_puresignal_build(){
+  local source="$1" binary="$2"
+  # Old binaries without the early read-only identity command must never be
+  # executed speculatively: they might otherwise enter radio startup.
+  if [[ ! -f "$source/update_manager/saturn-bridge/src/native_build_info.rs" ]] \
+    || ! grep -Fq -- '--native-build-info' "$source/update_manager/saturn-bridge/src/main.rs"; then
+    die "selected source has no read-only PureSignal build identity"
+  fi
+  "$binary" --native-build-info \
+    | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["productionManagedWiring"] == "opt-in-review" and v["wdspVersion"]==210 and not v["stubNative"], "Persistent PS profile requires a matched managed WDSP build"'
+}
+
+
 usage(){
   cat <<'EOF'
 Usage: saturn-release-build.sh [--output-root DIR] [--dry-run] [--expect-commit COMMIT]
@@ -251,6 +264,9 @@ build_resolved_remote_source(){
     "$SOURCE_WORKTREE/update_manager/scripts/saturn-release-build.sh" "${child_args[@]}"
   child_rc="$?"
   set -e
+  if (( child_rc == 0 && ! DRY_RUN )) && [[ "${SATURN_BRIDGE_MANAGED_PURESIGNAL:-0}" == "1" ]]; then
+    verify_puresignal_build "$SOURCE_WORKTREE" "$OUTPUT_ROOT/$RESOLVED_SOURCE_COMMIT/bin/saturn-bridge" || return 1
+  fi
   return "$child_rc"
 }
 
@@ -407,8 +423,7 @@ build_release_components(){
   fi
 
   if [[ "${SATURN_BRIDGE_MANAGED_PURESIGNAL:-0}" == "1" ]] && (( ! DRY_RUN )); then
-    "$REPO_ROOT/update_manager/saturn-bridge/target-local/staged/saturn-bridge" --native-build-info \
-      | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["productionManagedWiring"] != "not-built" and v["wdspVersion"]==210 and not v["stubNative"], "Persistent PS profile requires a matched managed WDSP build"'
+    verify_puresignal_build "$REPO_ROOT" "$REPO_ROOT/update_manager/saturn-bridge/target-local/staged/saturn-bridge"
   fi
 
   log "Building Protocol 2 and normal-release native tools"
