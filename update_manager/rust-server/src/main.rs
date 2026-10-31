@@ -3279,7 +3279,11 @@ fn bridge_perf_file_telemetry(
             "app": "saturn-bridge",
             "state": {
                 "sdr_active": sdr_active,
-                "tx_mode": boolean("tx_keyed").unwrap_or(false),
+                "tx_mode": if document.get("tx_owner").and_then(serde_json::Value::as_str) == Some("shared") {
+                    boolean("tx_keyed")
+                } else {
+                    Some(boolean("tx_keyed").unwrap_or(false))
+                },
             },
             "gauges": {
                 "bridge": metrics_value,
@@ -5287,6 +5291,37 @@ mod tests {
 
     async fn consume_request_body(_body: Bytes) -> StatusCode {
         StatusCode::NO_CONTENT
+    }
+
+    #[test]
+    fn shared_owner_receive_observations_satisfy_the_existing_app_gate() {
+        let path = std::env::temp_dir().join(format!("saturn-shared-perf-{}.json", std::process::id()));
+        std::fs::write(&path, r#"{
+            "schema_version":1,"updated_at_ms":10000,"source":"saturn-bridge",
+            "backend":"xdma","phase":"shared-ready-off","status":"review-only",
+            "rf_safe":null,"rf_qualified":false,"tx_owner":"shared",
+            "shared_host":{"clean_idle":true,"receive_ready":true,"rx_frames":100,"rx_iq_pairs":44800},
+            "metrics":{"pid":42,"client":1,"connections":2,"iq":1,"audio":1,
+                "ddc_s":100.0,"frequency_hz":7200000,"sample_rate_hz":384000,"ddc":6,"adc":0,
+                "tx_keyed":false,"tx_stream":false,"legacy_performance_available":false}
+        }"#).unwrap();
+        let telemetry = bridge_perf_file_telemetry(&path, Some(42), 11_000).unwrap();
+        assert_eq!(telemetry["snapshot_readable"], true);
+        assert_eq!(telemetry["pid_matches_service"], true);
+        assert_eq!(telemetry["current"]["state"]["sdr_active"], true);
+        assert_eq!(telemetry["current"]["state"]["tx_mode"], false);
+        let observed = &telemetry["current"]["gauges"]["bridge"];
+        assert_eq!(observed["connections"], 2);
+        assert_eq!(observed["frequency_hz"], 7200000);
+        assert_eq!(observed["legacy_performance_available"], false);
+        assert!(telemetry["current"]["fpga"]["firmware_version"].is_null());
+        // A stop in progress cannot be converted into an RF-off assertion.
+        let document = std::fs::read_to_string(&path).unwrap()
+            .replace("\"tx_keyed\":false", "\"tx_keyed\":null");
+        std::fs::write(&path, document).unwrap();
+        let stopping = bridge_perf_file_telemetry(&path, Some(42), 11_000).unwrap();
+        assert!(stopping["current"]["state"]["tx_mode"].is_null());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

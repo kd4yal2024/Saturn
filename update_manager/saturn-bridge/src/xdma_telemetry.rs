@@ -240,11 +240,44 @@ pub(crate) fn record_shared_host_status(
     rx_frames: u64,
     rx_iq_pairs: u64,
 ) -> io::Result<()> {
+    record_shared_observed_host_status(path, backend, phase, counter_json, clean_idle, rx_frames, rx_iq_pairs, None)
+}
+
+/// Existing acquisition/TCI owners supply these observations. No extra device
+/// reader, invented DMA counters, or RF-off assertion is introduced here.
+pub(crate) struct SharedHostObservation<'a> {
+    pub model: &'a crate::radio_model::RadioModel,
+    pub clients: &'a crate::tci::TciClientSnapshot,
+    pub ddc_per_second: f64,
+}
+
+pub(crate) fn record_shared_observed_host_status(
+    path: &Path,
+    backend: &str,
+    phase: &str,
+    counter_json: Option<String>,
+    clean_idle: bool,
+    rx_frames: u64,
+    rx_iq_pairs: u64,
+    observation: Option<&SharedHostObservation<'_>>,
+) -> io::Result<()> {
+    let observed = observation.map(|o| {
+        let d = &o.model.desired;
+        // ReadyOff follows completed stop/cleanup; Active follows the backend
+        // key receipt. In transitional/failed phases key state stays unknown.
+        // Neither receipt is a physical RF measurement (rf_safe stays null).
+        let key = if clean_idle { "false" } else if phase == "shared-keyed" { "true" } else { "null" };
+        let stream = if clean_idle { "false" } else if matches!(phase, "shared-keyed" | "shared-armed") { "true" } else { "null" };
+        format!(",\"frequency_hz\":{},\"sample_rate_hz\":{},\"ddc\":{},\"adc\":{},\"connections\":{},\"client\":{},\"iq\":{},\"audio\":{},\"ddc_s\":{:.3},\"tx_keyed\":{},\"tx_stream\":{},\"tx_state_evidence\":\"shared-lifecycle-backend-receipt; physical RF unverified\"",
+            d.iq_center_hz, u32::from(d.ddc0_sample_rate_khz) * 1000, d.rx_ddc_index, d.ddc0_adc,
+            o.clients.active_connections, u8::from(o.clients.active), u8::from(o.clients.iq_stream_enabled),
+            u8::from(o.clients.audio_stream_enabled), o.ddc_per_second, key, stream)
+    }).unwrap_or_default();
     let host = format!("{{\"schema\":\"shared-owner-v1\",\"clean_idle\":{clean_idle},\"receive_ready\":{},\"rx_frames\":{rx_frames},\"rx_iq_pairs\":{rx_iq_pairs}}}",
         clean_idle && phase == "shared-ready-off" && rx_frames >= 4 && rx_iq_pairs >= 1024);
-    let document=format!("{{\"schema_version\":1,\"updated_at_ms\":{},\"source\":\"saturn-bridge\",\"backend\":{},\"status\":\"review-only\",\"tx_owner\":\"shared\",\"rf_safe\":null,\"rf_qualified\":false,\"phase\":{},\"metrics\":{{\"pid\":{},\"build_git_sha\":{},\"source_pin\":{},\"legacy_performance_available\":false,\"rx_counter_v31\":{}}}}}\n",
+    let document=format!("{{\"schema_version\":1,\"updated_at_ms\":{},\"source\":\"saturn-bridge\",\"backend\":{},\"status\":\"review-only\",\"tx_owner\":\"shared\",\"rf_safe\":null,\"rf_qualified\":false,\"phase\":{},\"metrics\":{{\"pid\":{},\"build_git_sha\":{},\"source_pin\":{},\"legacy_performance_available\":false,\"rx_counter_v31\":{}{}}}}}\n",
         unix_time_ms(),json_string(backend),json_string(phase),std::process::id(),json_string(env!("SATURN_BRIDGE_GIT_SHA")),
-        json_string(env!("SATURN_BRIDGE_SOURCE_PIN")),counter_json.unwrap_or_else(||"null".into()));
+        json_string(env!("SATURN_BRIDGE_SOURCE_PIN")),counter_json.unwrap_or_else(||"null".into()), observed);
     // The base schema remains unchanged; append an explicitly named host-only
     // readiness object rather than changing review-only/RF qualification.
     let document = format!(

@@ -68,6 +68,7 @@ struct Io {
     direct: bool,
     case: Case,
     address: std::net::SocketAddr,
+    perf_path: std::path::PathBuf,
     p2: Option<Arc<P2Fixture>>,
     normal_p2: Option<UdpSocket>,
     files: Option<DirectFixture>,
@@ -190,6 +191,7 @@ impl RuntimeIo for Io {
         self.link = Some(runtime.link.clone());
         let check_persistence = self.expected_rx.is_some();
         let direct = self.direct;
+        let perf_path = self.perf_path.clone();
         let dma_burst_complete = self.dma_burst_complete.clone();
         let output_packets = self.output_packets.clone();
         let (ingress, link, stop, stop_baseline, fail, joined, p2, address, case) = (
@@ -220,6 +222,7 @@ impl RuntimeIo for Io {
                     25
                 });
             let mut client: Option<Client> = None;
+            let mut connected_at = None;
             let mut wave = Wave::new();
             let mut next_mic = Instant::now();
             let mut next_feedback = Instant::now();
@@ -400,9 +403,11 @@ impl RuntimeIo for Io {
                         if case == Case::ReceiveSpectrum { c.text("saturn_display:spectrum,1024,50;"); }
                         c.text("iq_start:0;audio_start:0;");
                         client = Some(c);
+                        connected_at = Some(Instant::now());
                         stage = 1;
                     }
                     1 if (if case == Case::ReceiveSpectrum { client.as_ref().unwrap().spectrum_frames >= 2 } else { client.as_ref().unwrap().iq_frames > 0 })
+                        && (case != Case::ReceiveSpectrum || connected_at.unwrap().elapsed() >= Duration::from_millis(1500))
                         && client.as_ref().unwrap().audio_frames > 0
                         && (case != Case::ReceiveMeter
                             || client
@@ -420,7 +425,16 @@ impl RuntimeIo for Io {
                             client.as_ref().unwrap().audio_frames
                         );
                         if case == Case::ReceiveSpectrum {
-                            assert_eq!(client.as_ref().unwrap().iq_frames, 0, "WAN client must receive spectrum rows without raw-IQ fallback");
+                            let client = client.as_ref().unwrap();
+                            assert!(client.vfo_a_reports <= 3, "idle receive must not repeat full configuration snapshots: {} VFO reports", client.vfo_a_reports);
+                            assert!(client.rx_meter_dbm.len() >= 2, "periodic meter updates must continue");
+                            let perf = std::fs::read_to_string(&perf_path).unwrap();
+                            for field in ["\"connections\":1", "\"client\":1", "\"iq\":1", "\"audio\":1", "\"frequency_hz\":7200000", "\"tx_keyed\":false", "\"tx_stream\":false", "\"rf_safe\":null", "\"rf_qualified\":false"] {
+                                assert!(perf.contains(field), "missing actual shared-owner observation {field}: {perf}");
+                            }
+                            let rate = perf.split("\"ddc_s\":").nth(1).unwrap().split(',').next().unwrap().parse::<f64>().unwrap();
+                            assert!(rate.is_finite() && rate > 0.0);
+                            assert_eq!(client.iq_frames, 0, "WAN client must receive spectrum rows without raw-IQ fallback");
                             assert_eq!(status.phase, Phase::ReadyOff);
                             stop.store(true, Ordering::Release);
                             while !joined.load(Ordering::Acquire) { assert!(Instant::now()<end); thread::sleep(Duration::from_millis(1)); }
@@ -777,6 +791,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         direct,
         case,
         address,
+        perf_path: std::path::PathBuf::new(),
         p2: None,
         normal_p2: None,
         files: None,
@@ -810,6 +825,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
             .as_nanos()
     ));
     std::fs::create_dir(&directory).unwrap();
+    io.perf_path = directory.join("perf.json");
     let store = crate::rx_state::RxStateStore::new(directory.join("receive-state"));
     if persistent {
         let mut saved = crate::tx_owner_stop::tests::model();

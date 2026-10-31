@@ -379,7 +379,7 @@ impl fmt::Display for PureSignalState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DesiredRadioState {
     pub running: bool,
     pub tx_enabled: bool,

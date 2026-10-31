@@ -289,9 +289,11 @@ fn run_inner_with_state_store<I: RuntimeIo>(
     }
     io.started(&runtime, &frontend);
     let mut last_state = Instant::now();
+    let mut published_desired = None;
     let mut last_keepalive = Instant::now();
     let mut last_health = Instant::now();
     let mut last_status = Instant::now();
+    let mut status_rx_frames = 0u64;
     let mut iq = Vec::with_capacity(8192);
     let mut display_iq_packetizer = Some(crate::xdma_backend::DirectIqPacketizer::for_rate(
         config.ddc0_sample_rate_khz as u32 * 1000,
@@ -492,7 +494,15 @@ fn run_inner_with_state_store<I: RuntimeIo>(
         if last_state.elapsed() >= Duration::from_millis(200) {
             #[cfg(test)]
             let started = Instant::now();
-            frontend.publish_radio_state(&snapshot);
+            // Full settings are change notifications, not a meter heartbeat.
+            // Repeating the entire configuration while idle starves small
+            // browsers with hundreds of settings messages per second.
+            if published_desired.as_ref() != Some(&snapshot.desired) {
+                frontend.publish_radio_state(&snapshot);
+                published_desired = Some(snapshot.desired.clone());
+            } else {
+                frontend.publish_telemetry(&snapshot);
+            }
             #[cfg(test)]
             trace_step("publish-state", started);
             last_state = Instant::now();
@@ -509,9 +519,17 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             } else {
                 "p2"
             };
+            let clients = frontend.client_snapshot();
+            let ddc_per_second = (received_frames - status_rx_frames) as f64
+                / last_status.elapsed().as_secs_f64();
             for path in [ready, perf] {
                 let (phase, clean_idle) = runtime.ingress.host_readiness();
-                if let Err(error) = crate::xdma_telemetry::record_shared_host_status(
+                let observation = crate::xdma_telemetry::SharedHostObservation {
+                    model: &snapshot,
+                    clients: &clients,
+                    ddc_per_second,
+                };
+                if let Err(error) = crate::xdma_telemetry::record_shared_observed_host_status(
                     path,
                     label,
                     phase,
@@ -519,6 +537,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                     clean_idle && !stopping,
                     received_frames,
                     received_pairs,
+                    Some(&observation),
                 ) {
                     if terminal_error.is_none() {
                         terminal_error = Some(error.into());
@@ -527,6 +546,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                     stopping = true;
                 }
             }
+            status_rx_frames = received_frames;
             last_status = Instant::now();
             #[cfg(test)]
             trace_step("write-status", started);

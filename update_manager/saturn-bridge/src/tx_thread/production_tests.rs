@@ -19,6 +19,7 @@ pub(crate) struct Client {
     pub(crate) binary_frames: usize,
     pub(crate) iq_frames: usize,
     pub(crate) spectrum_frames: usize,
+    pub(crate) vfo_a_reports: usize,
     pub(crate) iq_pairs_per_frame: Vec<usize>,
     pub(crate) audio_frames: usize,
     pub(crate) rx_meter_dbm: Vec<f32>,
@@ -50,6 +51,7 @@ impl Client {
             binary_frames: 0,
             iq_frames: 0,
             spectrum_frames: 0,
+            vfo_a_reports: 0,
             iq_pairs_per_frame: Vec::new(),
             audio_frames: 0,
             rx_meter_dbm: Vec::new(),
@@ -87,6 +89,9 @@ impl Client {
                 }
                 Ok(Message::Text(text)) if text.starts_with("tx_config:") => {
                     self.transactions.push(text.to_string())
+                }
+                Ok(Message::Text(text)) if text.starts_with("vfo:0,0,") => {
+                    self.vfo_a_reports += 1;
                 }
                 Ok(Message::Text(text)) if text.starts_with("rx_smeter:0,0,") => {
                     self.rx_meter_dbm.push(
