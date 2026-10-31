@@ -19,3 +19,6 @@ update_manager/.saturngo-deploy-stage/
 update_manager/node_modules/
 update_manager/remote-web/node_modules/
 update_manager/remote-web/dist/
+# Cargo scratch/test fixtures used by the normal release builder.
+/update_manager/saturn-bridge/.tmp/
+/update_manager/rust-server/.tmp/
