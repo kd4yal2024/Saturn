@@ -223,6 +223,7 @@ impl RuntimeIo for Io {
                 });
             let mut client: Option<Client> = None;
             let mut connected_at = None;
+            let driver_started = Instant::now();
             let mut wave = Wave::new();
             let mut next_mic = Instant::now();
             let mut next_feedback = Instant::now();
@@ -391,7 +392,8 @@ impl RuntimeIo for Io {
                     auto_active_since.get_or_insert_with(Instant::now);
                 }
                 match stage {
-                    0 if ingress.startup_ready() => {
+                    0 if ingress.startup_ready()
+                        && (case != Case::ReceiveSpectrum || driver_started.elapsed() >= Duration::from_millis(500)) => {
                         // run_inner alone opens admission. No test-side admit.
                         let mut c = Client::open_unpaired(address);
                         if check_persistence {
@@ -428,6 +430,7 @@ impl RuntimeIo for Io {
                             let client = client.as_ref().unwrap();
                             assert!(client.vfo_a_reports <= 3, "idle receive must not repeat full configuration snapshots: {} VFO reports", client.vfo_a_reports);
                             assert!(client.rx_meter_dbm.len() >= 2, "periodic meter updates must continue");
+                            assert!(client.monitor_caps_reports > 0, "late clients must receive monitor capabilities without a configuration change");
                             let perf = std::fs::read_to_string(&perf_path).unwrap();
                             for field in ["\"connections\":1", "\"client\":1", "\"iq\":1", "\"audio\":1", "\"frequency_hz\":7200000", "\"tx_keyed\":false", "\"tx_stream\":false", "\"rf_safe\":null", "\"rf_qualified\":false"] {
                                 assert!(perf.contains(field), "missing actual shared-owner observation {field}: {perf}");

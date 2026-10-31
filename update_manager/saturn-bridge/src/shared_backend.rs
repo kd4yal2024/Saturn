@@ -501,6 +501,9 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                 frontend.publish_radio_state(&snapshot);
                 published_desired = Some(snapshot.desired.clone());
             } else {
+                // Late clients still need the small observer capability
+                // reports, without replaying every radio setting.
+                frontend.publish_observer_capabilities();
                 frontend.publish_telemetry(&snapshot);
             }
             #[cfg(test)]

@@ -713,7 +713,7 @@ impl TciFrontend {
         });
     }
 
-    pub fn publish_radio_state(&self, model: &RadioModel) {
+    pub(crate) fn publish_observer_capabilities(&self) {
         self.send_text(format!(
             "saturn_ps_correction_caps:{};",
             if self.correction_monitor_available.load(Ordering::Acquire) {
@@ -730,6 +730,10 @@ impl TciFrontend {
                 "unavailable"
             }
         ));
+    }
+
+    pub fn publish_radio_state(&self, model: &RadioModel) {
+        self.publish_observer_capabilities();
         self.send_text(format!("vfo:0,0,{};", model.desired.vfo_a_hz));
         self.send_text(format!("vfo:0,1,{};", model.desired.vfo_b_hz));
         self.send_text(format!(
