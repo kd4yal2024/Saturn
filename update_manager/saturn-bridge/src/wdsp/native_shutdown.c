@@ -71,11 +71,20 @@ int saturn_channel_shutdown_poll(int channel) {
         return 1;
     }
     if (!worker->stopping) {
+        /* dexchange exits its pthread when run is clear. Only clear it while
+         * holding csDSP, so a worker cannot exit with that mutex still held.
+         * A worker already waiting for csDSP observes exec_bypass after us. */
+        int busy = pthread_mutex_trylock(&ch[channel].csDSP);
+        if (busy) {
+            pthread_mutex_unlock(&saturn_workers_mutex);
+            return busy == EBUSY ? 0 : -1;
+        }
         InterlockedBitTestAndReset(&ch[channel].exchange, 0);
         InterlockedBitTestAndReset(&ch[channel].run, 0);
         InterlockedBitTestAndSet(&ch[channel].iob.pc->exec_bypass, 0);
         ReleaseSemaphore(ch[channel].iob.pc->Sem_BuffReady, 1, 0);
         worker->stopping = 1;
+        pthread_mutex_unlock(&ch[channel].csDSP);
     }
     int rc = pthread_tryjoin_np(worker->thread, NULL);
     if (!rc) worker->joined = 1;

@@ -12,16 +12,21 @@
 #define InterlockedBitTestAndReset(p,b) __sync_fetch_and_and(p,~(1L<<(b)))
 #define InterlockedBitTestAndSet(p,b) __sync_fetch_and_or(p,1L<<(b))
 typedef struct { volatile long exec_bypass; sem_t *Sem_BuffReady; } Iob;
-static struct { volatile long run, exchange; struct { Iob *pc; } iob; } ch[MAX_CHANNELS];
+static struct { volatile long run, exchange; pthread_mutex_t csDSP; struct { Iob *pc; } iob; } ch[MAX_CHANNELS];
 static void ReleaseSemaphore(sem_t *sem, int n, int unused) { (void)unused; while(n--) assert(!sem_post(sem)); }
 static pthread_mutex_t gate = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t changed = PTHREAD_COND_INITIALIZER;
 static int entered, may_exit, finished, frees, delegated;
 void wdspmain(void *arg) {
     int channel = (int)(uintptr_t)arg;
+    pthread_mutex_lock(&ch[channel].csDSP);
     pthread_mutex_lock(&gate);
     entered = 1; pthread_cond_broadcast(&changed);
     while(!may_exit) pthread_cond_wait(&changed, &gate);
+    pthread_mutex_unlock(&gate);
+    pthread_mutex_unlock(&ch[channel].csDSP);
+    assert(!sem_wait(ch[channel].iob.pc->Sem_BuffReady));
+    pthread_mutex_lock(&gate);
     assert(ch[channel].run == 0 && ch[channel].iob.pc->exec_bypass == 1);
     finished = 1;
     pthread_mutex_unlock(&gate);
@@ -34,6 +39,7 @@ void __real_CloseChannel(int channel) { (void)channel; assert(finished); frees++
 static void unrelated(void *arg) { (void)arg; }
 static void cycle(int channel, int wait_for_entry) {
     sem_t sem; assert(!sem_init(&sem, 0, 0)); Iob io = {0, &sem};
+    assert(!pthread_mutex_init(&ch[channel].csDSP,NULL));
     ch[channel].iob.pc=&io; ch[channel].run=ch[channel].exchange=1;
     entered=may_exit=finished=0; int before=frees;
     assert(__wrap__beginthread(wdspmain,0,(void *)(uintptr_t)channel)!=(HANDLE)-1);
@@ -44,11 +50,13 @@ static void cycle(int channel, int wait_for_entry) {
     /* Remain paused beyond the native CloseChannel's historical 25 ms. */
     usleep(50000);
     for(int i=0;i<50;i++) assert(saturn_channel_shutdown_poll(channel)==0);
+    if(wait_for_entry) assert(ch[channel].run == 1);
     assert(frees==before);
     pthread_mutex_lock(&gate); may_exit=1; pthread_cond_broadcast(&changed); pthread_mutex_unlock(&gate);
     int joined=0;
     for(int i=0;i<10000 && !joined;i++) { int s=saturn_channel_shutdown_poll(channel); assert(s>=0); joined=s; if(!joined) usleep(100); }
     assert(joined==1 && finished); __wrap_CloseChannel(channel); assert(frees==before+1);
+    assert(!pthread_mutex_destroy(&ch[channel].csDSP));
     assert(!sem_destroy(&sem));
 }
 int main(void) {
