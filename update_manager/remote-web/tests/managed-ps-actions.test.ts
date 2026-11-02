@@ -28,6 +28,36 @@ function fixture(capability = 'measurement-only', captureMode = 'raw') {
     advance: (ms: number) => { now += ms; session.tick(); } };
 }
 describe('explicit PS actions through the one managed owner', () => {
+  it('operator two-tone follows radio settings, runs until Stop, and retains release cleanup', async () => {
+    const h=fixture('single');
+    h.text('saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;saturn_ps_native_two_tone_caps:0,wdsp-postgen-two-tone-v1;');
+    expect(h.session.status().twoToneOperatorControlled).toBe(true);
+    expect(h.session.status().twoToneMaxWatts).toBe(100);
+    expect(h.session.startTwoTone(0,3897000,60,true)).toBe(true);
+    expect(h.controls.at(-1)).toBe('saturn_ps_two_tone:0,1,start,0,wdsp-postgen-two-tone-v1;');
+    h.text('saturn_ps_two_tone:0,1,queued;saturn_ps_two_tone:0,1,accepted;');h.offer();await settle();
+    h.input();
+    // Deliver fresh input before each service turn: elapsed TX time alone is
+    // not a timeout, whereas a dead source still has its original watchdog.
+    for(let n=0;n<2000;n++){h.advance(100);h.input();}
+    expect(h.session.status().phase).not.toBe('fault');
+    expect(h.session.status().twoToneActive).toBe(true);
+    h.session.release();h.input();expect(h.close).toHaveBeenCalledOnce();
+    expect(h.controls.at(-1)).toBe('trx:0,false;');
+    h.text('saturn_ps_two_tone:0,1,complete,none;saturn_tx_owner:shared,2,ReadyOff,3,11,tci,true,none;');
+    expect(h.session.status().twoToneActive).toBe(false);
+  });
+  it('operator capability does not bypass source loss, disconnect, or host power limits', async () => {
+    const h=fixture('single');
+    h.text('saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;');
+    expect(h.session.startTwoTone(0,27385000,101,true)).toBe(false);
+    expect(h.session.startTwoTone(90000,27385000,100,true)).toBe(true);
+    h.text('saturn_ps_two_tone:0,1,queued;saturn_ps_two_tone:0,1,accepted;');h.offer();await settle();
+    h.advance(600);expect(h.session.status().phase).toBe('fault');
+    expect(h.controls).toContain('trx:0,false;');h.session.disconnect();
+    expect(h.session.status().twoToneOperatorControlled).toBe(false);
+  });
+
   it('Auto is separately negotiated, settings-only, and cleared on disconnect', () => {
     const h=fixture('single');
     expect(h.session.preparePureSignalMode('auto')).toBe(false);

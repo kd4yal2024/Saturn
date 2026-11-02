@@ -37,6 +37,7 @@ struct Trace {
     renders: u64,
     nonzero_renders: u64,
     fits: u64,
+    ps_enabled: bool,
     models: Vec<i32>,
     cleanup: u64,
     keyed: bool,
@@ -1479,7 +1480,11 @@ fn scheduled_pcm_burst_stale_samples_cannot_be_refreshed_or_key() {
     exercise_pcm_burst_while_preparing("stale");
 }
 impl NativePs for Fake {
-    fn configure(&mut self, _: Config) -> Result<f64, Fault> {
+    fn measurement_only_guard(&mut self) -> Result<(), Fault> {
+        if self.trace.borrow().ps_enabled { Err(Fault::NativeFailure) } else { Ok(()) }
+    }
+    fn configure(&mut self, config: Config) -> Result<f64, Fault> {
+        self.trace.borrow_mut().ps_enabled = config.enabled || config.automatic;
         Ok(0.)
     }
     fn mox(&mut self, keyed: bool) {
@@ -1867,6 +1872,30 @@ fn generated_single_trial_actual_owner_deadline_release_and_stale_authority_both
 }
 
 #[test]
+fn operator_two_tone_actual_owner_runs_past_elapsed_cutoff_and_cleans_both_backends() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for case in ["operator-release", "operator-disconnect"] {
+            generated_single_trial(backend, case, false, |_| Fake {
+                trace: Rc::new(RefCell::new(Trace::default())),
+            });
+        }
+    }
+}
+
+#[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+#[test]
+#[ignore = "serial actual owner and matched WDSP, files/loopback only; no RF"]
+fn operator_two_tone_real_native_manual_stop_and_cleanup_both_backends() {
+    unsafe extern "C" { fn fftw_set_timelimit(seconds: f64); }
+    unsafe { fftw_set_timelimit(0.01); }
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        generated_single_trial(backend, "operator-release", true, |m| {
+            crate::wdsp::ps_native::FullNative::matched(m).unwrap()
+        });
+    }
+}
+
+#[test]
 fn feedback_burst_actual_owner_keeps_freshness_release_and_overflow_both_backends() {
     for backend in [Backend::P2, Backend::DirectXdma] {
         for case in [
@@ -1940,6 +1969,7 @@ fn generated_single_trial<N: ScheduledNative>(
     native: impl FnOnce(&RadioModel) -> N,
 ) {
     use crate::tx_thread::ps_ingress::TwoToneLimits;
+    let operating = case.starts_with("operator-");
     let p2 = (backend == Backend::P2).then(super::tests::p2_separate_lanes);
     if let Some((_, hp, iq)) = &p2 {
         hp.set_nonblocking(true).unwrap();
@@ -1958,14 +1988,14 @@ fn generated_single_trial<N: ScheduledNative>(
     }
     let (mut iq, mut mic) = queues();
     let mut m = model();
-    m.desired.tx_drive = 5;
-    m.desired.tx_frequency_hz = 7_200_000;
+    m.desired.tx_drive = if operating { 60 } else { 5 };
+    m.desired.tx_frequency_hz = if operating { 3_897_000 } else { 7_200_000 };
     let mut output = if let Some((session, _, _)) = &p2 {
         OwnerStopAdapter::p2(session.clone(), &m, &mut iq, &mut mic).unwrap()
     } else {
         OwnerStopAdapter::direct(direct.as_ref().unwrap().radio.clone(), &mut iq, &mut mic).unwrap()
     };
-    output.enable_offline_handoff(&m, 5).unwrap();
+    output.enable_offline_handoff(&m, if operating { 100 } else { 5 }).unwrap();
     let life = controller(native(&m), output, backend);
     let origin = Instant::now();
     let issuer = OperatorIngress::fixture();
@@ -1979,14 +2009,15 @@ fn generated_single_trial<N: ScheduledNative>(
         Timing {
             mic_age_ns: 150_000_000,
             source_stall_ns: 500_000_000,
-            tx_duration_ns: 2_000_000_000,
+            tx_duration_ns: if operating { 0 } else { 2_000_000_000 },
         },
     )
     .unwrap();
+    if operating { ingress.set_drive_ceiling(100).unwrap(); }
     ingress
         .enable_two_tone_trials(TwoToneLimits {
-            frequency_hz: 7_200_000,
-            max_ms: 45000,
+            frequency_hz: if operating { 0 } else { 7_200_000 },
+            max_ms: if operating { 0 } else { 45000 },
         })
         .unwrap();
     if native_source {
@@ -2005,6 +2036,7 @@ fn generated_single_trial<N: ScheduledNative>(
     }
     let mut config = cfg(11);
     config.automatic = false;
+    if operating { config.enabled = false; } // baseline runs without adaptation/feedback
     // This isolated native fixture must allow actual DSP startup before its
     // finite action expires; it is not a measured hardware key-latency bound.
     config.stale_after_ns = if case == "feedback-stale" {
@@ -2030,17 +2062,19 @@ fn generated_single_trial<N: ScheduledNative>(
     let mut observed_peak = 0.0_f32;
     let mut packets_at_burst = 0;
     r.run(&AtomicBool::new(false), |r, now| {
-        assert!(
-            now < 5_000_000_000,
-            "trial timeout {backend:?}/{case} {:?}",
-            r.life.status()
-        );
+        if now >= 5_000_000_000 {
+            let mut replies = Vec::new();
+            while let Some(item) = outbound.next_message(false) {
+                if let crate::tci::OutboundMessage::TransactionText(text) = item.message { replies.push(text); }
+            }
+            panic!("trial timeout {backend:?}/{case} {:?}; rejected={} replies={replies:?}", r.life.status(), r.counters.rejected);
+        }
         drain();
         if stage == 0 && ingress.startup_ready() && (case != "stale-request" || now > 160_000_000) {
             let capture = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
             old_capture = Some(capture.clone());
             requested = now;
-            let duration = if matches!(case, "missing" | "missing-source") {
+            let duration = if operating { 0 } else if matches!(case, "missing" | "missing-source") {
                 1000
             } else {
                 600
@@ -2120,13 +2154,13 @@ fn generated_single_trial<N: ScheduledNative>(
             next_audio = now + 10_666_667;
         }
         if stage == 1
-            && active_at.is_some_and(|t| now.saturating_sub(t) > 40_000_000)
+            && active_at.is_some_and(|t| now.saturating_sub(t) > if operating { 2_100_000_000 } else { 40_000_000 })
             && !injected
-            && matches!(case, "release" | "config" | "disconnect")
+            && matches!(case, "release" | "config" | "disconnect" | "operator-release" | "operator-disconnect")
         {
-            if case == "release" {
+            if matches!(case, "release" | "operator-release") {
                 ingress.release();
-            } else if case == "disconnect" {
+            } else if matches!(case, "disconnect" | "operator-disconnect") {
                 crate::tci::unregister_client(&clients, &operator_id, 7);
                 ingress.release();
             } else {
@@ -2268,6 +2302,11 @@ fn generated_single_trial<N: ScheduledNative>(
         }
     });
     assert_eq!(stage, 2);
+    if operating {
+        assert!(active && injected && r.counters.iq_packets > 0);
+        assert!(observed_peak > 0., "manual-stop action must render real output");
+        assert_eq!(r.counters.deadline_stops, 0);
+    }
     assert!(r.life.offline_owner().queues_empty());
     assert_eq!(
         r.counters.iq_packets, stopped_packets,
@@ -2285,7 +2324,7 @@ fn generated_single_trial<N: ScheduledNative>(
     );
     if active || (arm_seen && case == "missing-source") {
         assert!(replies.contains("saturn_ps_two_tone:0,1,accepted;"));
-        if case != "disconnect" {
+        if !matches!(case, "disconnect" | "operator-disconnect") {
             assert!(replies.contains("saturn_ps_two_tone:0,1,complete,"));
         }
     } else {
@@ -2614,7 +2653,7 @@ fn scheduled_owner_watchdogs_empty_busy_and_single_exchange_budget() {
                 Timing {
                     mic_age_ns: 150_000_000,
                     source_stall_ns: 40_000_000,
-                    tx_duration_ns: if duration { 100_000_000 } else { 2_000_000_000 },
+                    tx_duration_ns: if duration { 100_000_000 } else { 0 },
                 },
             )
             .unwrap();

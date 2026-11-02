@@ -243,6 +243,8 @@ pub(crate) struct SharedIngress {
 }
 #[derive(Clone, Copy)]
 pub(crate) struct TwoToneLimits {
+    // Both zero select operator-controlled operation at the committed radio
+    // frequency/drive. Finite bench profiles retain their existing contract.
     pub(crate) frequency_hz: u32,
     pub(crate) max_ms: u64,
 }
@@ -398,10 +400,10 @@ impl SharedIngress {
     }
     /// Explicit host-only opt-in. This does not enable PS, RF permission or arm.
     pub(crate) fn enable_two_tone_trials(&self, limits: TwoToneLimits) -> Result<(), Fault> {
+        let operating = limits.max_ms == 0 && limits.frequency_hz == 0;
         if self.measurement_only_mode()
-            || limits.max_ms == 0
-            || limits.max_ms > 45_000
-            || !(1_500_000..=35_000_000).contains(&limits.frequency_hz)
+            || (!operating && (limits.max_ms == 0 || limits.max_ms > 45_000
+                || !(1_500_000..=35_000_000).contains(&limits.frequency_hz)))
         {
             return Err(Fault::InvalidConfig);
         }
@@ -414,10 +416,13 @@ impl SharedIngress {
             .get()
             .filter(|_| !self.measurement_only_mode())
             .map(|l| {
-                format!(
-                    "saturn_ps_two_tone_caps:0,tagged-two-tone-v1,{},{},5;",
-                    l.max_ms, l.frequency_hz
-                )
+                if l.frequency_hz == 0 {
+                    format!("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,{};",
+                        self.drive_ceiling.get().copied().unwrap_or(1))
+                } else {
+                    format!("saturn_ps_two_tone_caps:0,tagged-two-tone-v1,{},{},5;",
+                        l.max_ms, l.frequency_hz)
+                }
             })
     }
     pub(crate) fn restrict_to_generated_trials(&self) -> Result<(), Fault> {
@@ -497,18 +502,19 @@ impl SharedIngress {
             }
             let limits = self.two_tone_limits.get().ok_or(Fault::InvalidConfig)?;
             let c = capture.ok_or(Fault::CleanupPending)?;
+            let operating = limits.frequency_hz == 0 && limits.max_ms == 0;
             if self.measurement_only_mode()
-                || ms == 0
-                || ms > limits.max_ms
+                || (!operating && (ms == 0 || ms > limits.max_ms))
                 || (c.config.automatic && !self.auto_mode_supported.load(Ordering::Acquire))
                 || c.model.desired.tx_drive == 0
-                || c.model.desired.tx_drive > 5
-                || c.model.desired.tx_frequency_hz != limits.frequency_hz
+                || c.model.desired.tx_drive > if operating { self.drive_ceiling.get().copied().unwrap_or(1) } else { 5 }
+                || (!operating && c.model.desired.tx_frequency_hz != limits.frequency_hz)
                 || !matches!(c.model.desired.mode, DemodMode::Usb | DemodMode::Lsb)
                 || c.source != TxAudioSource::Tci
             {
                 return Err(Fault::InvalidConfig);
             }
+            let duration_ns = ms.checked_mul(1_000_000).ok_or(Fault::InvalidConfig)?;
             let credential = self.operator.receive(
                 client,
                 "trx:0,true",
@@ -526,7 +532,7 @@ impl SharedIngress {
             let mut trial = TwoToneTrial {
                 stimulus,
                 requested_at: c.received_at,
-                duration_ns: ms * 1_000_000,
+                duration_ns,
                 client,
                 id,
                 operator: self.operator.clone(),
@@ -684,6 +690,30 @@ mod measurement_tests {
         assert_eq!(model.desired.rx_attenuation_db, 31);
         assert!(!model.desired.tx_enabled && !config.enabled && !config.automatic);
     }
+    #[test]
+    fn operator_two_tone_uses_current_frequency_power_and_manual_stop() {
+        let (i, rx) = crate::tx_thread::feedback_owner::tests::collector();
+        i.set_drive_ceiling(100).unwrap();
+        ready(&i);
+        i.enable_two_tone_trials(TwoToneLimits { frequency_hz: 0, max_ms: 0 }).unwrap();
+        assert_eq!(i.two_tone_caps().as_deref(), Some("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;"));
+        for (n, hz, watts, duration) in [(1, 3_897_000, 60, 0), (2, 27_385_000, 100, 90_000)] {
+            let mut capture = i.capture(Instant::now()).unwrap();
+            capture.model.desired.tx_frequency_hz = hz;
+            capture.model.desired.tx_drive = watts;
+            i.two_tone_message(7, &format!("saturn_ps_two_tone:0,{n},start,{duration};"), Some(&capture));
+            let TxCommand::PureSignalAuthorizedArm(mut arm) = rx.commands.try_recv().unwrap() else { panic!("missing arm"); };
+            assert_eq!(arm.trial.as_ref().unwrap().duration_ns, duration * 1_000_000);
+            arm.trial.as_mut().unwrap().reject(Fault::Stale);
+        }
+        let capture = i.capture(Instant::now()).unwrap();
+        i.two_tone_message(7, "saturn_ps_two_tone:0,3,start,18446744073709551615;", Some(&capture));
+        assert!(rx.commands.try_recv().is_err());
+        assert!(!i.two_tone_pending.load(Ordering::Acquire), "overflow cannot strand pending output");
+        i.two_tone_message(8, "saturn_ps_two_tone:0,4,start,0;", Some(&capture));
+        assert!(rx.commands.try_recv().is_err(), "viewer cannot authorize output");
+    }
+
     #[test]
     fn generated_trial_is_opt_in_and_cannot_weaken_measurement_only() {
         let (i, rx) = crate::tx_thread::feedback_owner::tests::collector();

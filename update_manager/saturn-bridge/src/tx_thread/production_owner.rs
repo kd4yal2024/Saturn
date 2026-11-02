@@ -112,7 +112,6 @@ impl Options {
             || options.feedback_attenuation_db > 31
             || options.timing.mic_age_ns == 0
             || options.timing.source_stall_ns == 0
-            || options.timing.tx_duration_ns == 0
             || options.limits.authority_timeout_ns == 0
             || options.limits.cleanup_timeout_ns == 0
         {
@@ -180,13 +179,18 @@ pub(crate) fn spawn(
     // frequency, feedback limits, RF permission or automatic PS enablement.
     let two_tone_limits = match std::env::var("SATURN_PS_GENERATED_TRIALS").as_deref() {
         Err(std::env::VarError::NotPresent) | Ok("0") => None,
-        Ok("1") if !options.measurement_only => Some(super::ps_ingress::TwoToneLimits {
-            frequency_hz: std::env::var("SATURN_PS_GENERATED_FREQUENCY_HZ")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .ok_or(Fault::InvalidConfig)?,
-            max_ms: 45_000.min(options.timing.tx_duration_ns / 1_000_000),
-        }),
+        Ok("1") if !options.measurement_only => {
+            match std::env::var("SATURN_PS_GENERATED_OPERATIONAL").as_deref() {
+                Ok("1") => Some(super::ps_ingress::TwoToneLimits { frequency_hz: 0, max_ms: 0 }),
+                Ok("0") | Err(std::env::VarError::NotPresent) => Some(super::ps_ingress::TwoToneLimits {
+                    frequency_hz: std::env::var("SATURN_PS_GENERATED_FREQUENCY_HZ")
+                        .ok().and_then(|s| s.parse().ok()).ok_or(Fault::InvalidConfig)?,
+                    max_ms: if options.timing.tx_duration_ns == 0 { 45_000 }
+                        else { 45_000.min(options.timing.tx_duration_ns / 1_000_000) },
+                }),
+                _ => return Err(Fault::InvalidConfig),
+            }
+        },
         _ => return Err(Fault::InvalidConfig),
     };
     let measurement_host = if options.measurement_only {

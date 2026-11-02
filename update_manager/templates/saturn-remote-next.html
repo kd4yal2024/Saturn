@@ -7464,7 +7464,7 @@
                         <button class="btn ghost" id="setup-ps-ack-fault" type="button" disabled>Acknowledge completed TX fault — stays RX</button>
                         <div class="setup-readout" id="setup-ps-ack-result" role="status">No fault acknowledgment requested</div>
                         <details id="setup-ps-measurement-controls">
-                          <summary>Attended RF duration / confirmation · Measure Only / Timing</summary>
+                          <summary>TX power / two-tone duration / measurement tools</summary>
                           <label class="label" for="setup-ps-measurement-kind">Measurement stimulus</label>
                           <select class="field" id="setup-ps-measurement-kind">
                             <option value="mode-default">Two-tone (USB/LSB) / silent carrier (AM)</option>
@@ -7472,11 +7472,11 @@
                           </select>
                           <p class="small" id="setup-ps-stimulus">USB/LSB: generated two-tone. AM/SAM: silent carrier. No microphone required.</p>
                           <p class="small" id="setup-ps-measurement-limits">Host duration, frequency and capture mode unavailable.</p>
-                          <label class="label" for="setup-ps-commanded-watts">Commanded measurement power (W; not measured RF)</label>
+                          <label class="label" for="setup-ps-commanded-watts">TX power target (W; not measured RF)</label>
                           <input class="field" id="setup-ps-commanded-watts" type="number" min="1" max="5" step="1" value="5" disabled />
                           <div class="setup-readout" id="setup-ps-power-result">Host committed power unavailable</div>
                           <p class="small">Measurement gain is fixed at 0 dB (unity), independent of the normal microphone profile. Different stimuli can produce different RF power at the same command. Adjust power only while RX and settings are complete.</p>
-                          <label class="label" for="setup-ps-duration-ms">Duration (milliseconds)</label>
+                          <label class="label" for="setup-ps-duration-ms">Duration (milliseconds; 0 = manual Stop when supported)</label>
                           <input class="field" id="setup-ps-duration-ms" type="number" min="1" max="45000" step="1" value="5000" />
                           <label class="toggle-field"><span>I am attending; ANT1 dummy load and LP700 ready</span><input id="setup-ps-attended" type="checkbox" /></label>
                           <button class="btn" id="setup-ps-measure" type="button" disabled>Start Measure Only — keys RF</button>
@@ -14491,7 +14491,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("setup-ps-ack-result")) $("setup-ps-ack-result").textContent = managed.faultAcknowledgment || "Fault acknowledgment unavailable on this host";
       const power = $("setup-ps-commanded-watts");
       if (power) {
-        power.max = String(Math.min(5, managed.driveLimitWatts || 1));
+        power.max = String(managed.twoToneOperatorControlled ? (managed.driveLimitWatts || 1) : Math.min(5, managed.driveLimitWatts || 1));
         power.disabled = !view.canConfigure || managed.phase !== "ready" || !managed.driveLimitWatts || Boolean(managed.measurementActive);
         if (document.activeElement !== power && managed.committedWatts !== undefined) power.value = String(managed.committedWatts);
       }
@@ -14503,8 +14503,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("setup-ps-measurement-limits")) $("setup-ps-measurement-limits").textContent = managed.measurementLimitMs
         ? `Host: ${managed.measurementCaptureMode}, maximum ${managed.measurementLimitMs} ms, ${(managed.measurementFrequencyHz / 1e6).toFixed(6)} MHz. Committed command: ${managed.committedWatts ?? state.txDrive} W. ARM TX before starting.`
         : "Host MeasurementOnly capability unavailable; this UI cannot enable it.";
+      const operatorControlled = managed.twoToneOperatorControlled;
+      $("setup-ps-attended").closest("label").hidden = Boolean(operatorControlled);
+      const durationInput = $("setup-ps-duration-ms");
+      if (operatorControlled && durationInput) {
+        durationInput.min = "0"; durationInput.removeAttribute("max");
+        if (state.psOperatorDurationGeneration !== state.connectionGeneration) {
+          durationInput.value = "0"; state.psOperatorDurationGeneration = state.connectionGeneration;
+        }
+      } else if (durationInput) durationInput.min = "1";
       const generatedDurationLimit = managed.measurementLimitMs || managed.twoToneLimitMs;
-      if (generatedDurationLimit && $("setup-ps-duration-ms")) {
+      if (!operatorControlled && generatedDurationLimit && $("setup-ps-duration-ms")) {
         const duration = $("setup-ps-duration-ms");
         duration.max = String(generatedDurationLimit);
         if (Number(duration.value) > generatedDurationLimit) duration.value = String(generatedDurationLimit);
@@ -17969,15 +17978,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       psTwoToneButton.classList.toggle("active", toneActive);
       psTwoToneButton.setAttribute("aria-pressed", String(toneActive));
       psTwoToneButton.disabled = managedPcmSelected()
-        ? !toneActive && (!pureSignalPanelView().canTwoTone || !$("setup-ps-attended").checked || state.txReadyExpiresAt <= performance.now())
+        ? !toneActive && (!pureSignalPanelView().canTwoTone || (!managedTone.twoToneOperatorControlled && (!$("setup-ps-attended").checked || state.txReadyExpiresAt <= performance.now())))
         : twoToneButton.disabled || !state.connected || !state.bridgeReady || clientRoleBlocksTx()
           || (!state.twoToneEnabled && psRxRestoreGeneration === state.connectionGeneration);
-      psTwoToneButton.title = managedPcmSelected() ? "Requires separately enabled host trial, prepared single fit and fresh attended confirmation" : twoToneButton.title;
+      psTwoToneButton.title = managedPcmSelected() ? (managedTone.twoToneOperatorControlled ? "Start/Stop at the current TX frequency and committed power; no automatic timeout when duration is zero" : "Requires separately enabled host trial and fresh attended confirmation") : twoToneButton.title;
       $("ps-two-tone-note").textContent = managedPcmSelected()
-        ? `${managedTone.psMode === "off" ? "PS-off baseline" : "Prepared single-fit test"}. This separately authorized action keys RF with ${managedTone.nativeTwoToneSupported ? "the balanced 700/1900 Hz WDSP generator before IQC; tagged zero-input frames provide liveness, not tone audio" : "generated 700/1900 Hz PCM and fixed unity gain"}. Uses the attended confirmation and duration above; no microphone.`
+        ? `${managedTone.psMode === "off" ? "PS-off baseline" : managedTone.psMode === "auto" ? "Auto correction" : "Single calibration"}. This separately authorized action keys RF with ${managedTone.nativeTwoToneSupported ? "the balanced 700/1900 Hz WDSP generator before IQC; tagged zero-input frames provide liveness, not tone audio" : "generated 700/1900 Hz PCM and fixed unity gain"}. ${managedTone.twoToneOperatorControlled ? "Uses current TX frequency and power; duration 0 runs until Stop, PTT release or disconnect" : "Uses the attended confirmation and duration above"}; no microphone.`
         : "Uses the same generator and TX Ready/PTT path as Setup. No microphone needed. This starts TX; it does not enable PureSignal calibration.";
       $("ps-two-tone-settings").textContent = managedPcmSelected()
-        ? `${managedTone.twoToneResult} · ${managedTone.twoToneLimitMs ? `Host maximum ${managedTone.twoToneLimitMs} ms at ${managedTone.twoToneFrequencyHz} Hz, <=5 commanded W` : "Host generated calibration trial not enabled"}`
+        ? `${managedTone.twoToneResult} · ${managedTone.twoToneOperatorControlled ? `Current TX frequency and power (up to ${managedTone.twoToneMaxWatts} W); duration 0 = manual Stop` : managedTone.twoToneLimitMs ? `Host maximum ${managedTone.twoToneLimitMs} ms at ${managedTone.twoToneFrequencyHz} Hz, <=5 commanded W` : "Host generated calibration trial not enabled"}`
         : `${state.txTwoToneFreq1} / ${state.txTwoToneFreq2} Hz · ${safeFixed(state.txTwoToneLevelDb, 1, "0.0")} dB · delay ${state.txTwoToneDelayMs} ms`;
       const txDisplayStatus = _next.txDisplayStatus(state.connected, txReceiveSuppressionActive(), state.displayPaused,
         state.displayIqSource === "tx" ? state.lastTxDisplayFrameAt ?? null : null, performance.now());
@@ -21122,7 +21131,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
               }
             }, 5000);
           }
-        } else if (state.txPhase === "keyed" && state.txTimeoutEnabled) {
+        } else if (state.txPhase === "keyed" && state.txTimeoutEnabled
+          && !(managedPcm.status().twoToneOperatorControlled && managedPcm.status().twoToneActive)) {
           if (txDiagnosticTxActive()) {
             logEvent("TX diagnostic: RF-disabled keyed TX timeout suppressed");
           } else {
@@ -22490,7 +22500,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("setup-ps-commanded-watts").addEventListener("change", () => {
         const managed = managedPcm.status(), watts = Number($("setup-ps-commanded-watts").value);
         if (!pureSignalPanelView().canConfigure || managed.phase !== "ready" || !managed.driveLimitWatts
-          || !Number.isSafeInteger(watts) || watts < 1 || watts > Math.min(5, managed.driveLimitWatts)) { updateUi(); return; }
+          || !Number.isSafeInteger(watts) || watts < 1 || watts > (managed.twoToneOperatorControlled ? managed.driveLimitWatts : Math.min(5, managed.driveLimitWatts))) { updateUi(); return; }
         $("setup-ps-attended").checked = false;
         managedPcm.sendControl(`tx_drive:0,${watts};`); updateUi();
       });
@@ -23437,9 +23447,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if ($("ps-two-tone-btn").disabled) return;
         if (!managedPcmSelected()) { void setTwoToneEnabled(!state.twoToneEnabled); return; }
         if (managedPcm.status().twoToneActive) { managedPcm.release(); return; }
-        const attended = $("setup-ps-attended").checked;
+        const operatorControlled = managedPcm.status().twoToneOperatorControlled;
+        const attended = operatorControlled || $("setup-ps-attended").checked;
         $("setup-ps-attended").checked = false;
-        if (!pureSignalPanelView().canTwoTone || !normalizeTxReadyState() || rfDisabledBlocksTx()
+        if (!pureSignalPanelView().canTwoTone || (!operatorControlled && !normalizeTxReadyState()) || rfDisabledBlocksTx()
           || clientRoleBlocksTx() || !state.ws || state.ws.readyState !== WebSocket.OPEN) { updateUi(); return; }
         const duration = Number($("setup-ps-duration-ms").value);
         state.psMeasurementOwned = true;
@@ -23448,9 +23459,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           logEvent("Two-tone refused: verify committed PS mode, host capability, frequency, drive, duration and attended confirmation"); updateUi(); return;
         }
         state.pttRequestId += 1; state.txLocalRequestId = state.pttRequestId;
-        state.txLocalRequestPermitExpiresAt = performance.now() + duration + 1000;
+        state.txLocalRequestActive = true;
+        state.txLocalRequestPermitExpiresAt = duration === 0 ? Infinity : performance.now() + duration + 1000;
         refreshBridgeControlHeartbeatForTx(); setTxMediaPriority(true); muteRxAudioForMox();
-        switchDisplayToTxArm(); logEvent(`Single-fit two-tone requested: ${duration} ms, ${state.txDrive} commanded W; RF/correction unverified`);
+        switchDisplayToTxArm(); logEvent(`Two-tone requested: ${duration === 0 ? "manual Stop" : `${duration} ms`}, ${txVfoFrequency()} Hz, ${state.txDrive} commanded W; RF/correction unverified`);
         updateUi();
       });
     }

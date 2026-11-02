@@ -86,7 +86,7 @@ export function pureSignalTestView(state: PsTestState, managed: ManagedPcmStatus
     adaptationMode: managed.psMode ?? 'unavailable',
     canCalibrate: Boolean(editable && managed.psCapability === 'single'),
     canTwoTone: Boolean(editable && managed.psCapability === 'single' && (['off','single'].includes(managed.psMode ?? '') || (managed.psMode === 'auto' && managed.autoAdaptationSupported))
-      && managed.twoToneLimitMs && managed.source === 'tci' && ['USB','LSB'].includes(measurementMode)),
+      && managed.twoToneLimitMs !== undefined && managed.source === 'tci' && ['USB','LSB'].includes(measurementMode)),
     twoTone: managed.twoToneResult ?? 'No generated calibration trial requested',
     canMeasure: Boolean(editable && managed.psCapability === 'measurement-only' && managed.psMode === 'off'
       && managed.source === 'tci' && managed.measurementLimitMs && ['USB','LSB','AM','SAM'].includes(measurementMode)

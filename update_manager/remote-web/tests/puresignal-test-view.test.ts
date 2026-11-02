@@ -10,6 +10,15 @@ const managed = (): ManagedPcmStatus => ({ selected: false, phase: 'disabled', r
   pendingSettings: 0, lastTransaction: 'No managed settings result', source: 'tci', sentFrames: 0, ownerPhase: null });
 
 describe('PS tab presentation without invented measurements', () => {
+  it('operator-controlled duration zero keeps Start available without relaxing role or RX gates', () => {
+    const m: ManagedPcmStatus={...managed(), selected:true, phase:'ready', psCapability:'single', psMode:'auto',
+      autoAdaptationSupported:true, twoToneOperatorControlled:true, twoToneLimitMs:0, twoToneMaxWatts:100};
+    const s={...state(), mode:'LSB'};
+    expect(pureSignalTestView(s,m,new PureSignalReports(),0).canTwoTone).toBe(true);
+    expect(pureSignalTestView({...s,remoteClientRole:'viewer'},m,new PureSignalReports(),0).canTwoTone).toBe(false);
+    expect(pureSignalTestView({...s,txEnabled:true},m,new PureSignalReports(),0).canTwoTone).toBe(false);
+  });
+
   it('allows manual feedback attenuation only after host support, while clean/off and operator', () => {
     const s=state(),m={...managed(),selected:true,phase:'ready' as const,psCapability:'single' as const};
     expect(pureSignalTestView(s,m,new PureSignalReports(),0).canSetFeedbackAttenuation).toBe(false);

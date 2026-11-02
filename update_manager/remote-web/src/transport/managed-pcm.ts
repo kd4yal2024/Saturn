@@ -29,6 +29,8 @@ export interface ManagedPcmStatus {
   nativeTwoToneSupported?: boolean;
   manualAttenuationSupported?: boolean;
   autoAdaptationSupported?: boolean;
+  twoToneOperatorControlled?: boolean;
+  twoToneMaxWatts?: number | undefined;
   twoToneLimitMs?: number | undefined;
   twoToneFrequencyHz?: number | undefined;
   twoToneActive?: boolean;
@@ -123,7 +125,7 @@ export class ManagedPcmSession {
   private nativeTwoToneSupported = false;
   private manualAttenuationSupported = false;
   private autoAdaptationSupported = false;
-  private twoToneLimits: { maxMs: number; frequencyHz: number } | null = null;
+  private twoToneLimits: { maxMs: number; frequencyHz: number; maxWatts: number; operatorControlled: boolean } | null = null;
   private twoTone: { id: string; stopAt: number; stop: bigint; queued: boolean; accepted: boolean; stopping: boolean; complete: boolean; native: boolean } | null = null;
   private nextTwoTone = 0n;
   private twoToneResult = 'No generated calibration trial requested';
@@ -144,6 +146,7 @@ export class ManagedPcmSession {
       nativeTwoToneSupported: this.nativeTwoToneSupported,
       manualAttenuationSupported: this.manualAttenuationSupported,
       autoAdaptationSupported: this.autoAdaptationSupported,
+      twoToneOperatorControlled: this.twoToneLimits?.operatorControlled ?? false, twoToneMaxWatts: this.twoToneLimits?.maxWatts,
       twoToneLimitMs: this.twoToneLimits?.maxMs, twoToneFrequencyHz: this.twoToneLimits?.frequencyHz,
       twoToneActive: this.twoTone !== null, twoToneResult: this.twoToneResult,
       driveLimitWatts: this.driveLimit, committedWatts: this.committedDrive,
@@ -315,15 +318,16 @@ export class ManagedPcmSession {
       || (this.generatedOnly && !this.nativeTwoToneSupported)
       || (this.nativeTwoToneSupported && !this.options.nativeKeepaliveCapture)
       || this.psCapability !== 'single' || (!['off', 'single'].includes(this.psMode ?? '') && !(this.psMode === 'auto' && this.autoAdaptationSupported)) || this.owner?.source !== 'tci'
-      || this.status().pendingSettings || !attended || frequencyHz !== this.twoToneLimits.frequencyHz
-      || !Number.isSafeInteger(commandedWatts) || commandedWatts < 1 || commandedWatts > 5
-      || !Number.isSafeInteger(durationMs) || durationMs < 1 || durationMs > this.twoToneLimits.maxMs
+      || this.status().pendingSettings || !attended || (!this.twoToneLimits.operatorControlled && frequencyHz !== this.twoToneLimits.frequencyHz)
+      || !Number.isSafeInteger(commandedWatts) || commandedWatts < 1 || commandedWatts > this.twoToneLimits.maxWatts
+      || !Number.isSafeInteger(durationMs) || durationMs < 0 || durationMs > 18_446_744_073_709
+      || (!this.twoToneLimits.operatorControlled && (durationMs < 1 || durationMs > this.twoToneLimits.maxMs))
       || this.nextTwoTone === 0xffffffffffffffffn) return false;
     const id = String(++this.nextTwoTone);
     this.invalidate(); this.requested = 'tci';
-    this.twoTone = {id, stopAt: this.options.now() + durationMs, stop: this.owner.stop,
+    this.twoTone = {id, stopAt: durationMs === 0 ? Infinity : this.options.now() + durationMs, stop: this.owner.stop,
       queued: false, accepted: false, stopping: false, complete: false, native: this.nativeTwoToneSupported};
-    this.deadline = this.options.now() + durationMs + 15000;
+    this.deadline = this.options.now() + 15000;
     this.phase = 'arming'; this.reason = this.psMode === 'off'
       ? 'Attended PS-off two-tone baseline requested; awaiting host'
       : this.psMode === 'auto' ? 'Attended two-tone Auto trial requested; awaiting host'
@@ -456,13 +460,17 @@ export class ManagedPcmSession {
         if ((this.measurement || this.twoTone) && !this.rfPermitted) this.fail('Measurement RF permission withdrawn');
       }
       if (c.startsWith('saturn_ps_two_tone_caps:')) {
-        const m = /^saturn_ps_two_tone_caps:0,tagged-two-tone-v1,([0-9]+),([0-9]+),5$/.exec(c);
-        const maxMs = Number(m?.[1]), frequencyHz = Number(m?.[2]);
-        const valid = Boolean(m && Number.isSafeInteger(maxMs) && maxMs > 0 && maxMs <= 45000
-          && Number.isSafeInteger(frequencyHz) && frequencyHz >= 1500000 && frequencyHz <= 35000000);
-        if (this.twoTone && (!valid || this.twoToneLimits?.maxMs !== maxMs || this.twoToneLimits.frequencyHz !== frequencyHz))
+        const m = /^saturn_ps_two_tone_caps:0,(tagged-two-tone-v1|operator-two-tone-v1),([0-9]+),([0-9]+),([0-9]+)$/.exec(c);
+        const operatorControlled = m?.[1] === 'operator-two-tone-v1';
+        const maxMs = Number(m?.[2]), frequencyHz = Number(m?.[3]), maxWatts = Number(m?.[4]);
+        const valid = Boolean(m && (operatorControlled
+          ? maxMs === 0 && frequencyHz === 0 && Number.isSafeInteger(maxWatts) && maxWatts >= 1 && maxWatts <= 100
+          : Number.isSafeInteger(maxMs) && maxMs > 0 && maxMs <= 45000 && maxWatts === 5
+            && Number.isSafeInteger(frequencyHz) && frequencyHz >= 1500000 && frequencyHz <= 35000000));
+        if (this.twoTone && (!valid || this.twoToneLimits?.maxMs !== maxMs || this.twoToneLimits.frequencyHz !== frequencyHz
+          || this.twoToneLimits.maxWatts !== maxWatts || this.twoToneLimits.operatorControlled !== operatorControlled))
           this.fail('Generated two-tone capability changed during TX');
-        this.twoToneLimits = valid ? {maxMs, frequencyHz} : null;
+        this.twoToneLimits = valid ? {maxMs, frequencyHz, maxWatts, operatorControlled} : null;
       }
       if (c.startsWith('saturn_ps_two_tone:')) this.twoToneReply(c);
       if (c.startsWith('saturn_ps_measurement_caps:')) {
@@ -577,6 +585,7 @@ export class ManagedPcmSession {
     if (a[2] === 'queued' && a.length === 3) { t.queued = true; return; }
     if (a[2] === 'accepted' && a.length === 3 && t.queued && !t.accepted) {
       t.accepted = true;
+      this.deadline = Number.isFinite(t.stopAt) ? t.stopAt + 15000 : 0;
       this.twoToneResult = `Host accepted ${this.psMode === 'auto' ? 'Auto' : this.psMode === 'off' ? 'PS-off' : 'Single'} two-tone trial; physical RF/correction unverified`;
       return;
     }

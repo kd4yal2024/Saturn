@@ -188,6 +188,10 @@ impl RuntimeIo for Io {
     }
     fn started(&mut self, runtime: &production_owner::Runtime, _: &Arc<TciFrontend>) {
         self.ingress = Some(runtime.ingress.clone());
+        if std::env::var("SATURN_PS_GENERATED_OPERATIONAL").as_deref() == Ok("1") {
+            assert_eq!(runtime.ingress.two_tone_caps().as_deref(),
+                Some("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;"));
+        }
         self.link = Some(runtime.link.clone());
         let check_persistence = self.expected_rx.is_some();
         let direct = self.direct;
@@ -842,6 +846,10 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         io.expected_rx = Some(settings);
     }
     let mut selected_options = options();
+    if std::env::var("SATURN_PS_GENERATED_OPERATIONAL").as_deref() == Ok("1") {
+        selected_options.max_watts = 100;
+        selected_options.timing.tx_duration_ns = 0;
+    }
     if case.diagnostic() {
         selected_options.measurement_only = true;
         selected_options.operational_policy = None;
@@ -1052,6 +1060,19 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         println!("native_source_runtime_capture backend={} directory={} verified_zero_pcm_nonzero_native_and_returned=true completed_h2c_checked={} physical_rf_qualified=false",if direct {"DirectXdma"} else {"P2"},digital.display(),direct);
     }
 }
+#[test]
+#[ignore = "serial actual runtime operator controls, matched WDSP and file/loopback owners; no RF"]
+fn actual_run_inner_operator_two_tone_policy_both_backends() {
+    let names = ["SATURN_PS_GENERATED_TRIALS", "SATURN_PS_GENERATED_OPERATIONAL", "SATURN_PS_CORRECTION_MONITOR"];
+    let previous: Vec<_> = names.iter().map(|n| std::env::var_os(n)).collect();
+    for name in names { std::env::set_var(name, "1"); }
+    for direct in [false, true] { exercise(direct, Case::BaselineTwoTone); }
+    for (name, value) in names.into_iter().zip(previous) {
+        if let Some(value) = value { std::env::set_var(name, value); }
+        else { std::env::remove_var(name); }
+    }
+}
+
 #[test]
 #[ignore = "serial actual-runtime PS-off native generator; zero input, real WDSP, file/loopback only"]
 fn actual_run_inner_ps_off_two_tone_both_backends() {

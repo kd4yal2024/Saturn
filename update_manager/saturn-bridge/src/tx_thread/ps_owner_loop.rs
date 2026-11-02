@@ -263,6 +263,7 @@ impl Cancel {
 pub(crate) struct Timing {
     pub(crate) mic_age_ns: u64,
     pub(crate) source_stall_ns: u64,
+    /// Zero disables the optional elapsed-transmit cutoff; source/feedback watchdogs remain active.
     pub(crate) tx_duration_ns: u64,
 }
 #[derive(Clone, Copy, Debug)]
@@ -364,7 +365,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         origin: Instant,
         timing: Timing,
     ) -> Result<Self, Fault> {
-        if timing.mic_age_ns == 0 || timing.source_stall_ns == 0 || timing.tx_duration_ns == 0 {
+        if timing.mic_age_ns == 0 || timing.source_stall_ns == 0 {
             return Err(Fault::InvalidConfig);
         }
         let seen_stop = life.status().stop_id;
@@ -674,12 +675,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         if requested > now || now - requested > self.timing.mic_age_ns {
                             return Err(Fault::Stale);
                         }
-                        Some(
-                            requested
-                                .checked_add(t.duration_ns)
-                                .filter(|d| *d > now)
-                                .ok_or(Fault::Stale)?,
-                        )
+                        if t.duration_ns == 0 { None } else {
+                            Some(requested.checked_add(t.duration_ns)
+                                .filter(|d| *d > now).ok_or(Fault::Stale)?)
+                        }
                     } else {
                         None
                     };
@@ -688,7 +687,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         .trial
                         .as_ref()
                         .map_or(Default::default(), |t| t.stimulus);
-                    if trial_deadline.is_some() {
+                    if arm.trial.is_some() {
                         self.life.offline_clean_configure(now, |n| {
                             n.measurement_mic_gain(true)?;
                             n.diagnostic_stimulus(stimulus)
@@ -705,7 +704,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         self.life.fresh_tx_action(action, now)
                     };
                     if let Err(fault) = arm_result {
-                        if trial_deadline.is_some() && self.life.status().phase == Phase::ReadyOff {
+                        if arm.trial.is_some() && self.life.status().phase == Phase::ReadyOff {
                             self.life.offline_clean_configure(now, |n| {
                                 n.diagnostic_stimulus(Default::default())?;
                                 n.measurement_mic_gain(false)
@@ -1222,7 +1221,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         }
         if self
             .armed
-            .is_some_and(|t| now.saturating_sub(t) > self.timing.tx_duration_ns)
+            .is_some_and(|t| {
+                self.timing.tx_duration_ns != 0
+                    && now.saturating_sub(t) > self.timing.tx_duration_ns
+            })
             || self
                 .last_arrival
                 .is_some_and(|t| now.saturating_sub(t) > self.timing.source_stall_ns)
@@ -1230,7 +1232,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             self.counters.deadline_stops += 1;
             let origin = if self
                 .armed
-                .is_some_and(|t| now.saturating_sub(t) > self.timing.tx_duration_ns)
+                .is_some_and(|t| {
+                    self.timing.tx_duration_ns != 0
+                        && now.saturating_sub(t) > self.timing.tx_duration_ns
+                })
             {
                 StaleOrigin::Duration
             } else {
