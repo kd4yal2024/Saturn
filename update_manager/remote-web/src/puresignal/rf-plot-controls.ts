@@ -1,6 +1,6 @@
 /** Read-only per-view presentation controls; never sends radio commands. */
 import type {RfSpectrum,RfMonitorView} from './rf-monitor';
-import {RfPlot,isTwoTone,referenceOffset,productLabel,type PlotOptions} from './rf-plot';
+import {RfPlot,isTwoTone,referenceOffset,productLabel,RF_COLORS,productColor,type PlotOptions} from './rf-plot';
 export interface ViewDisplay {options:PlotOptions;plot:RfPlot;metrics:HTMLElement;details:HTMLElement;reference:HTMLSelectElement}
 export function createDisplay(view:RfMonitorView,defaults:PlotOptions):ViewDisplay {
   const doc=view.element.ownerDocument,options={...defaults};view.canvas.dataset.rfCanvas='';
@@ -37,16 +37,20 @@ export function updateMetrics(ui:ViewDisplay,r:RfSpectrum|null):void {
   for(const text of [`RF observation: uncalibrated`,`Overload: ${r.overload}`,`Sample clips: ${r.clippedComponents}`,`Continuity: ${r.continuity}`]){
     const badge=doc.createElement('span');badge.textContent=text;badge.style.cssText='border:1px solid #3b4b60;border-radius:4px;padding:3px 6px;color:#e3bf81';head.append(badge);
   }
+  const legend=doc.createElement('div');legend.style.cssText='display:flex;flex-wrap:wrap;gap:8px 18px;margin:10px 0;font-size:12px';
+  for(const [label,color] of [['RF trace',RF_COLORS.trace],...(isTwoTone(r)?[['Fundamentals',RF_COLORS.fundamental],['IMD3',RF_COLORS.imd3],['IMD5',RF_COLORS.imd5],['IMD7',RF_COLORS.imd7]]:[]),['Held baseline (dashed)',RF_COLORS.baseline]]){
+    const item=doc.createElement('span');item.style.color=color!;item.textContent='━ '+label;legend.append(item);
+  }
   const table=doc.createElement('table');table.dataset.rfProductTable='';table.style.cssText='width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums';
   if(isTwoTone(r)){
     const header=table.createTHead().insertRow();for(const title of ['Integrated IMD','Low IQ offset','High IQ offset']){const cell=doc.createElement('th');cell.textContent=title;cell.scope='col';cell.style.cssText='text-align:left;color:#9fb5ca;padding:5px;border-bottom:1px solid #31475d';header.append(cell);}
     for(let i=0;i<6;i+=2){const row=table.insertRow();for(const [j,text] of [`IMD${r.products[i]!.order}`,productLabel(r.products[i]!,offset,ui.options.reference),productLabel(r.products[i+1]!,offset,ui.options.reference)].entries()){
-      const cell=row.insertCell();cell.textContent=text.split(' · ')[0]!;cell.style.cssText='padding:6px 5px;border-bottom:1px solid #1c3044;font:13px ui-monospace,monospace';if(j)cell.title=r.products[i+j-1]!.reason;
+      const cell=row.insertCell();cell.textContent=text.split(' · ')[0]!;cell.style.cssText='padding:6px 5px;border-bottom:1px solid #1c3044;font:13px ui-monospace,monospace';if(j)cell.title=r.products[i+j-1]!.reason;else cell.style.color=productColor(r.products[i]!.order);
     }}
   }else {const row=table.insertRow();row.insertCell().textContent='Two-tone IMD unavailable for this stimulus.';}
-  ui.metrics.replaceChildren(head,table);
+  ui.metrics.replaceChildren(legend,head,table);
   ui.details.textContent=`${r.window} · FFT ${r.fftSize.toLocaleString()} · bin spacing ${r.binHz.toFixed(2)} Hz · ENBW ${r.rbwHz.toFixed(2)} Hz · ${(1000*r.fftSize/r.rateHz).toFixed(1)} ms nominal sample window. `
-    +'Blue/grey is current/held RF; amber is the PS-off-requested baseline. Trace shows FFT-bin levels; the table integrates product bands. A < value is an estimated floor bound, not a resolved product. F1/F2 are fundamentals; L/H denote IQ offset, not verified RF sideband orientation. Narrow spans may hide markers. '
+    +'Blue/grey is current/held RF; green/orange/pink/violet identify fundamentals/IMD3/5/7, including held captures. Amber is the PS-off-requested baseline. Trace shows FFT-bin levels; the table integrates product bands. A < value is an estimated floor bound, not a resolved product. F1/F2 are fundamentals; L/H denote IQ offset, not verified RF sideband orientation. Narrow spans may hide markers. '
     +(ui.options.reference==='pep'&&isTwoTone(r)?`PEP reference is calculated from fundamentals, ${offset.toFixed(2)} dB above the weaker tone; no change in measured RF. `:'')
     +'Clocks bound Bridge-ingress age; RF acquisition age and observation-path calibration remain unverified.';
 }

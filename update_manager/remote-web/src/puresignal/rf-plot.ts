@@ -3,6 +3,10 @@ import type {RfSpectrum,RfProduct} from './rf-monitor';
 export type RfReference='tone'|'pep';
 export interface PlotOptions {reference:RfReference;spanHz:number;rangeDb:number}
 export const DEFAULT_PLOT:PlotOptions={reference:'tone',spanHz:16000,rangeDb:140};
+export const RF_COLORS={trace:'#55c7ff',fundamental:'#73efb2',imd3:'#ffad69',imd5:'#ed91db',imd7:'#a69bff',baseline:'#f5be55'};
+export function productColor(order:number):string {
+  return order===3?RF_COLORS.imd3:order===5?RF_COLORS.imd5:RF_COLORS.imd7;
+}
 export function isTwoTone(r:RfSpectrum):boolean {
   return r.stimulus!=='saturn-timing-multisine-v1'&&r.stimulus!=='am-silent-carrier';
 }
@@ -80,16 +84,30 @@ export class RfPlot {
     const units=r&&!isTwoTone(r)?'relative dBFS':o.reference==='pep'?'dB re calculated two-tone PEP':'dBc · weaker fundamental';
     c.fillText(units,left,height-9);c.textAlign='right';c.fillText('IQ offset (kHz)',right,height-9);
     c.save();c.beginPath();c.rect(left,top,right-left,bottom-top);c.clip();
-    const trace=(s:RfSpectrum,color:string,dashed=false)=>{
+    const trace=(s:RfSpectrum,color:string,dashed=false,fill=false)=>{
       const ref=isTwoTone(s)?Math.min(...s.toneDbfs)+referenceOffset(s,o.reference):0;
       c.strokeStyle=color;c.lineWidth=dashed?1.2:1.6;c.setLineDash(dashed?[5,4]:[]);c.beginPath();
       // Every received bin is drawn; no numerical smoothing changes measurements.
-      s.binsDbfs.forEach((db,i)=>{const px=x(s.firstBinHz+i*s.binHz),py=y(db-ref);if(i)c.lineTo(px,py);else c.moveTo(px,py);});c.stroke();c.setLineDash([]);
+      s.binsDbfs.forEach((db,i)=>{const px=x(s.firstBinHz+i*s.binHz),py=y(db-ref);if(i)c.lineTo(px,py);else c.moveTo(px,py);});
+      if(fill){
+        c.save();const wash=c.createLinearGradient(0,top,0,bottom);wash.addColorStop(0,'#55c7ff38');wash.addColorStop(1,'#55c7ff06');
+        c.lineTo(x(s.firstBinHz+(s.binsDbfs.length-1)*s.binHz),bottom);c.lineTo(x(s.firstBinHz),bottom);c.closePath();c.fillStyle=wash;c.fill();c.restore();
+        c.beginPath();s.binsDbfs.forEach((db,i)=>{const px=x(s.firstBinHz+i*s.binHz),py=y(db-ref);if(i)c.lineTo(px,py);else c.moveTo(px,py);});
+      }
+      c.stroke();c.setLineDash([]);
     };
-    if(this.baseline)trace(this.baseline,'#f5be55',true);
-    if(r)trace(r,this.live?'#55c7ff':'#95a8bd');
+    if(r)trace(r,this.live?RF_COLORS.trace:'#95a8bd',false,true);
+    if(this.baseline)trace(this.baseline,RF_COLORS.baseline,true);
     if(r&&isTwoTone(r)){
-      const markers=[...r.toneHz.map((hz,i)=>({hz,label:`F${i+1}`,color:'#71e5bd'})),...r.products.map((p,i)=>({hz:p.offsetHz,label:`${p.order}${i%2?'H':'L'}`,color:'#eba4bd'}))];
+      const markers=[...r.toneHz.map((hz,i)=>({hz,label:`F${i+1}`,color:RF_COLORS.fundamental,resolved:r.reason.startsWith('relative estimate')})),...r.products.map((p,i)=>({hz:p.offsetHz,label:`${p.order}${i%2?'H':'L'}`,color:productColor(p.order),resolved:p.dbc!==null}))];
+      // Color only the actual retained bins in a resolved line's integration
+      // band. Expected guides never manufacture a peak or resolve a floor bound.
+      const ref=Math.min(...r.toneDbfs)+referenceOffset(r,o.reference);
+      for(const m of markers){if(!m.resolved||m.hz<lowHz||m.hz>highHz)continue;
+        const center=Math.round((m.hz-r.firstBinHz)/r.binHz),first=Math.max(0,center-5),last=Math.min(r.binsDbfs.length-1,center+5);
+        c.strokeStyle=m.color;c.lineWidth=2;c.beginPath();
+        for(let i=first;i<=last;i++){const px=x(r.firstBinHz+i*r.binHz),py=y(r.binsDbfs[i]!-ref);if(i===first)c.moveTo(px,py);else c.lineTo(px,py);}c.stroke();
+      }
       markers.forEach((m,i)=>{if(m.hz<lowHz||m.hz>highHz)return;
         c.strokeStyle=m.color;c.globalAlpha=.4;c.lineWidth=.8;c.setLineDash([3,5]);c.beginPath();c.moveTo(x(m.hz),top);c.lineTo(x(m.hz),bottom);c.stroke();c.setLineDash([]);c.globalAlpha=1;
         c.textAlign='center';c.font='11px ui-monospace,monospace';const ty=top+13+(i%3)*15;c.fillStyle='#081522';c.fillRect(x(m.hz)-14,ty-10,28,13);c.fillStyle=m.color;c.fillText(m.label,x(m.hz),ty);
