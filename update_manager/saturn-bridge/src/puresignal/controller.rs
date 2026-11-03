@@ -630,7 +630,8 @@ impl<N: NativePs> Controller<N> {
         }
         if self.backend == Backend::P2 {
             let packets = block.meta.sequence_packets;
-            if packets == 0 || packets as usize > super::adapters::P2_BATCH_PACKETS
+            if packets == 0
+                || packets as usize > super::adapters::P2_BATCH_PACKETS
                 || (packets > 1 && block.pairs != packets as usize * super::adapters::P2_PAIR_COUNT)
             {
                 return self.reject(Fault::WrongFormat, true);

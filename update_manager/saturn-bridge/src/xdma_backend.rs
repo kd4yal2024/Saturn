@@ -161,7 +161,8 @@ impl DirectIqPacketizer {
     /// Reuse full-stream batching for small P2 datagrams at its configured rate.
     pub(crate) fn for_rate(rate: u32) -> Self {
         Self {
-            samples: vec![0.; (rate as usize / DIRECT_TCI_IQ_FRAME_RATE_HZ).max(1) * 2].into_boxed_slice(),
+            samples: vec![0.; (rate as usize / DIRECT_TCI_IQ_FRAME_RATE_HZ).max(1) * 2]
+                .into_boxed_slice(),
             filled: 0,
         }
     }

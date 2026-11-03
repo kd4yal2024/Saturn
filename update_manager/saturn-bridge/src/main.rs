@@ -1063,7 +1063,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                 }
                 TciCommand::SetPureSignalMode(_) => {
-                    eprintln!("saturn-bridge: explicit PS adaptation mode requires the shared TX owner");
+                    eprintln!(
+                        "saturn-bridge: explicit PS adaptation mode requires the shared TX owner"
+                    );
                 }
                 TciCommand::SetPureSignalAutoAttenuate(enabled) => {
                     if tx_requested.load(Ordering::Relaxed) || model.desired.tx_phase != TxPhase::Rx

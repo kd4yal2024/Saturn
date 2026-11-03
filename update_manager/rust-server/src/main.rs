@@ -5295,7 +5295,8 @@ mod tests {
 
     #[test]
     fn shared_owner_receive_observations_satisfy_the_existing_app_gate() {
-        let path = std::env::temp_dir().join(format!("saturn-shared-perf-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("saturn-shared-perf-{}.json", std::process::id()));
         std::fs::write(&path, r#"{
             "schema_version":1,"updated_at_ms":10000,"source":"saturn-bridge",
             "backend":"xdma","phase":"shared-ready-off","status":"review-only",
@@ -5316,7 +5317,8 @@ mod tests {
         assert_eq!(observed["legacy_performance_available"], false);
         assert!(telemetry["current"]["fpga"]["firmware_version"].is_null());
         // A stop in progress cannot be converted into an RF-off assertion.
-        let document = std::fs::read_to_string(&path).unwrap()
+        let document = std::fs::read_to_string(&path)
+            .unwrap()
             .replace("\"tx_keyed\":false", "\"tx_keyed\":null");
         std::fs::write(&path, document).unwrap();
         let stopping = bridge_perf_file_telemetry(&path, Some(42), 11_000).unwrap();

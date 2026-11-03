@@ -135,7 +135,9 @@ impl Stream {
         batch.meta.sequence_packets += 1;
         // Packet-local counter evidence cannot certify this wider interval.
         batch.meta.overload = [None; 3];
-        if batch.meta.sequence_packets as usize != saturn_bridge::puresignal::adapters::P2_BATCH_PACKETS {
+        if batch.meta.sequence_packets as usize
+            != saturn_bridge::puresignal::adapters::P2_BATCH_PACKETS
+        {
             return Ok(());
         }
         let ingress = self.ingress.as_ref().ok_or(Fault::NoController)?;
@@ -296,7 +298,11 @@ pub(crate) mod tests {
             stream.p2(Some(s), &packet(n as u32), origin).unwrap();
         }
         assert_eq!(
-            stream.p2(Some(s), &packet((FEEDBACK_QUEUE_BLOCKS * 8 + 7) as u32), origin),
+            stream.p2(
+                Some(s),
+                &packet((FEEDBACK_QUEUE_BLOCKS * 8 + 7) as u32),
+                origin
+            ),
             Err(Fault::QueueOverrun)
         );
         for _ in 0..FEEDBACK_QUEUE_BLOCKS {
@@ -310,7 +316,9 @@ pub(crate) mod tests {
     }
     #[test]
     fn p2_batch_preserves_each_packet_age_sequence_and_pairs() {
-        let (ingress, rx) = collector(); let origin = Instant::now(); let s = scope(1);
+        let (ingress, rx) = collector();
+        let origin = Instant::now();
+        let s = scope(1);
         let mut stream = Stream::new(s, Backend::P2, origin, ingress.clone()).unwrap();
         for n in 0..16 {
             let at = origin + std::time::Duration::from_millis(if n == 0 { 0 } else { 200 + n });
@@ -318,7 +326,8 @@ pub(crate) mod tests {
         }
         for batch in 0..2 {
             let b = rx.feedback.try_recv().unwrap();
-            assert_eq!(b.pairs, 952); assert_eq!(b.meta.sequence, Some(batch * 8));
+            assert_eq!(b.pairs, 952);
+            assert_eq!(b.meta.sequence, Some(batch * 8));
             assert_eq!(b.meta.sequence_packets, 8);
             assert_eq!(b.meta.interval.first, batch as u64 * 952);
             assert_eq!(b.meta.interval.end, (batch as u64 + 1) * 952);
@@ -326,24 +335,38 @@ pub(crate) mod tests {
             for packet in 0..8 {
                 let n = batch as u64 * 8 + packet as u64;
                 let age = if n == 0 { 0 } else { (200 + n) * 1_000_000 };
-                assert!(b.arrival_ns[packet * 119..(packet + 1) * 119].iter().all(|v| *v == age));
+                assert!(b.arrival_ns[packet * 119..(packet + 1) * 119]
+                    .iter()
+                    .all(|v| *v == age));
             }
             assert!(b.meta.overload.iter().all(Option::is_none));
             ingress.recycle_feedback_buffer(b);
         }
         drop(stream);
-        let buffers: Vec<_> = (0..FEEDBACK_POOL_BLOCKS).map(|_| ingress.take_feedback_buffer().unwrap()).collect();
+        let buffers: Vec<_> = (0..FEEDBACK_POOL_BLOCKS)
+            .map(|_| ingress.take_feedback_buffer().unwrap())
+            .collect();
         assert_eq!(buffers.len(), FEEDBACK_POOL_BLOCKS);
     }
     #[test]
     fn p2_gap_inside_partial_batch_cannot_publish_a_contiguous_block() {
-        let (ingress, rx) = collector(); let origin = Instant::now(); let s = scope(1);
+        let (ingress, rx) = collector();
+        let origin = Instant::now();
+        let s = scope(1);
         let mut stream = Stream::new(s, Backend::P2, origin, ingress.clone()).unwrap();
-        for n in 0..7 { stream.p2(Some(s), &packet(n), origin).unwrap(); }
+        for n in 0..7 {
+            stream.p2(Some(s), &packet(n), origin).unwrap();
+        }
         assert!(rx.feedback.try_recv().is_err());
-        assert_eq!(stream.p2(Some(s), &packet(8), origin), Err(Fault::SequenceGap));
-        assert!(rx.feedback.try_recv().is_err()); drop(stream);
-        let buffers: Vec<_> = (0..FEEDBACK_POOL_BLOCKS).map(|_| ingress.take_feedback_buffer().unwrap()).collect();
+        assert_eq!(
+            stream.p2(Some(s), &packet(8), origin),
+            Err(Fault::SequenceGap)
+        );
+        assert!(rx.feedback.try_recv().is_err());
+        drop(stream);
+        let buffers: Vec<_> = (0..FEEDBACK_POOL_BLOCKS)
+            .map(|_| ingress.take_feedback_buffer().unwrap())
+            .collect();
         assert_eq!(buffers.len(), FEEDBACK_POOL_BLOCKS);
     }
     pub(crate) fn direct_frames(count: usize) -> Vec<u8> {
@@ -418,7 +441,9 @@ pub(crate) mod tests {
         let mut stream = Stream::new(s, Backend::P2, origin, ingress.clone()).unwrap();
         stream.p2(Some(scope(0)), &packet(0), origin).unwrap();
         assert!(rx.feedback.try_recv().is_err());
-        for n in 0..8 { stream.p2(Some(s), &packet(n), origin).unwrap(); }
+        for n in 0..8 {
+            stream.p2(Some(s), &packet(n), origin).unwrap();
+        }
         let block = rx.feedback.try_recv().unwrap();
         assert_eq!((block.pairs, block.rf[0], block.tx[0]), (952, 0.125, 0.25));
         assert!(block.meta.overload.iter().all(Option::is_none));

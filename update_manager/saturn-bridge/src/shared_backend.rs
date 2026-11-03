@@ -209,11 +209,12 @@ fn run_inner_with_state_store<I: RuntimeIo>(
     let frontend = Arc::new(frontend);
     // Reuse the Legacy observer: acquisition only copies into its lock-free
     // latest-IQ ring; FFT work stays outside the acquisition/TX owner loops.
-    let spectrum_ring = Arc::new(crate::display_spectrum::LatestIqRing::new(
-        u64::from(initial_receive.iq_center_hz),
-    ));
+    let spectrum_ring = Arc::new(crate::display_spectrum::LatestIqRing::new(u64::from(
+        initial_receive.iq_center_hz,
+    )));
     let _spectrum_worker = crate::display_spectrum::SpectrumWorker::spawn(
-        frontend.clone(), spectrum_ring.clone(),
+        frontend.clone(),
+        spectrum_ring.clone(),
         u32::from(config.ddc0_sample_rate_khz) * 1000,
     )?;
     let _correction_worker = crate::correction_monitor::Worker::optional(
@@ -523,8 +524,8 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                 "p2"
             };
             let clients = frontend.client_snapshot();
-            let ddc_per_second = (received_frames - status_rx_frames) as f64
-                / last_status.elapsed().as_secs_f64();
+            let ddc_per_second =
+                (received_frames - status_rx_frames) as f64 / last_status.elapsed().as_secs_f64();
             for path in [ready, perf] {
                 let (phase, clean_idle) = runtime.ingress.host_readiness();
                 let observation = crate::xdma_telemetry::SharedHostObservation {
@@ -601,7 +602,9 @@ fn publish_receive(
     display_packetizer: Option<&mut crate::xdma_backend::DirectIqPacketizer>,
     spectrum_ring: Option<&crate::display_spectrum::LatestIqRing>,
 ) {
-    if let Some(ring) = spectrum_ring { ring.push(iq); }
+    if let Some(ring) = spectrum_ring {
+        ring.push(iq);
+    }
     if let Some(packetizer) = display_packetizer {
         // Same full-stream batching as Legacy Direct XDMA. Sending each tiny
         // DMA completion through the snapshot limiter discards most samples

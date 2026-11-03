@@ -4359,8 +4359,13 @@ fn operator_disconnect_skips_declared_viewer_and_leaves_reconnect_available() {
     let clients = test_client_registry(1);
     let operator_client_id = Arc::new(AtomicU64::new(1));
     register_client(
-        &clients, &operator_client_id, 2, ClientOutbound::new(),
-        TxCodecRuntimeFlags::default(), None, true,
+        &clients,
+        &operator_client_id,
+        2,
+        ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(),
+        None,
+        true,
     );
     assert_eq!(
         set_client_split_session_open(&clients, 2, "diagnostic-recorder", TciClientRole::Viewer),
@@ -4371,22 +4376,42 @@ fn operator_disconnect_skips_declared_viewer_and_leaves_reconnect_available() {
     assert_eq!(disconnect.promoted_operator, None);
     assert_eq!(operator_client_id.load(Ordering::SeqCst), 0);
     let (role, _, _) = register_client(
-        &clients, &operator_client_id, 3, ClientOutbound::new(),
-        TxCodecRuntimeFlags::default(), Some(SplitSocketKind::Control), true,
+        &clients,
+        &operator_client_id,
+        3,
+        ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(),
+        Some(SplitSocketKind::Control),
+        true,
     );
     assert_eq!(role, TciClientRole::Operator);
     assert_eq!(operator_client_id.load(Ordering::SeqCst), 3);
 
     // An explicitly declared observer stays a viewer across later handoffs too.
     register_client(
-        &clients, &operator_client_id, 4, ClientOutbound::new(),
-        TxCodecRuntimeFlags::default(), Some(SplitSocketKind::Control), true,
+        &clients,
+        &operator_client_id,
+        4,
+        ClientOutbound::new(),
+        TxCodecRuntimeFlags::default(),
+        Some(SplitSocketKind::Control),
+        true,
     );
     let disconnect = unregister_client(&clients, &operator_client_id, 3);
     assert_eq!(disconnect.promoted_operator, Some(4));
     assert_eq!(operator_client_id.load(Ordering::SeqCst), 4);
-    assert_eq!(clients.lock_unpoisoned().get(&2).unwrap().state.split.as_ref().unwrap().role,
-        Some(TciClientRole::Viewer));
+    assert_eq!(
+        clients
+            .lock_unpoisoned()
+            .get(&2)
+            .unwrap()
+            .state
+            .split
+            .as_ref()
+            .unwrap()
+            .role,
+        Some(TciClientRole::Viewer)
+    );
 }
 
 #[test]

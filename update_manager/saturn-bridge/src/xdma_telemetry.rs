@@ -240,7 +240,16 @@ pub(crate) fn record_shared_host_status(
     rx_frames: u64,
     rx_iq_pairs: u64,
 ) -> io::Result<()> {
-    record_shared_observed_host_status(path, backend, phase, counter_json, clean_idle, rx_frames, rx_iq_pairs, None)
+    record_shared_observed_host_status(
+        path,
+        backend,
+        phase,
+        counter_json,
+        clean_idle,
+        rx_frames,
+        rx_iq_pairs,
+        None,
+    )
 }
 
 /// Existing acquisition/TCI owners supply these observations. No extra device

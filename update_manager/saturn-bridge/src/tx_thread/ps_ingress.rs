@@ -27,17 +27,17 @@ use saturn_bridge::puresignal::{
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::{
     io,
-    sync::{
-        mpsc,
-        Arc, Mutex, OnceLock,
-    },
+    sync::{mpsc, Arc, Mutex, OnceLock},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 // Capture occurrence before notification/formatting. Journald's receive time
 // can follow a blocked notifier and must not be mistaken for detection time.
 fn queue_fault_report(boundary: &str, detected: SystemTime, notification_started: Instant) {
-    let detected_epoch_ns = detected.duration_since(UNIX_EPOCH).ok().map(|d| d.as_nanos());
+    let detected_epoch_ns = detected
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_nanos());
     let notification_ns = notification_started.elapsed().as_nanos();
     eprintln!("shared TX queue fault boundary={boundary} fault=QueueOverrun detected_epoch_ns={detected_epoch_ns:?} notification_ns={notification_ns}");
 }
@@ -293,26 +293,39 @@ impl Drop for TwoToneTrial {
 impl SharedIngress {
     pub(crate) fn enable_auto_mode(&self) -> Result<(), Fault> {
         if self.measurement_only_mode()
-            || self.view.lock_unpoisoned().as_ref().is_some_and(|v| v.installed.is_some())
+            || self
+                .view
+                .lock_unpoisoned()
+                .as_ref()
+                .is_some_and(|v| v.installed.is_some())
         {
             return Err(Fault::InvalidConfig);
         }
-        self.auto_mode_supported.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ()).map_err(|_| Fault::InvalidConfig)
+        self.auto_mode_supported
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| Fault::InvalidConfig)
     }
     pub(crate) fn auto_mode_caps(&self) -> Option<&'static str> {
-        self.auto_mode_supported.load(Ordering::Acquire)
+        self.auto_mode_supported
+            .load(Ordering::Acquire)
             .then_some("saturn_ps_auto_caps:0,continuous-wdsp-v1;")
     }
     /// Bind the explicit host limit before client admission. Initial drive is
     /// the requested operating level, not the owner's authorization ceiling.
     pub(crate) fn set_drive_ceiling(&self, watts: u8) -> Result<(), Fault> {
         if !(1..=100).contains(&watts)
-            || self.view.lock_unpoisoned().as_ref().is_some_and(|v| v.installed.is_some())
+            || self
+                .view
+                .lock_unpoisoned()
+                .as_ref()
+                .is_some_and(|v| v.installed.is_some())
         {
             return Err(Fault::InvalidConfig);
         }
-        self.drive_ceiling.set(watts).map_err(|_| Fault::InvalidConfig)
+        self.drive_ceiling
+            .set(watts)
+            .map_err(|_| Fault::InvalidConfig)
     }
     pub(crate) fn fault_ack_message(
         &self,
@@ -402,8 +415,10 @@ impl SharedIngress {
     pub(crate) fn enable_two_tone_trials(&self, limits: TwoToneLimits) -> Result<(), Fault> {
         let operating = limits.max_ms == 0 && limits.frequency_hz == 0;
         if self.measurement_only_mode()
-            || (!operating && (limits.max_ms == 0 || limits.max_ms > 45_000
-                || !(1_500_000..=35_000_000).contains(&limits.frequency_hz)))
+            || (!operating
+                && (limits.max_ms == 0
+                    || limits.max_ms > 45_000
+                    || !(1_500_000..=35_000_000).contains(&limits.frequency_hz)))
         {
             return Err(Fault::InvalidConfig);
         }
@@ -417,11 +432,15 @@ impl SharedIngress {
             .filter(|_| !self.measurement_only_mode())
             .map(|l| {
                 if l.frequency_hz == 0 {
-                    format!("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,{};",
-                        self.drive_ceiling.get().copied().unwrap_or(1))
+                    format!(
+                        "saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,{};",
+                        self.drive_ceiling.get().copied().unwrap_or(1)
+                    )
                 } else {
-                    format!("saturn_ps_two_tone_caps:0,tagged-two-tone-v1,{},{},5;",
-                        l.max_ms, l.frequency_hz)
+                    format!(
+                        "saturn_ps_two_tone_caps:0,tagged-two-tone-v1,{},{},5;",
+                        l.max_ms, l.frequency_hz
+                    )
                 }
             })
     }
@@ -507,7 +526,12 @@ impl SharedIngress {
                 || (!operating && (ms == 0 || ms > limits.max_ms))
                 || (c.config.automatic && !self.auto_mode_supported.load(Ordering::Acquire))
                 || c.model.desired.tx_drive == 0
-                || c.model.desired.tx_drive > if operating { self.drive_ceiling.get().copied().unwrap_or(1) } else { 5 }
+                || c.model.desired.tx_drive
+                    > if operating {
+                        self.drive_ceiling.get().copied().unwrap_or(1)
+                    } else {
+                        5
+                    }
                 || (!operating && c.model.desired.tx_frequency_hz != limits.frequency_hz)
                 || !matches!(c.model.desired.mode, DemodMode::Usb | DemodMode::Lsb)
                 || c.source != TxAudioSource::Tci
@@ -695,23 +719,50 @@ mod measurement_tests {
         let (i, rx) = crate::tx_thread::feedback_owner::tests::collector();
         i.set_drive_ceiling(100).unwrap();
         ready(&i);
-        i.enable_two_tone_trials(TwoToneLimits { frequency_hz: 0, max_ms: 0 }).unwrap();
-        assert_eq!(i.two_tone_caps().as_deref(), Some("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;"));
+        i.enable_two_tone_trials(TwoToneLimits {
+            frequency_hz: 0,
+            max_ms: 0,
+        })
+        .unwrap();
+        assert_eq!(
+            i.two_tone_caps().as_deref(),
+            Some("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;")
+        );
         for (n, hz, watts, duration) in [(1, 3_897_000, 60, 0), (2, 27_385_000, 100, 90_000)] {
             let mut capture = i.capture(Instant::now()).unwrap();
             capture.model.desired.tx_frequency_hz = hz;
             capture.model.desired.tx_drive = watts;
-            i.two_tone_message(7, &format!("saturn_ps_two_tone:0,{n},start,{duration};"), Some(&capture));
-            let TxCommand::PureSignalAuthorizedArm(mut arm) = rx.commands.try_recv().unwrap() else { panic!("missing arm"); };
-            assert_eq!(arm.trial.as_ref().unwrap().duration_ns, duration * 1_000_000);
+            i.two_tone_message(
+                7,
+                &format!("saturn_ps_two_tone:0,{n},start,{duration};"),
+                Some(&capture),
+            );
+            let TxCommand::PureSignalAuthorizedArm(mut arm) = rx.commands.try_recv().unwrap()
+            else {
+                panic!("missing arm");
+            };
+            assert_eq!(
+                arm.trial.as_ref().unwrap().duration_ns,
+                duration * 1_000_000
+            );
             arm.trial.as_mut().unwrap().reject(Fault::Stale);
         }
         let capture = i.capture(Instant::now()).unwrap();
-        i.two_tone_message(7, "saturn_ps_two_tone:0,3,start,18446744073709551615;", Some(&capture));
+        i.two_tone_message(
+            7,
+            "saturn_ps_two_tone:0,3,start,18446744073709551615;",
+            Some(&capture),
+        );
         assert!(rx.commands.try_recv().is_err());
-        assert!(!i.two_tone_pending.load(Ordering::Acquire), "overflow cannot strand pending output");
+        assert!(
+            !i.two_tone_pending.load(Ordering::Acquire),
+            "overflow cannot strand pending output"
+        );
         i.two_tone_message(8, "saturn_ps_two_tone:0,4,start,0;", Some(&capture));
-        assert!(rx.commands.try_recv().is_err(), "viewer cannot authorize output");
+        assert!(
+            rx.commands.try_recv().is_err(),
+            "viewer cannot authorize output"
+        );
     }
 
     #[test]
@@ -893,7 +944,13 @@ mod measurement_tests {
         let (ingress, rx) = collector();
         let capture = ingress.capture(Instant::now()).unwrap();
         for attenuation in [0, 13, 31] {
-            ingress.configure_batch(7, Some(&capture), &[TciCommand::SetPureSignalAttenuation(attenuation)]).unwrap();
+            ingress
+                .configure_batch(
+                    7,
+                    Some(&capture),
+                    &[TciCommand::SetPureSignalAttenuation(attenuation)],
+                )
+                .unwrap();
             let TxCommand::PureSignalOwnerConfig(c) = rx.commands.try_recv().unwrap() else {
                 panic!("missing ordered feedback setting")
             };
@@ -901,10 +958,24 @@ mod measurement_tests {
             assert!(!c.view().0.desired.tx_enabled);
             assert!(!c.view().1.enabled);
         }
-        assert_eq!(ingress.configure_batch(7, Some(&capture), &[TciCommand::SetPureSignalAttenuation(32)]), Err(Fault::InvalidConfig));
+        assert_eq!(
+            ingress.configure_batch(
+                7,
+                Some(&capture),
+                &[TciCommand::SetPureSignalAttenuation(32)]
+            ),
+            Err(Fault::InvalidConfig)
+        );
         assert!(rx.commands.try_recv().is_err());
         ingress.release();
-        assert_eq!(ingress.configure_batch(7, Some(&capture), &[TciCommand::SetPureSignalAttenuation(0)]), Err(Fault::GenerationMismatch));
+        assert_eq!(
+            ingress.configure_batch(
+                7,
+                Some(&capture),
+                &[TciCommand::SetPureSignalAttenuation(0)]
+            ),
+            Err(Fault::GenerationMismatch)
+        );
     }
     #[test]
     fn explicit_host_drive_ceiling_survives_lower_startup_and_ordered_settings() {
@@ -914,18 +985,29 @@ mod measurement_tests {
         ingress.set_drive_ceiling(100).unwrap();
         assert_eq!(ingress.set_drive_ceiling(100), Err(Fault::InvalidConfig));
         ready(&ingress); // starts at 5 W, with a separately supplied 100 W limit
-        assert_eq!(ingress.drive_limit_message(), "saturn_tx_drive_limit:0,100;");
+        assert_eq!(
+            ingress.drive_limit_message(),
+            "saturn_tx_drive_limit:0,100;"
+        );
         assert_eq!(ingress.set_drive_ceiling(5), Err(Fault::InvalidConfig));
         let capture = ingress.capture(Instant::now()).unwrap();
         for watts in [3, 100, 5] {
-            ingress.configure_batch(7, Some(&capture), &[TciCommand::SetTxDrive(watts)]).unwrap();
+            ingress
+                .configure_batch(7, Some(&capture), &[TciCommand::SetTxDrive(watts)])
+                .unwrap();
             let TxCommand::PureSignalOwnerConfig(c) = rx.commands.try_recv().unwrap() else {
                 panic!("missing ordered power setting")
             };
             assert_eq!(c.view().0.desired.tx_drive, watts);
         }
-        assert_eq!(ingress.configure_batch(7, Some(&capture), &[TciCommand::SetTxDrive(101)]), Err(Fault::InvalidConfig));
-        assert_eq!(ingress.drive_limit_message(), "saturn_tx_drive_limit:0,100;");
+        assert_eq!(
+            ingress.configure_batch(7, Some(&capture), &[TciCommand::SetTxDrive(101)]),
+            Err(Fault::InvalidConfig)
+        );
+        assert_eq!(
+            ingress.drive_limit_message(),
+            "saturn_tx_drive_limit:0,100;"
+        );
         assert!(rx.commands.try_recv().is_err());
     }
     #[test]
@@ -1068,23 +1150,39 @@ mod measurement_tests {
         let (ingress, _) = crate::tx_thread::feedback_owner::tests::collector();
         ready(&ingress);
         let (stamp, mut status, installed) = {
-            let view=ingress.view.lock_unpoisoned();let v=view.as_ref().unwrap();
-            (v.stamp,v.status,v.installed.clone())
+            let view = ingress.view.lock_unpoisoned();
+            let v = view.as_ref().unwrap();
+            (v.stamp, v.status, v.installed.clone())
         };
         for phase in [Phase::Active, Phase::ReadyOff] {
-            status.phase=phase;status.stop_id+=1;
-            let guard=ingress.model.lock_unpoisoned();
-            let worker=ingress.clone();let values=installed.clone();
-            let (done,rx)=std::sync::mpsc::channel();
-            let join=std::thread::spawn(move||{worker.publish(stamp,status,values,TxAudioSource::Tci);done.send(()).unwrap();});
-            let published=rx.recv_timeout(Duration::from_secs(1)).is_ok();
-            drop(guard);join.join().unwrap();
-            assert!(published,"phase publication waited for a held model mutex: {phase:?}");
-            assert_eq!(ingress.view.lock_unpoisoned().as_ref().unwrap().phase,phase);
+            status.phase = phase;
+            status.stop_id += 1;
+            let guard = ingress.model.lock_unpoisoned();
+            let worker = ingress.clone();
+            let values = installed.clone();
+            let (done, rx) = std::sync::mpsc::channel();
+            let join = std::thread::spawn(move || {
+                worker.publish(stamp, status, values, TxAudioSource::Tci);
+                done.send(()).unwrap();
+            });
+            let published = rx.recv_timeout(Duration::from_secs(1)).is_ok();
+            drop(guard);
+            join.join().unwrap();
+            assert!(
+                published,
+                "phase publication waited for a held model mutex: {phase:?}"
+            );
+            assert_eq!(
+                ingress.view.lock_unpoisoned().as_ref().unwrap().phase,
+                phase
+            );
             // A deferred phase projection is retried even though lifecycle
             // publication already advanced. No field or sample is restamped.
-            ingress.publish(stamp,status,installed.clone(),TxAudioSource::Tci);
-            assert_eq!(ingress.model.lock_unpoisoned().desired.tx_enabled,phase==Phase::Active);
+            ingress.publish(stamp, status, installed.clone(), TxAudioSource::Tci);
+            assert_eq!(
+                ingress.model.lock_unpoisoned().desired.tx_enabled,
+                phase == Phase::Active
+            );
         }
     }
     #[test]
@@ -1093,7 +1191,10 @@ mod measurement_tests {
         ready(&strict);
         let c = strict.capture(Instant::now()).unwrap();
         assert!(strict.auto_mode_caps().is_none());
-        assert_eq!(strict.configure_batch(7, Some(&c), &[TciCommand::SetPureSignalMode(2)]), Err(Fault::InvalidConfig));
+        assert_eq!(
+            strict.configure_batch(7, Some(&c), &[TciCommand::SetPureSignalMode(2)]),
+            Err(Fault::InvalidConfig)
+        );
         assert!(rx.commands.try_recv().is_err());
         assert_eq!(strict.enable_auto_mode(), Err(Fault::InvalidConfig));
 
@@ -1101,15 +1202,26 @@ mod measurement_tests {
         ingress.enable_auto_mode().unwrap();
         assert_eq!(ingress.enable_auto_mode(), Err(Fault::InvalidConfig));
         ready(&ingress);
-        assert_eq!(ingress.auto_mode_caps(), Some("saturn_ps_auto_caps:0,continuous-wdsp-v1;"));
+        assert_eq!(
+            ingress.auto_mode_caps(),
+            Some("saturn_ps_auto_caps:0,continuous-wdsp-v1;")
+        );
         let c = ingress.capture(Instant::now()).unwrap();
-        ingress.configure_batch(7, Some(&c), &[TciCommand::SetPureSignalMode(2)]).unwrap();
-        assert!(matches!(rx.commands.try_recv().unwrap(), TxCommand::PureSignalOwnerConfig(_)));
+        ingress
+            .configure_batch(7, Some(&c), &[TciCommand::SetPureSignalMode(2)])
+            .unwrap();
+        assert!(matches!(
+            rx.commands.try_recv().unwrap(),
+            TxCommand::PureSignalOwnerConfig(_)
+        ));
         let tail = ingress.settings_tail.lock_unpoisoned();
         let config = tail.as_ref().unwrap().config;
         assert!(config.enabled && config.automatic);
         assert!(rx.commands.try_recv().is_err());
-        assert!(ingress.owner_status_message().unwrap().contains("saturn_ps_mode:0,1,off;"));
+        assert!(ingress
+            .owner_status_message()
+            .unwrap()
+            .contains("saturn_ps_mode:0,1,off;"));
     }
     #[test]
     fn measurement_only_cannot_advertise_auto_adaptation() {
@@ -1467,7 +1579,9 @@ impl SharedIngress {
         &self,
         host: Arc<super::ps_measurement::Host>,
     ) -> Result<(), Fault> {
-        if self.auto_mode_supported.load(Ordering::Acquire) { return Err(Fault::InvalidConfig); }
+        if self.auto_mode_supported.load(Ordering::Acquire) {
+            return Err(Fault::InvalidConfig);
+        }
         self.measurement_host
             .set(host)
             .map_err(|_| Fault::InvalidConfig)

@@ -1203,11 +1203,14 @@ fn exercise_pump_boundary(case: PumpBoundary) {
                 // Finite failure bound; an assertion failure cannot strand a
                 // helper thread or leave its test mutex held indefinitely.
                 let _ = resume_rx.recv_timeout(Duration::from_secs(2));
-            }).ok();
+            })
+            .ok();
         });
         entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         Some((resume_tx, worker, Instant::now()))
-    } else { None };
+    } else {
+        None
+    };
     r.counters.active_max_turn_ns = 0;
     r.turn_with_before_pump(now, |r| {
         hook_ran = true;
@@ -1229,7 +1232,10 @@ fn exercise_pump_boundary(case: PumpBoundary) {
     });
     assert!(hook_ran);
     let active_turn_ns = r.counters.active_max_turn_ns;
-    assert!(active_turn_ns > 0, "retain the final active turn even when pump stops it");
+    assert!(
+        active_turn_ns > 0,
+        "retain the final active turn even when pump stops it"
+    );
     if case == PumpBoundary::Healthy {
         assert_eq!(r.life.status().phase, Phase::Active);
         assert_eq!(r.life.status().primary_fault, None);
@@ -1293,12 +1299,16 @@ fn exercise_pump_boundary(case: PumpBoundary) {
         let elapsed = started.elapsed();
         resume.send(()).ok();
         worker.join().unwrap();
-        assert!(elapsed < Duration::from_secs(1),
-            "release/receipt/native cleanup waited behind paused queue producer: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "release/receipt/native cleanup waited behind paused queue producer: {elapsed:?}"
+        );
     }
     if case != PumpBoundary::Healthy {
-        assert_eq!(r.counters.active_max_turn_ns, active_turn_ns,
-            "later stop/cleanup turns cannot replace active timing evidence");
+        assert_eq!(
+            r.counters.active_max_turn_ns, active_turn_ns,
+            "later stop/cleanup turns cannot replace active timing evidence"
+        );
     }
     assert!(r.life.offline_owner().queues_empty());
     d.assert_off(); // ordinary-file control readback, NOT physical RF-off
@@ -1481,7 +1491,11 @@ fn scheduled_pcm_burst_stale_samples_cannot_be_refreshed_or_key() {
 }
 impl NativePs for Fake {
     fn measurement_only_guard(&mut self) -> Result<(), Fault> {
-        if self.trace.borrow().ps_enabled { Err(Fault::NativeFailure) } else { Ok(()) }
+        if self.trace.borrow().ps_enabled {
+            Err(Fault::NativeFailure)
+        } else {
+            Ok(())
+        }
     }
     fn configure(&mut self, config: Config) -> Result<f64, Fault> {
         self.trace.borrow_mut().ps_enabled = config.enabled || config.automatic;
@@ -1886,8 +1900,12 @@ fn operator_two_tone_actual_owner_runs_past_elapsed_cutoff_and_cleans_both_backe
 #[test]
 #[ignore = "serial actual owner and matched WDSP, files/loopback only; no RF"]
 fn operator_two_tone_real_native_manual_stop_and_cleanup_both_backends() {
-    unsafe extern "C" { fn fftw_set_timelimit(seconds: f64); }
-    unsafe { fftw_set_timelimit(0.01); }
+    unsafe extern "C" {
+        fn fftw_set_timelimit(seconds: f64);
+    }
+    unsafe {
+        fftw_set_timelimit(0.01);
+    }
     for backend in [Backend::P2, Backend::DirectXdma] {
         generated_single_trial(backend, "operator-release", true, |m| {
             crate::wdsp::ps_native::FullNative::matched(m).unwrap()
@@ -1995,7 +2013,9 @@ fn generated_single_trial<N: ScheduledNative>(
     } else {
         OwnerStopAdapter::direct(direct.as_ref().unwrap().radio.clone(), &mut iq, &mut mic).unwrap()
     };
-    output.enable_offline_handoff(&m, if operating { 100 } else { 5 }).unwrap();
+    output
+        .enable_offline_handoff(&m, if operating { 100 } else { 5 })
+        .unwrap();
     let life = controller(native(&m), output, backend);
     let origin = Instant::now();
     let issuer = OperatorIngress::fixture();
@@ -2013,7 +2033,9 @@ fn generated_single_trial<N: ScheduledNative>(
         },
     )
     .unwrap();
-    if operating { ingress.set_drive_ceiling(100).unwrap(); }
+    if operating {
+        ingress.set_drive_ceiling(100).unwrap();
+    }
     ingress
         .enable_two_tone_trials(TwoToneLimits {
             frequency_hz: if operating { 0 } else { 7_200_000 },
@@ -2036,9 +2058,11 @@ fn generated_single_trial<N: ScheduledNative>(
     }
     let mut config = cfg(11);
     config.automatic = false;
-    if operating { config.enabled = false; } // baseline runs without adaptation/feedback
-    // This isolated native fixture must allow actual DSP startup before its
-    // finite action expires; it is not a measured hardware key-latency bound.
+    if operating {
+        config.enabled = false;
+    } // baseline runs without adaptation/feedback
+      // This isolated native fixture must allow actual DSP startup before its
+      // finite action expires; it is not a measured hardware key-latency bound.
     config.stale_after_ns = if case == "feedback-stale" {
         150_000_000
     } else if case == "missing" {
@@ -2065,16 +2089,24 @@ fn generated_single_trial<N: ScheduledNative>(
         if now >= 5_000_000_000 {
             let mut replies = Vec::new();
             while let Some(item) = outbound.next_message(false) {
-                if let crate::tci::OutboundMessage::TransactionText(text) = item.message { replies.push(text); }
+                if let crate::tci::OutboundMessage::TransactionText(text) = item.message {
+                    replies.push(text);
+                }
             }
-            panic!("trial timeout {backend:?}/{case} {:?}; rejected={} replies={replies:?}", r.life.status(), r.counters.rejected);
+            panic!(
+                "trial timeout {backend:?}/{case} {:?}; rejected={} replies={replies:?}",
+                r.life.status(),
+                r.counters.rejected
+            );
         }
         drain();
         if stage == 0 && ingress.startup_ready() && (case != "stale-request" || now > 160_000_000) {
             let capture = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
             old_capture = Some(capture.clone());
             requested = now;
-            let duration = if operating { 0 } else if matches!(case, "missing" | "missing-source") {
+            let duration = if operating {
+                0
+            } else if matches!(case, "missing" | "missing-source") {
                 1000
             } else {
                 600
@@ -2154,9 +2186,14 @@ fn generated_single_trial<N: ScheduledNative>(
             next_audio = now + 10_666_667;
         }
         if stage == 1
-            && active_at.is_some_and(|t| now.saturating_sub(t) > if operating { 2_100_000_000 } else { 40_000_000 })
+            && active_at.is_some_and(|t| {
+                now.saturating_sub(t) > if operating { 2_100_000_000 } else { 40_000_000 }
+            })
             && !injected
-            && matches!(case, "release" | "config" | "disconnect" | "operator-release" | "operator-disconnect")
+            && matches!(
+                case,
+                "release" | "config" | "disconnect" | "operator-release" | "operator-disconnect"
+            )
         {
             if matches!(case, "release" | "operator-release") {
                 ingress.release();
@@ -2304,7 +2341,10 @@ fn generated_single_trial<N: ScheduledNative>(
     assert_eq!(stage, 2);
     if operating {
         assert!(active && injected && r.counters.iq_packets > 0);
-        assert!(observed_peak > 0., "manual-stop action must render real output");
+        assert!(
+            observed_peak > 0.,
+            "manual-stop action must render real output"
+        );
         assert_eq!(r.counters.deadline_stops, 0);
     }
     assert!(r.life.offline_owner().queues_empty());
@@ -2598,7 +2638,7 @@ fn feedback<N: ScheduledNative>(
         route: 20,
         observed_ns: now,
         sequence: None,
-                sequence_packets: 0,
+        sequence_packets: 0,
         rate_hz: 192000,
         overload: [None; 3],
     };

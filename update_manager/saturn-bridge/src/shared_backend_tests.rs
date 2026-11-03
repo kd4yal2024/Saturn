@@ -45,7 +45,10 @@ enum Case {
 }
 impl Case {
     fn native_two_tone(self) -> bool {
-        matches!(self, Self::BaselineTwoTone | Self::NativeKeepaliveGap | Self::NativeKeepaliveMissing)
+        matches!(
+            self,
+            Self::BaselineTwoTone | Self::NativeKeepaliveGap | Self::NativeKeepaliveMissing
+        )
     }
     fn diagnostic(self) -> bool {
         matches!(
@@ -189,8 +192,10 @@ impl RuntimeIo for Io {
     fn started(&mut self, runtime: &production_owner::Runtime, _: &Arc<TciFrontend>) {
         self.ingress = Some(runtime.ingress.clone());
         if std::env::var("SATURN_PS_GENERATED_OPERATIONAL").as_deref() == Ok("1") {
-            assert_eq!(runtime.ingress.two_tone_caps().as_deref(),
-                Some("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;"));
+            assert_eq!(
+                runtime.ingress.two_tone_caps().as_deref(),
+                Some("saturn_ps_two_tone_caps:0,operator-two-tone-v1,0,0,100;")
+            );
         }
         self.link = Some(runtime.link.clone());
         let check_persistence = self.expected_rx.is_some();
@@ -374,20 +379,33 @@ impl RuntimeIo for Io {
                     gap_tail_packets.get_or_insert_with(|| output_packets.load(Ordering::Acquire));
                 }
                 if case == Case::NativeKeepaliveGap && gap_ms >= 400 && !gap_completed {
-                    assert_eq!(status.phase, Phase::Active, "short keepalive gap must not stop native output");
+                    assert_eq!(
+                        status.phase,
+                        Phase::Active,
+                        "short keepalive gap must not stop native output"
+                    );
                     let before = gap_tail_packets.expect("must observe tail of keepalive pause");
-                    assert!(output_packets.load(Ordering::Acquire) > before + 5,
-                        "native output must continue after retained input has drained");
+                    assert!(
+                        output_packets.load(Ordering::Acquire) > before + 5,
+                        "native output must continue after retained input has drained"
+                    );
                     gap_completed = true;
                 }
                 if case == Case::NativeKeepaliveMissing && status.primary_fault.is_some() {
                     assert_eq!(status.primary_fault, Some(Fault::Stale));
-                    assert!(gap_ms >= 600, "existing source watchdog must not fire at the old 50 ms browser deadline");
+                    assert!(
+                        gap_ms >= 600,
+                        "existing source watchdog must not fire at the old 50 ms browser deadline"
+                    );
                     if status.phase == Phase::ReadyOff {
-                        assert!(status.cleanup_completed_ns.is_some() && status.authority_completed_ns.is_some());
+                        assert!(
+                            status.cleanup_completed_ns.is_some()
+                                && status.authority_completed_ns.is_some()
+                        );
                         stop.store(true, Ordering::Release);
                         while !joined.load(Ordering::Acquire) {
-                            assert!(Instant::now() < end); thread::sleep(Duration::from_millis(1));
+                            assert!(Instant::now() < end);
+                            thread::sleep(Duration::from_millis(1));
                         }
                         return 0;
                     }
@@ -397,7 +415,9 @@ impl RuntimeIo for Io {
                 }
                 match stage {
                     0 if ingress.startup_ready()
-                        && (case != Case::ReceiveSpectrum || driver_started.elapsed() >= Duration::from_millis(500)) => {
+                        && (case != Case::ReceiveSpectrum
+                            || driver_started.elapsed() >= Duration::from_millis(500)) =>
+                    {
                         // run_inner alone opens admission. No test-side admit.
                         let mut c = Client::open_unpaired(address);
                         if check_persistence {
@@ -406,14 +426,20 @@ impl RuntimeIo for Io {
                             c.text("rx_antenna:0,3;");
                             c.text("rx_attenuation:0,20;tx_puresignal_attenuation:0,13;");
                         }
-                        if case == Case::ReceiveSpectrum { c.text("saturn_display:spectrum,1024,50;"); }
+                        if case == Case::ReceiveSpectrum {
+                            c.text("saturn_display:spectrum,1024,50;");
+                        }
                         c.text("iq_start:0;audio_start:0;");
                         client = Some(c);
                         connected_at = Some(Instant::now());
                         stage = 1;
                     }
-                    1 if (if case == Case::ReceiveSpectrum { client.as_ref().unwrap().spectrum_frames >= 2 } else { client.as_ref().unwrap().iq_frames > 0 })
-                        && (case != Case::ReceiveSpectrum || connected_at.unwrap().elapsed() >= Duration::from_millis(1500))
+                    1 if (if case == Case::ReceiveSpectrum {
+                        client.as_ref().unwrap().spectrum_frames >= 2
+                    } else {
+                        client.as_ref().unwrap().iq_frames > 0
+                    }) && (case != Case::ReceiveSpectrum
+                        || connected_at.unwrap().elapsed() >= Duration::from_millis(1500))
                         && client.as_ref().unwrap().audio_frames > 0
                         && (case != Case::ReceiveMeter
                             || client
@@ -433,18 +459,48 @@ impl RuntimeIo for Io {
                         if case == Case::ReceiveSpectrum {
                             let client = client.as_ref().unwrap();
                             assert!(client.vfo_a_reports <= 3, "idle receive must not repeat full configuration snapshots: {} VFO reports", client.vfo_a_reports);
-                            assert!(client.rx_meter_dbm.len() >= 2, "periodic meter updates must continue");
+                            assert!(
+                                client.rx_meter_dbm.len() >= 2,
+                                "periodic meter updates must continue"
+                            );
                             assert!(client.monitor_caps_reports > 0, "late clients must receive monitor capabilities without a configuration change");
                             let perf = std::fs::read_to_string(&perf_path).unwrap();
-                            for field in ["\"connections\":1", "\"client\":1", "\"iq\":1", "\"audio\":1", "\"frequency_hz\":7200000", "\"tx_keyed\":false", "\"tx_stream\":false", "\"rf_safe\":null", "\"rf_qualified\":false"] {
-                                assert!(perf.contains(field), "missing actual shared-owner observation {field}: {perf}");
+                            for field in [
+                                "\"connections\":1",
+                                "\"client\":1",
+                                "\"iq\":1",
+                                "\"audio\":1",
+                                "\"frequency_hz\":7200000",
+                                "\"tx_keyed\":false",
+                                "\"tx_stream\":false",
+                                "\"rf_safe\":null",
+                                "\"rf_qualified\":false",
+                            ] {
+                                assert!(
+                                    perf.contains(field),
+                                    "missing actual shared-owner observation {field}: {perf}"
+                                );
                             }
-                            let rate = perf.split("\"ddc_s\":").nth(1).unwrap().split(',').next().unwrap().parse::<f64>().unwrap();
+                            let rate = perf
+                                .split("\"ddc_s\":")
+                                .nth(1)
+                                .unwrap()
+                                .split(',')
+                                .next()
+                                .unwrap()
+                                .parse::<f64>()
+                                .unwrap();
                             assert!(rate.is_finite() && rate > 0.0);
-                            assert_eq!(client.iq_frames, 0, "WAN client must receive spectrum rows without raw-IQ fallback");
+                            assert_eq!(
+                                client.iq_frames, 0,
+                                "WAN client must receive spectrum rows without raw-IQ fallback"
+                            );
                             assert_eq!(status.phase, Phase::ReadyOff);
                             stop.store(true, Ordering::Release);
-                            while !joined.load(Ordering::Acquire) { assert!(Instant::now()<end); thread::sleep(Duration::from_millis(1)); }
+                            while !joined.load(Ordering::Acquire) {
+                                assert!(Instant::now() < end);
+                                thread::sleep(Duration::from_millis(1));
+                            }
                             return 0; // no arm or key; actual row worker and TCI output
                         }
                         if case == Case::ReceiveMeter {
@@ -499,16 +555,34 @@ impl RuntimeIo for Io {
                     3 | 5
                         if status.phase == Phase::Active
                             && status.correction_applied == Some(true)
-                            && (case != Case::AutoSustained || auto_active_since.is_some_and(|t|t.elapsed()>=Duration::from_secs(15))) =>
+                            && (case != Case::AutoSustained
+                                || auto_active_since
+                                    .is_some_and(|t| t.elapsed() >= Duration::from_secs(15))) =>
                     {
                         corrected += 1;
                         if matches!(case, Case::AutoCorrection | Case::AutoSustained) {
                             assert!(ingress.owner_status_message().unwrap().contains(",auto;"));
                         }
                         if case == Case::AutoSustained {
-                            assert!(client.as_ref().unwrap().native_calibrations.iter().copied().max().unwrap_or(0)>=2,"sustained Auto must refit within each generation");
+                            assert!(
+                                client
+                                    .as_ref()
+                                    .unwrap()
+                                    .native_calibrations
+                                    .iter()
+                                    .copied()
+                                    .max()
+                                    .unwrap_or(0)
+                                    >= 2,
+                                "sustained Auto must refit within each generation"
+                            );
                         }
-                        if stage == 3 && matches!(case, Case::ShutdownActive | Case::AutoCorrection | Case::AutoSustained) {
+                        if stage == 3
+                            && matches!(
+                                case,
+                                Case::ShutdownActive | Case::AutoCorrection | Case::AutoSustained
+                            )
+                        {
                             client.as_mut().unwrap().text("trx:0,false;");
                             stage = 4;
                         } else {
@@ -528,7 +602,7 @@ impl RuntimeIo for Io {
                                 && status.cleanup_completed_ns.is_some()
                         );
                         wave = Wave::new();
-                        auto_active_since=None;
+                        auto_active_since = None;
                         client.as_mut().unwrap().native_calibrations.clear();
                         client.as_mut().unwrap().text("trx:0,true;");
                         stage = 5;
@@ -549,7 +623,9 @@ impl RuntimeIo for Io {
                             .iter()
                             .any(|r| r.contains(",complete,none;"))
                     {
-                        if case == Case::NativeKeepaliveGap { assert!(gap_completed); }
+                        if case == Case::NativeKeepaliveGap {
+                            assert!(gap_completed);
+                        }
                         assert!(
                             !c.native_applied.is_empty(),
                             "real WDSP disabled-state observation required"
@@ -576,7 +652,9 @@ impl RuntimeIo for Io {
                                 Case::NativeKeepaliveMissing => gap_ms >= 250,
                                 _ => false,
                             };
-                            if !paused { client.as_mut().unwrap().zero_keepalive(); }
+                            if !paused {
+                                client.as_mut().unwrap().zero_keepalive();
+                            }
                         } else {
                             client.as_mut().unwrap().mic();
                         }
@@ -591,7 +669,10 @@ impl RuntimeIo for Io {
                 corrected,
                 if startup_failure {
                     0
-                } else if matches!(case, Case::ShutdownActive | Case::AutoCorrection | Case::AutoSustained) {
+                } else if matches!(
+                    case,
+                    Case::ShutdownActive | Case::AutoCorrection | Case::AutoSustained
+                ) {
                     2
                 } else {
                     1
@@ -646,10 +727,17 @@ impl RuntimeIo for Io {
         let link = self.link.as_ref().unwrap();
         if self.expected_rx.is_some() {
             if let Some(scope) = link.desired().scope {
-                assert_eq!(scope.attenuation_db, 13, "manual feedback attenuation reaches each fresh output generation");
+                assert_eq!(
+                    scope.attenuation_db, 13,
+                    "manual feedback attenuation reaches each fresh output generation"
+                );
                 if link.prepared(scope.output).unwrap_or(false) {
                     if let Some(files) = &self.files {
-                        assert_eq!((files.read(0x2018) >> 5) & 31, 13, "Direct feedback attenuation readback");
+                        assert_eq!(
+                            (files.read(0x2018) >> 5) & 31,
+                            13,
+                            "Direct feedback attenuation readback"
+                        );
                     }
                 }
             }
@@ -728,8 +816,10 @@ impl RuntimeIo for Io {
                 let _ = p;
             }
             Acquisition::Direct(rx) => {
-                self.output_packets.store(self.files.as_ref().unwrap().radio.snapshot().frames_written,
-                    Ordering::Release);
+                self.output_packets.store(
+                    self.files.as_ref().unwrap().radio.snapshot().frames_written,
+                    Ordering::Release,
+                );
                 let mut frame = vec![0u8; 72]; // DDC6 x8 complex words @384k
                 frame[..4].copy_from_slice(&0x100000u32.to_le_bytes());
                 frame[7] = 0x80;
@@ -1063,13 +1153,24 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
 #[test]
 #[ignore = "serial actual runtime operator controls, matched WDSP and file/loopback owners; no RF"]
 fn actual_run_inner_operator_two_tone_policy_both_backends() {
-    let names = ["SATURN_PS_GENERATED_TRIALS", "SATURN_PS_GENERATED_OPERATIONAL", "SATURN_PS_CORRECTION_MONITOR"];
+    let names = [
+        "SATURN_PS_GENERATED_TRIALS",
+        "SATURN_PS_GENERATED_OPERATIONAL",
+        "SATURN_PS_CORRECTION_MONITOR",
+    ];
     let previous: Vec<_> = names.iter().map(|n| std::env::var_os(n)).collect();
-    for name in names { std::env::set_var(name, "1"); }
-    for direct in [false, true] { exercise(direct, Case::BaselineTwoTone); }
+    for name in names {
+        std::env::set_var(name, "1");
+    }
+    for direct in [false, true] {
+        exercise(direct, Case::BaselineTwoTone);
+    }
     for (name, value) in names.into_iter().zip(previous) {
-        if let Some(value) = value { std::env::set_var(name, value); }
-        else { std::env::remove_var(name); }
+        if let Some(value) = value {
+            std::env::set_var(name, value);
+        } else {
+            std::env::remove_var(name);
+        }
     }
 }
 
@@ -1118,9 +1219,15 @@ fn actual_run_inner_auto_release_rearm_both_backends() {
 #[test]
 #[ignore = "serial sustained Auto: two 15-second generations per backend, real native DSP, file/loopback only"]
 fn actual_run_inner_sustained_auto_both_backends() {
-    unsafe {std::env::set_var("SATURN_PS_CORRECTION_MONITOR","1");}
-    for direct in [false,true] { exercise(direct,Case::AutoSustained); }
-    unsafe {std::env::remove_var("SATURN_PS_CORRECTION_MONITOR");}
+    unsafe {
+        std::env::set_var("SATURN_PS_CORRECTION_MONITOR", "1");
+    }
+    for direct in [false, true] {
+        exercise(direct, Case::AutoSustained);
+    }
+    unsafe {
+        std::env::remove_var("SATURN_PS_CORRECTION_MONITOR");
+    }
 }
 #[test]
 #[ignore = "serial real-WDSP receive-only runtime + live TCI meter; loopback/files only"]
@@ -1278,5 +1385,7 @@ fn actual_run_inner_failed_restoration_cannot_report_clean_or_detach_owner() {
 #[test]
 #[ignore = "serial real-WDSP production runtime WAN spectrum/audio; loopback/files only"]
 fn actual_run_inner_wan_spectrum_receive_both_backends() {
-    for direct in [false, true] { exercise(direct, Case::ReceiveSpectrum); }
+    for direct in [false, true] {
+        exercise(direct, Case::ReceiveSpectrum);
+    }
 }

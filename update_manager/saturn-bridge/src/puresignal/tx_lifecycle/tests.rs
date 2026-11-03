@@ -686,7 +686,7 @@ fn periodic_ticks_stop_established_correction_when_feedback_ceases() {
         let mut b = block(&l, now + 1, false);
         b.meta.backend = backend;
         b.meta.sequence = (backend == Backend::P2).then_some(0);
-    b.meta.sequence_packets = if backend == Backend::P2 { 1 } else { 0 };
+        b.meta.sequence_packets = if backend == Backend::P2 { 1 } else { 0 };
         l.submit(&b, now + 1).unwrap();
         assert_eq!(l.pump(now + 1), Ok(1));
         assert_eq!(l.status().correction_applied, Some(true));

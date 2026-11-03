@@ -181,16 +181,26 @@ pub(crate) fn spawn(
         Err(std::env::VarError::NotPresent) | Ok("0") => None,
         Ok("1") if !options.measurement_only => {
             match std::env::var("SATURN_PS_GENERATED_OPERATIONAL").as_deref() {
-                Ok("1") => Some(super::ps_ingress::TwoToneLimits { frequency_hz: 0, max_ms: 0 }),
-                Ok("0") | Err(std::env::VarError::NotPresent) => Some(super::ps_ingress::TwoToneLimits {
-                    frequency_hz: std::env::var("SATURN_PS_GENERATED_FREQUENCY_HZ")
-                        .ok().and_then(|s| s.parse().ok()).ok_or(Fault::InvalidConfig)?,
-                    max_ms: if options.timing.tx_duration_ns == 0 { 45_000 }
-                        else { 45_000.min(options.timing.tx_duration_ns / 1_000_000) },
+                Ok("1") => Some(super::ps_ingress::TwoToneLimits {
+                    frequency_hz: 0,
+                    max_ms: 0,
                 }),
+                Ok("0") | Err(std::env::VarError::NotPresent) => {
+                    Some(super::ps_ingress::TwoToneLimits {
+                        frequency_hz: std::env::var("SATURN_PS_GENERATED_FREQUENCY_HZ")
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .ok_or(Fault::InvalidConfig)?,
+                        max_ms: if options.timing.tx_duration_ns == 0 {
+                            45_000
+                        } else {
+                            45_000.min(options.timing.tx_duration_ns / 1_000_000)
+                        },
+                    })
+                }
                 _ => return Err(Fault::InvalidConfig),
             }
-        },
+        }
         _ => return Err(Fault::InvalidConfig),
     };
     let measurement_host = if options.measurement_only {
@@ -569,7 +579,10 @@ mod tests {
                 thread::sleep(std::time::Duration::from_millis(1));
             }
             assert!(!shared_model.lock_unpoisoned().desired.tx_enabled);
-            assert_eq!(runtime.ingress.drive_limit_message(), format!("saturn_tx_drive_limit:0,{};", options.max_watts));
+            assert_eq!(
+                runtime.ingress.drive_limit_message(),
+                format!("saturn_tx_drive_limit:0,{};", options.max_watts)
+            );
             assert_eq!(shared_model.lock_unpoisoned().desired.tx_drive, 5);
             assert_eq!(runtime.ingress.generated_trials_only(), generated_only);
             assert!(

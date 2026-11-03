@@ -3,8 +3,8 @@
 //! Socket/UDP ingress can attach only through the explicit review route;
 //! default startup still selects Legacy; explicit managed startup selects this owner.
 #![allow(dead_code)]
-use super::{mic_samples_to_mono, satp_provenance::Provenance, scheduler, TxCommand};
 use super::owner_mailbox::Receiver;
+use super::{mic_samples_to_mono, satp_provenance::Provenance, scheduler, TxCommand};
 use crate::{
     radio_model::RadioModel,
     tx_audio::{TxAudioMessage, TxAudioSource},
@@ -496,7 +496,12 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             self.measurement_ticket = None;
         }
         if status.phase == Phase::Active {
-            self.counters.active_max_publish_ns=self.counters.active_max_publish_ns.max(publication_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+            self.counters.active_max_publish_ns = self.counters.active_max_publish_ns.max(
+                publication_started
+                    .elapsed()
+                    .as_nanos()
+                    .min(u128::from(u64::MAX)) as u64,
+            );
         }
     }
     #[cfg(test)]
@@ -675,9 +680,15 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         if requested > now || now - requested > self.timing.mic_age_ns {
                             return Err(Fault::Stale);
                         }
-                        if t.duration_ns == 0 { None } else {
-                            Some(requested.checked_add(t.duration_ns)
-                                .filter(|d| *d > now).ok_or(Fault::Stale)?)
+                        if t.duration_ns == 0 {
+                            None
+                        } else {
+                            Some(
+                                requested
+                                    .checked_add(t.duration_ns)
+                                    .filter(|d| *d > now)
+                                    .ok_or(Fault::Stale)?,
+                            )
                         }
                     } else {
                         None
@@ -727,10 +738,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         }
                     }
                     self.armed = Some(now);
-                    self.counters.active_max_turn_ns=0;
-                    self.counters.active_max_hook_ns=0;
-                    self.counters.active_max_publish_ns=0;
-                    self.counters.active_max_render_ns=0;
+                    self.counters.active_max_turn_ns = 0;
+                    self.counters.active_max_hook_ns = 0;
+                    self.counters.active_max_publish_ns = 0;
+                    self.counters.active_max_render_ns = 0;
                     self.counters.last_stale = None;
                     self.last_arrival = Some(now);
                     self.next_mic = now;
@@ -1051,10 +1062,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         if entered_active {
             self.counters.active_max_turn_ns = self.counters.active_max_turn_ns.max(elapsed_ns);
         }
-        self.counters.max_turn_ns = self
-            .counters
-            .max_turn_ns
-            .max(elapsed_ns);
+        self.counters.max_turn_ns = self.counters.max_turn_ns.max(elapsed_ns);
         result
     }
     fn service_turn(
@@ -1219,24 +1227,17 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             // No exchange here: release has first refusal on the next service
             // step, including the health check before rendering in this turn.
         }
-        if self
-            .armed
-            .is_some_and(|t| {
-                self.timing.tx_duration_ns != 0
-                    && now.saturating_sub(t) > self.timing.tx_duration_ns
-            })
-            || self
-                .last_arrival
-                .is_some_and(|t| now.saturating_sub(t) > self.timing.source_stall_ns)
+        if self.armed.is_some_and(|t| {
+            self.timing.tx_duration_ns != 0 && now.saturating_sub(t) > self.timing.tx_duration_ns
+        }) || self
+            .last_arrival
+            .is_some_and(|t| now.saturating_sub(t) > self.timing.source_stall_ns)
         {
             self.counters.deadline_stops += 1;
-            let origin = if self
-                .armed
-                .is_some_and(|t| {
-                    self.timing.tx_duration_ns != 0
-                        && now.saturating_sub(t) > self.timing.tx_duration_ns
-                })
-            {
+            let origin = if self.armed.is_some_and(|t| {
+                self.timing.tx_duration_ns != 0
+                    && now.saturating_sub(t) > self.timing.tx_duration_ns
+            }) {
                 StaleOrigin::Duration
             } else {
                 StaleOrigin::SourceStall
@@ -1451,10 +1452,19 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                             if let Some(c) = &capture {
                                 c.pcm(&mic);
                             }
-                            let render_started=Instant::now();
-                            let result=self.life.offline_tx_exchange(now, |native| native.render(&mic));
+                            let render_started = Instant::now();
+                            let result = self
+                                .life
+                                .offline_tx_exchange(now, |native| native.render(&mic));
                             if self.life.status().phase == Phase::Active {
-                                self.counters.active_max_render_ns=self.counters.active_max_render_ns.max(render_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+                                self.counters.active_max_render_ns =
+                                    self.counters.active_max_render_ns.max(
+                                        render_started
+                                            .elapsed()
+                                            .as_nanos()
+                                            .min(u128::from(u64::MAX))
+                                            as u64,
+                                    );
                             }
                             result
                         })
@@ -1521,13 +1531,18 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 // error; the native wrapper retains uncertain native storage.
                 return scheduler::Turn::Exit;
             }
-            let active=self.life.status().phase==Phase::Active;
-            let hook_started=Instant::now();
+            let active = self.life.status().phase == Phase::Active;
+            let hook_started = Instant::now();
             ingress(self, now);
-            if active {self.counters.active_max_hook_ns=self.counters.active_max_hook_ns.max(hook_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);}
+            if active {
+                self.counters.active_max_hook_ns = self
+                    .counters
+                    .active_max_hook_ns
+                    .max(hook_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+            }
             // Keepalive/observation hooks may take time. Deadlines use the
             // consumer time after those hooks, never the earlier timestamp.
-            let current=self.origin.elapsed().as_nanos() as u64;
+            let current = self.origin.elapsed().as_nanos() as u64;
             let result = self.turn_inner(current, |_| {}, true, |_| {});
             self.publish_ingress();
             result

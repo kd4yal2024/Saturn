@@ -24,6 +24,8 @@ use crate::xdma_duc::{
 pub(crate) mod feedback_owner;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod feedback_stream;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+pub(crate) mod owner_mailbox;
 pub(crate) mod owner_selection;
 #[cfg(feature = "managed-puresignal")]
 pub(crate) mod production_owner;
@@ -37,8 +39,6 @@ pub(crate) mod ps_media;
 pub(crate) mod ps_owner_loop;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod ps_owner_queue;
-#[cfg(feature = "offline-puresignal-owner-adapters")]
-pub(crate) mod owner_mailbox;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 mod satp_provenance;
 mod scheduler;
@@ -2535,7 +2535,10 @@ mod arm_cancellation_tests {
             worker.wait_unkeyed(),
             "the cancelled arm must be released first"
         );
-        assert!(worker.wait_keyed_with_fresh_audio(), "the new press never keyed");
+        assert!(
+            worker.wait_keyed_with_fresh_audio(),
+            "the new press never keyed"
+        );
         assert_eq!(worker.key_calls(), 1);
     }
 
@@ -2548,7 +2551,10 @@ mod arm_cancellation_tests {
             }))
         });
         assert!(worker.wait_unkeyed());
-        assert!(worker.wait_keyed_with_fresh_audio(), "the new press never keyed");
+        assert!(
+            worker.wait_keyed_with_fresh_audio(),
+            "the new press never keyed"
+        );
         assert_eq!(
             worker.key_calls(),
             1,
@@ -2668,7 +2674,10 @@ mod arm_cancellation_tests {
             worker.wait_unkeyed(),
             "the cancelled arm must be released first"
         );
-        assert!(worker.wait_keyed_with_fresh_audio(), "the new press never keyed");
+        assert!(
+            worker.wait_keyed_with_fresh_audio(),
+            "the new press never keyed"
+        );
         assert_eq!(worker.key_calls(), 1, "only the new press may key");
     }
 

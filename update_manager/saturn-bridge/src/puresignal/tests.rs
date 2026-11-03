@@ -281,7 +281,11 @@ fn block(c: &Controller<FakeNative>, first: u64, pairs: usize, seq: u32, now: u6
         interval,
         observed_ns: now,
         overload: brackets(interval, now),
-        sequence_packets: if c.test_backend() == Backend::P2 { 1 } else { 0 },
+        sequence_packets: if c.test_backend() == Backend::P2 {
+            1
+        } else {
+            0
+        },
         sequence: if c.test_backend() == Backend::P2 {
             Some(seq)
         } else {
@@ -309,13 +313,19 @@ fn p2_batched_wire_sequence_span_preserves_gap_detection_and_wrap() {
 }
 #[test]
 fn p2_batch_geometry_and_oldest_observation_are_mandatory() {
-    for (packets, pairs, fault) in [(0, 952, Fault::WrongFormat), (9, 952, Fault::WrongFormat), (8, 951, Fault::WrongFormat)] {
+    for (packets, pairs, fault) in [
+        (0, 952, Fault::WrongFormat),
+        (9, 952, Fault::WrongFormat),
+        (8, 951, Fault::WrongFormat),
+    ] {
         let (mut c, _) = setup(Backend::P2, 4);
-        let mut b = block(&c, 0, pairs, 0, 1); b.meta.sequence_packets = packets;
+        let mut b = block(&c, 0, pairs, 0, 1);
+        b.meta.sequence_packets = packets;
         assert_eq!(c.submit(&b, 1), Err(fault));
     }
     let (mut c, _) = setup(Backend::P2, 4);
-    let mut b = block(&c, 0, 952, 0, 1); b.meta.sequence_packets = 8;
+    let mut b = block(&c, 0, 952, 0, 1);
+    b.meta.sequence_packets = 8;
     assert_eq!(c.submit(&b, 300_000_001), Err(Fault::Stale));
 }
 #[test]

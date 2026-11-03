@@ -498,7 +498,10 @@ pub(crate) fn handle_client(
                         snapshot.insert(ready_at, caps.into());
                     }
                     snapshot.insert(ready_at, s.drive_limit_message());
-                    snapshot.insert(ready_at, "saturn_ps_manual_attenuation_caps:0,rx-off-ordered-v1;".into());
+                    snapshot.insert(
+                        ready_at,
+                        "saturn_ps_manual_attenuation_caps:0,rx-off-ordered-v1;".into(),
+                    );
                     snapshot.insert(ready_at, s.arm_policy_message());
                     snapshot.insert(ready_at, "saturn_tx_fault_ack_caps:0,stop-fence-v1;".into());
                     snapshot.insert(
@@ -814,16 +817,13 @@ pub(crate) fn unregister_client(
     let was_operator = current_operator == client_id;
     let mut promoted_operator = None;
     if was_operator {
-        if let Some((&next_operator, _)) = clients
-            .iter()
-            .find(|(_, client)| {
-                client.state.operator_eligible
-                    && !client_is_split_media(client)
-                    && client.state.connect_lane_hint != Some(SplitSocketKind::Media)
-                    && client.state.split.as_ref().and_then(|split| split.role)
-                        != Some(TciClientRole::Viewer)
-            })
-        {
+        if let Some((&next_operator, _)) = clients.iter().find(|(_, client)| {
+            client.state.operator_eligible
+                && !client_is_split_media(client)
+                && client.state.connect_lane_hint != Some(SplitSocketKind::Media)
+                && client.state.split.as_ref().and_then(|split| split.role)
+                    != Some(TciClientRole::Viewer)
+        }) {
             operator_client_id.store(next_operator, Ordering::SeqCst);
             promoted_operator = Some(next_operator);
         } else {

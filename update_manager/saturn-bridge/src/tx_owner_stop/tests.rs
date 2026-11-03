@@ -496,10 +496,7 @@ pub(super) fn p2() -> (Arc<P2Session>, UdpSocket) {
         socket,
     )
 }
-#[cfg(all(
-    feature = "offline-puresignal-owner-native",
-    not(saturn_bridge_stub_native)
-))]
+// This fixture only binds loopback UDP lanes; both native and stub owner tests use it.
 pub(crate) fn p2_separate_lanes() -> (Arc<P2Session>, UdpSocket, UdpSocket) {
     let hp = UdpSocket::bind("127.0.0.1:0").unwrap();
     let iq = UdpSocket::bind("127.0.0.1:0").unwrap();
