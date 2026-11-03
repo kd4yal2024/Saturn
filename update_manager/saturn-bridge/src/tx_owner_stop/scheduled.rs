@@ -1929,6 +1929,10 @@ fn feedback_burst_actual_owner_keeps_freshness_release_and_overflow_both_backend
     }
 }
 
+#[cfg(all(
+    feature = "offline-puresignal-owner-native",
+    not(saturn_bridge_stub_native)
+))]
 #[test]
 #[ignore = "serial real WDSP and actual file/loopback owners; no RF"]
 fn feedback_burst_real_native_owner_keeps_stop_cleanup_both_backends() {
