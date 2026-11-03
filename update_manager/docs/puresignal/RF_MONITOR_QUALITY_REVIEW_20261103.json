@@ -1,0 +1,56 @@
+{
+  "format": "saturn-rf-monitor-quality-review-v1",
+  "date": "2026-11-03",
+  "disposition": "Reviewed against archived IQ and offline-tested; not installed; no live RF operation in this review",
+  "baseCommit": "3eb0f729238f228e02da49c7fc80089f8a1d879a",
+  "branch": "silverforge/ps-monitor-quality-20261103",
+  "sourceContentPin": "0f140db12c2a6c6a45a9555e34d4679bdc7751bb9d721afecef8fadafdf22f9a",
+  "numericReview": {
+    "captures": 2,
+    "pairsPerCapture": 16384,
+    "rawSha256Verified": true,
+    "frequencyHz": 3895600,
+    "commandedWatts": 10,
+    "psRequested": false,
+    "method": "Independent recursive float64 complex FFT; explicit BH4 coherent gain, ENBW and integrated bands; no additive display FFT floor",
+    "productsPerCapture": 6,
+    "maximumDifferenceDb": 0.0015344184982595266,
+    "pepMinusWeakerToneDb": 6.0314363324878055,
+    "interpretation": "Agreement establishes the numeric calculation on these inputs, not calibration or linearity of the physical RF observation path."
+  },
+  "displayChanges": [
+    "Responsive high-DPI plot with bounded raster size and unchanged FFT samples",
+    "Span and vertical-range selectors; actual bin spacing and ENBW labels",
+    "Separate RF fundamental and TX-reference levels in the full record",
+    "Integrated IMD3/5/7 table, fundamental/product markers and nearest-bin cursor",
+    "Explicit weaker-tone dBc and calculated fundamental-derived two-tone PEP references",
+    "Held/stale/unknown-overload labels and copy/export remain available",
+    "Baseline overlay rejects a different host/source session"
+  ],
+  "validation": {
+    "webTestsPassed": 963,
+    "webFilesPassed": 96,
+    "typecheck": "passed",
+    "buildAssetBudget": "passed",
+    "rustRfSpectrumTestsPassed": 3,
+    "chromeWidths": [
+      1440,
+      390
+    ],
+    "chromeReplayModes": [
+      "synthetic",
+      "archived RF spectrum"
+    ],
+    "network": "blocked; mocked sockets only",
+    "timing": "rebased for UI lifecycle checks; original capture timestamps preserved separately"
+  },
+  "limits": [
+    "No live keying, new RF capture or deployment performed",
+    "RF path calibration/linearity and interval overload coverage remain unverified",
+    "IQ offset sign has not been bench-qualified as absolute RF sideband orientation",
+    "PEP option is only a display reference conversion; it cannot improve RF IMD",
+    "Current bin spacing 11.71875 Hz and ENBW about 23.49 Hz are unchanged",
+    "No TX, WDSP, firmware, driver, polling or installed-release changes"
+  ],
+  "evidenceDirectory": "/mnt/c/users/jd/Downloads/Saturn_PS_Monitor_Review_20261103_i4nvrw5c"
+}

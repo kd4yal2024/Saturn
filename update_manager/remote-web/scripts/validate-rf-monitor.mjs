@@ -1,4 +1,4 @@
-// Real template/bundle, Rust-generated SYNTHETIC spectrum fixture, blocked network.
+// Real template/bundle, explicit synthetic fixture or recorded-spectrum replay, blocked network.
 // Mock timing is explicitly rebased for lifecycle tests; this is NOT RF evidence.
 import assert from 'node:assert/strict';
 import {mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
@@ -7,11 +7,16 @@ import {resolve,dirname,join} from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 import {spawn} from 'node:child_process';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
-assert(process.argv[2],'explicit synthetic Rust spectrum fixture required');
+assert(process.argv[2],'explicit spectrum fixture required');
+const recorded=process.argv.includes('--recorded');
 const raw=readFileSync(process.argv[2],'utf8').trim();
 const fixture=JSON.parse(raw.slice('saturn_ps_spectrum:'.length,-1));
 assert.equal(fixture.format,'saturn-rf-spectrum-v1');assert.equal(fixture.rfImdQualified,false);
-const correctionRaw=process.argv[3]?readFileSync(process.argv[3],'utf8').trim():null;
+const expectedReading=fixture.products.find(p=>p.dbc!==null)?.dbc.toFixed(1)+' dBc';
+assert.notEqual(expectedReading,'undefined dBc');
+const previewLabel=recorded?'OFFLINE RECORDED CAPTURE REPLAY — NOT LIVE':'OFFLINE SYNTHETIC — NOT RF';
+const correctionPath=process.argv.slice(3).find(arg=>!arg.startsWith('--'));
+const correctionRaw=correctionPath?readFileSync(correctionPath,'utf8').trim():null;
 const correction=correctionRaw?JSON.parse(correctionRaw.slice('saturn_ps_correction:'.length,-1)):null;
 if(correction){assert.equal(correction.format,'saturn-ps-correction-v1');assert.equal(correction.nativeSamples,4096);assert.equal(correction.correction.length,512);}
 const output=mkdtempSync(join(tmpdir(),'saturn-rf-monitor-browser-'));
@@ -21,7 +26,7 @@ const page=join(output,'remote.html');
 writeFileSync(page,source.replace(/<script\s+src="\/remote-assets\/remote-next\.js[^"]*"[\s\S]*?<\/script>/,
   `<script>${bundle.replaceAll('</script','<\\/script')}</script>`));
 const chrome=spawn(process.env.CHROMIUM||'google-chrome',['--headless=new','--no-sandbox','--disable-dev-shm-usage',
-  '--disable-background-networking','--no-first-run','--disable-extensions','--mute-audio','--allow-file-access-from-files',
+  '--window-size=1440,1200','--disable-background-networking','--no-first-run','--disable-extensions','--mute-audio','--allow-file-access-from-files',
   '--remote-debugging-pipe',`--user-data-dir=${join(output,'profile')}`,'about:blank'],{stdio:['ignore','ignore','pipe','pipe','pipe']});
 let sequence=0,buffer='';const pending=new Map();
 chrome.stdio[4].on('data',d=>{buffer+=d;let end;while((end=buffer.indexOf('\0'))>=0){const raw=buffer.slice(0,end);buffer=buffer.slice(end+1);if(!raw)continue;
@@ -47,7 +52,7 @@ try{
         setTimeout(()=>{this.readyState=1;this.emit('open',{});if(!this.url.includes('/saturn/media'))setTimeout(()=>this.text(
           'protocol:SaturnBridge,2.0;device:ANAN-G2;receive_only:false;trx_count:1;channel_count:2;'+
           'saturn_satp_supported:false;saturn_satp_enabled:false;remote_client_role:0,operator,1;remote_tx_rf_enabled:0,true;'+
-          'dds:0,7200000;vfo:0,0,7200000;iq_samplerate:384000;modulation:0,LSB;tx_enable:0,true;saturn_ps_spectrum_caps:raw-pairs-v1;saturn_ps_correction_caps:${correction?'wdsp-ampview-v1':'unavailable'};ready;'),10);},0);}
+          'dds:0,${fixture.centerHz};vfo:0,0,${fixture.centerHz};iq_samplerate:384000;modulation:0,LSB;tx_enable:0,true;saturn_ps_spectrum_caps:raw-pairs-v1;saturn_ps_correction_caps:${correction?'wdsp-ampview-v1':'unavailable'};ready;'),10);},0);}
       emit(t,e){this['on'+t]?.(e);for(const f of this.listeners[t]||[])f(e);}text(data){this.emit('message',{data});}
       addEventListener(t,f){(this.listeners[t]??=[]).push(f);}removeEventListener(t,f){this.listeners[t]=(this.listeners[t]||[]).filter(v=>v!==f);}
       close(){this.readyState=3;this.emit('close',{code:1000,wasClean:true,reason:''});}
@@ -82,21 +87,39 @@ try{
     await evaluate(`window.__rfProbe.sockets.find(s=>!s.url.includes('/saturn/media')).text('tx_state:0,keyed;trx:0,true;');window.__rfProbe.stream=true;`);
     await until(`document.querySelector('[data-rf-status]').textContent.startsWith('LIVE RF')`);
     const text=await evaluate(`document.querySelector('[data-rf-summary]').textContent`);
-    assert(text.includes('IMD3 lower'));assert(text.includes('-40.0 dBc'));assert(text.includes('Overload unknown'));assert(text.includes('not calibrated RF IMD'));
+    assert(text.includes('IMD3 lower'));assert(text.includes(expectedReading));assert(text.includes('Overload unknown'));assert(text.includes('not calibrated RF IMD'));
+    const original=await evaluate(`JSON.stringify(rfMonitor.frame.products)`);
+    await evaluate(`(()=>{const s=document.querySelector('[data-rf-plot-control="reference"]');s.value='pep';s.dispatchEvent(new Event('change'));})()`);
+    await until(`document.querySelector('[data-rf-summary]').textContent.includes('dB re PEP')`);
+    assert.equal(await evaluate(`JSON.stringify(rfMonitor.frame.products)`),original);
+    assert((await evaluate(`document.querySelector('[data-rf-product-table]').textContent`)).includes('dB re PEP'));
+    await evaluate(`(()=>{const s=document.querySelector('[data-rf-plot-control="reference"]');s.value='tone';s.dispatchEvent(new Event('change'));})()`);
+    await until(`document.querySelector('[data-rf-summary]').textContent.includes(${JSON.stringify(expectedReading)})`);
     await evaluate(`document.querySelector('[data-rf-save]').click()`);
     await until(`document.querySelector('[data-rf-summary]').textContent.includes('amber overlay')`);
+    const flow=await evaluate(`(()=>{const c=document.querySelector('[data-rf-canvas]'),b=document.querySelector('[data-rf-popout]');return{position:getComputedStyle(c).position,height:c.getBoundingClientRect().height,canvasBottom:c.getBoundingClientRect().bottom,buttonTop:b.getBoundingClientRect().top};})()`);
+    assert(flow.position==='relative'&&flow.height>=280&&flow.canvasBottom<=flow.buttonTop,'RF canvas flow: '+JSON.stringify(flow));
     await evaluate(`document.querySelector('[data-rf-popout]').click()`);
-    const {targetInfos}=await command('Target.getTargets');const popup=targetInfos.find(t=>t.title==='Saturn RF Feedback / IMD Monitor');assert(popup);
-    const popupSession=await command('Target.attachToTarget',{targetId:popup.targetId,flatten:true});
+    const {targetInfos}=await command('Target.getTargets');const popup=targetInfos.find(t=>t.title==='Saturn RF Feedback / IMD Monitor');
+    if(width>=600)assert(popup);else assert.equal(await evaluate(`document.getElementById('ps-rf-monitor').dataset.panelMode`),'expanded');
+    const popupSession=popup?await command('Target.attachToTarget',{targetId:popup.targetId,flatten:true}):{sessionId};
     await pause(250);
+    const sharp=await command('Runtime.evaluate',{expression:`(()=>{const c=document.querySelector('[data-rf-canvas]');const r=c.getBoundingClientRect();return {height:r.height,width:r.width,pixelWidth:c.width,pixelHeight:c.height,controls:document.querySelectorAll('[data-rf-plot-control]').length};})()`,returnByValue:true},popupSession.sessionId);
+    assert(sharp.result.value.height>=280&&sharp.result.value.controls===3);
+    assert(sharp.result.value.pixelWidth*sharp.result.value.pixelHeight<=12005000);
+    if(popup){
+      await command('Emulation.setDeviceMetricsOverride',{width:1200,height:1000,deviceScaleFactor:2,mobile:false},popupSession.sessionId);await pause(300);
+      const resized=await command('Runtime.evaluate',{expression:`(()=>{const c=document.querySelector('[data-rf-canvas]'),r=c.getBoundingClientRect();window.scrollTo(0,0);return{height:r.height,pixels:c.width*c.height};})()`,returnByValue:true},popupSession.sessionId);
+      assert(resized.result.value.height>sharp.result.value.height);assert(resized.result.value.pixels<=12005000);
+    }
     const popupText=await command('Runtime.evaluate',{expression:'document.body.textContent',returnByValue:true},popupSession.sessionId);
-    assert(popupText.result.value.includes('-40.0 dBc'));
+    assert(popupText.result.value.includes(expectedReading));
     // Exercise each actual button in its own document. Clipboard behavior is
     // injected, not claimed as OS clipboard permission/trust qualification.
     const copyCheck=`(async()=>{
       Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copiedRf=text;}}});
       document.querySelector('[data-rf-copy]').click();await new Promise(r=>setTimeout(r,30));
-      const modern=window.__copiedRf.includes('LIVE RF')&&window.__copiedRf.includes('-40.0 dBc')&&window.__copiedRf.includes('not calibrated RF IMD')&&document.querySelector('[data-rf-copy-status]').textContent==='Measurements copied.';
+      const modern=window.__copiedRf.includes('LIVE RF')&&window.__copiedRf.includes(${JSON.stringify(expectedReading)})&&window.__copiedRf.includes('not calibrated RF IMD')&&document.querySelector('[data-rf-copy-status]').textContent==='Measurements copied.';
       navigator.clipboard.writeText=async()=>{throw new Error('denied for test');};
       document.execCommand=()=>{window.__legacyRf=document.querySelector('[data-rf-copy-fallback]').value;return true;};
       document.querySelector('[data-rf-copy]').click();await new Promise(r=>setTimeout(r,30));
@@ -110,10 +133,15 @@ try{
     assert.deepEqual(await evaluate(copyCheck),{modern:true,legacy:true,manual:true});
     const childCopyResult=await command('Runtime.evaluate',{expression:copyCheck,returnByValue:true,awaitPromise:true,userGesture:true},popupSession.sessionId);
     assert.deepEqual(childCopyResult.result.value,{modern:true,legacy:true,manual:true});
-    await evaluate(`(()=>{const banner=document.createElement('div');banner.textContent='OFFLINE SYNTHETIC UI FIXTURE — NOT RF';banner.style.cssText='position:fixed;top:45px;left:8px;z-index:99999;padding:3px;background:#75480a;color:white;font:12px monospace';document.body.append(banner);})()`);
-    await command('Runtime.evaluate',{expression:`document.querySelector('h2').textContent='OFFLINE SYNTHETIC — NOT RF · RF/IMD Monitor';`},popupSession.sessionId);
-    assert(await evaluate(`(()=>{const c=document.querySelector('[data-rf-canvas]'),b=document.querySelector('[data-rf-popout]');return getComputedStyle(c).position==='relative'&&c.getBoundingClientRect().height===260&&c.getBoundingClientRect().bottom<=b.getBoundingClientRect().top;})()`),'RF canvas must occupy visible document flow, not inherit absolute panadapter positioning');
+    await evaluate(`(()=>{const banner=document.createElement('div');banner.textContent=${JSON.stringify(previewLabel)};banner.style.cssText='position:fixed;top:45px;left:8px;z-index:99999;padding:3px;background:#75480a;color:white;font:12px monospace';document.body.append(banner);})()`);
+    if(popup)await command('Runtime.evaluate',{expression:`document.querySelector('h2').textContent=${JSON.stringify(previewLabel+' · RF/IMD Monitor')};window.scrollTo(0,0);`},popupSession.sessionId);
+
+    if(recorded){
+      await evaluate(`window.__rfProbe.stream=false;window.__rfProbe.sockets.find(s=>!s.url.includes('/saturn/media')).text('tx_state:0,rx;trx:0,false;');window.__rfProbe.emit()`);
+      await until(`document.querySelector('[data-rf-status]').textContent.includes('not live')`);await pause(250);
+    }
     const popupImage=await command('Page.captureScreenshot',{format:'png'},popupSession.sessionId);writeFileSync(join(output,`rf-popout-${width}.png`),Buffer.from(popupImage.data,'base64'));
+    if(recorded){await evaluate(`window.__rfProbe.sockets.find(s=>!s.url.includes('/saturn/media')).text('tx_state:0,keyed;trx:0,true;');window.__rfProbe.stream=true`);await until(`document.querySelector('[data-rf-status]').textContent.startsWith('LIVE RF')`);}
     let correctionPopup=null;
     if(correction){
       await until(`document.querySelector('[data-correction-status]').textContent.startsWith('LIVE native readback')`);
@@ -166,9 +194,9 @@ try{
     if(correction){assert((await evaluate(`document.querySelector('[data-correction-status]').textContent`)).includes('not live'));await command('Target.closeTarget',{targetId:correctionPopup.targetId});}
     const result=await evaluate(`({commands:window.__rfProbe.commands,errors:window.__rfProbe.errors})`);
     assert(!result.commands.some(s=>s.includes('trx:0,true')));assert.deepEqual(result.errors,[]);reports.push({width,...result});
-    await command('Target.closeTarget',{targetId:popup.targetId});
+    if(popup)await command('Target.closeTarget',{targetId:popup.targetId});
   }
-  const result={actualTemplate:true,actualBundle:true,syntheticRustSpectrum:true,syntheticTimingRebased:true,liveTrace:true,
-    markers:true,imdPopout:true,timingImdSuppressed:true,timingPopoutCopy:true,copyBothViews:true,clipboardAndManualFallback:true,baselineOverlay:true,nativeCorrectionReplay:!!correction,phaseAndMagnitudeGraphs:!!correction,staleAndReleaseChecked:true,radioCommandsSent:0,output,reports};
+  const result={actualTemplate:true,actualBundle:true,syntheticRustSpectrum:!recorded,recordedSpectrumReplay:recorded,replayTimingRebased:true,liveTrace:true,
+    markers:true,imdPopout:true,responsivePlot:true,mobileExpandedPanel:true,referenceConversionReadOnly:true,highDpiPixelBudget:true,timingImdSuppressed:true,timingPopoutCopy:true,copyBothViews:true,clipboardAndManualFallback:true,baselineOverlay:true,nativeCorrectionReplay:!!correction,phaseAndMagnitudeGraphs:!!correction,staleAndReleaseChecked:true,radioCommandsSent:0,output,reports};
   writeFileSync(join(output,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({passed:true,output,widths:reports.map(r=>r.width)}));
 }finally{clearTimeout(watchdog);await command('Browser.close').catch(()=>{});chrome.kill();}

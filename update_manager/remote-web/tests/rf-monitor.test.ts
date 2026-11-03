@@ -1,6 +1,7 @@
 import { describe,expect,it,vi } from 'vitest';
 import { RfMonitorState,parseRfSpectrum,rfMeasurementText,copyRfMeasurements,type RfSpectrum } from '../src/puresignal/rf-monitor';
 import { readFileSync } from 'node:fs';
+import {DEFAULT_PLOT,referenceOffset,plotLimits,canvasScale,productLabel} from '../src/puresignal/rf-plot';
 export function fixture(overrides:Partial<RfSpectrum>={}):RfSpectrum {
   return {format:'saturn-rf-spectrum-v1',sourcePin:'offline-test',sourceBoot:'1',firmwareBuild:'not supplied by this observer',boot:'10',serial:'1',generation:'1',config:'1',txEpoch:'1',backend:'DirectXdma',source:'ReturnedRfIq',
     observedFirstNs:'200000000',observedLastNs:'285000000',publishedNs:'300000000',rateHz:192000,fftSize:16384,binHz:11.71875,rbwHz:23.49,
@@ -13,6 +14,35 @@ export function fixture(overrides:Partial<RfSpectrum>={}):RfSpectrum {
 function send(s:RfMonitorState,r=fixture(),now=400){s.observe(`saturn_ps_spectrum:${JSON.stringify(r).replaceAll(';','\\u003b')};`,1,now);}
 function armed(){const s=new RfMonitorState();s.reset(1);s.observe('saturn_ps_spectrum_caps:raw-pairs-v1;',1,80);s.current(90,true,true);s.request('1',1,100);s.observe('saturn_ps_spectrum_clock:1,10,100000000;',1,120);return s;}
 describe('read-only RF/IMD measurement contract',()=>{
+  it('converts references without changing captured measurements or implying RF improvement',()=>{
+    const r=fixture({toneDbfs:[-20,-20]});const original=JSON.stringify(r);
+    expect(referenceOffset(r,'tone')).toBe(0);expect(referenceOffset(r,'pep')).toBeCloseTo(6.0205999,6);
+    expect(productLabel(r.products[0]!,referenceOffset(r,'pep'),'pep')).toBe('-41.0 dB re PEP');
+    expect(rfMeasurementText(r,'pep')).toContain('calculated two-tone PEP (6.02 dB above weaker tone; not measured watts)');
+    expect(rfMeasurementText(r,'pep')).toContain('RF fundamentals -20.0 / -20.0 dBFS');
+    expect(JSON.stringify(r)).toBe(original);
+    expect(referenceOffset(fixture({toneDbfs:[-20,-26]}),'pep')).toBeCloseTo(9.528697,5);
+    expect(Number.isFinite(referenceOffset(fixture({toneDbfs:[-400,100]}),'pep'))).toBe(true);
+    expect(productLabel({...r.products[0]!,dbc:null,upperBoundDbc:-70},6.0206,'pep')).toBe('< -76.0 dB re PEP · floor estimate');
+  });
+  it('keeps real FFT resolution separate from viewport zoom and high-DPI raster size',()=>{
+    expect(plotLimits(fixture(),DEFAULT_PLOT)).toEqual({lowHz:-8000,highHz:8000,topDb:5,bottomDb:-135});
+    const narrow=plotLimits(fixture(),{...DEFAULT_PLOT,spanHz:3000});expect(narrow.lowHz).toBe(-200);expect(narrow.highHz).toBe(2800);
+    expect(plotLimits(fixture({toneBalanceDb:25}),DEFAULT_PLOT).topDb).toBe(25);
+    expect(canvasScale(1000,500,1.25)).toBe(1.25);
+    expect(10000*10000*canvasScale(10000,10000,3)**2).toBeLessThanOrEqual(12000001);
+    expect(parseRfSpectrum(JSON.stringify(fixture())).binHz).toBe(11.71875);
+  });
+  it('does not overlay a held baseline from another host/FPGA source session',()=>{
+    const s=armed();send(s);expect(s.saveBaseline()).toBe(true);
+    expect(s.baselineMatches(fixture({boot:'11'}))).toBe(false);
+    expect(s.baselineMatches(fixture({sourceBoot:'2'}))).toBe(false);
+    expect(s.baselineMatches(fixture())).toBe(true);
+  });
+  it('rejects implausible fundamental levels before a reference conversion',()=>{
+    expect(()=>parseRfSpectrum(JSON.stringify(fixture({toneDbfs:[-20,1e300]})))).toThrow();
+  });
+
   it('labels timing in held/copied spectra and rejects non-two-tone IMD numbers',()=>{
     const timing=fixture({stimulus:'saturn-timing-multisine-v1',
       requestedStimulus:{version:'saturn-timing-multisine-v1',seed:0x53465031,pcmRateHz:48000,repeatMs:1000},

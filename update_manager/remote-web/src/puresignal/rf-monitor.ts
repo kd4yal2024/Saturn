@@ -1,4 +1,6 @@
 import {PanelWindow} from './panel-layout';
+import {DEFAULT_PLOT,referenceOffset,productLabel,type RfReference} from './rf-plot';
+import {createDisplay,updateMetrics,type ViewDisplay} from './rf-plot-controls';
 /** Read-only RF monitor. It cannot send a radio command or authorize RF/PS. */
 export interface RfProduct { order: number; offsetHz: number; dbc: number | null; upperBoundDbc: number | null; reason: string }
 export interface RfSpectrum {
@@ -28,7 +30,8 @@ export function parseRfSpectrum(text: string): RfSpectrum {
     || typeof r.psRequested !== 'boolean' || !['clear','unknown'].includes(r.overload) || r.continuity!=='contiguous'
     || r.rfImdQualified!==false || r.reference!=='weaker fundamental; not PEP'
     || typeof r.reason!=='string' || r.reason.length>200 || r.componentPeak<0 || !Number.isInteger(r.clippedComponents) || r.clippedComponents<0
-    || ![r.toneHz,r.toneDbfs,r.referenceToneDbfs].every(a=>Array.isArray(a)&&a.length===2&&a.every(finite))
+    || (!Array.isArray(r.toneHz)||r.toneHz.length!==2||!r.toneHz.every(finite))
+    || ![r.toneDbfs,r.referenceToneDbfs].every(a=>Array.isArray(a)&&a.length===2&&a.every(v=>finite(v)&&v>=-400&&v<=100))
     || !Array.isArray(r.binsDbfs) || r.binsDbfs.length<16 || r.binsDbfs.length>2048 || !r.binsDbfs.every(v=>finite(v)&&v>=-400&&v<=100)
     || !Array.isArray(r.products) || r.products.length!==6
     || !r.products.every((p,i)=>p && p.order===[3,3,5,5,7,7][i] && finite(p.offsetHz)
@@ -128,17 +131,18 @@ export class RfMonitorState {
   }
   baselineMatches(frame: RfSpectrum): boolean {
     const b=this.baseline;
-    return !!b && twoToneSpectrum(b) && twoToneSpectrum(frame) && b.backend===frame.backend && b.centerHz===frame.centerHz
+    return !!b && b.boot===frame.boot && b.sourceBoot===frame.sourceBoot && twoToneSpectrum(b) && twoToneSpectrum(frame) && b.backend===frame.backend && b.centerHz===frame.centerHz
       && b.stimulus===frame.stimulus
       && b.attenuationCommandDb===frame.attenuationCommandDb && b.commandedWatts===frame.commandedWatts
       && b.sourcePin===frame.sourcePin && b.toneHz.every((n,i)=>n===frame.toneHz[i]) && b.window===frame.window && b.fftSize===frame.fftSize;
   }
 }
 
-function productText(p: RfProduct): string {
-  return p.dbc!==null ? `${p.dbc.toFixed(1)} dBc` : p.upperBoundDbc!==null ? `< ${p.upperBoundDbc.toFixed(1)} dBc (floor estimate)` : `unavailable: ${p.reason}`;
+function productText(p: RfProduct,offset=0,reference:RfReference='tone'): string {
+  return p.dbc!==null || p.upperBoundDbc!==null ? productLabel(p,offset,reference) : `unavailable: ${p.reason}`;
 }
-export function rfMeasurementText(r: RfSpectrum): string {
+export function rfMeasurementText(r: RfSpectrum,reference:RfReference='tone'): string {
+  const offset=referenceOffset(r,reference);
   if (!twoToneSpectrum(r)) return `${r.backend} · RF feedback · ${r.centerHz.toLocaleString()} Hz · ${r.commandedWatts} commanded W (not measured)\n`
     + `${r.stimulus === 'saturn-timing-multisine-v1' ? 'Timing Measurement — saturn-timing-multisine-v1; seed 0x53465031; 48000 Hz PCM; 1000 ms repeat.' : 'AM silent carrier.'}\n`
     + `Two-tone IMD unavailable for this stimulus. Spectrum shown in relative dBFS, not calibrated dBm.\n`
@@ -150,9 +154,10 @@ export function rfMeasurementText(r: RfSpectrum): string {
     + (r.stimulus === 'wdsp-postgen-two-tone-v1' ? 'Stimulus: balanced WDSP gen1 before IQC; tagged zero-input keepalive (not PCM tone audio).\n' : '')
     + `${r.reason}. Overload ${r.overload}; sample clipping ${r.clippedComponents}; continuity ${r.continuity}.\n`
     + `ADC attenuation command ${r.attenuationCommandDb} dB; tone imbalance ${r.toneBalanceDb.toFixed(1)} dB.\n`
+    + `RF fundamentals ${r.toneDbfs.map(n=>n.toFixed(1)).join(' / ')} dBFS.\n`
     + `Reference-channel tones ${r.referenceToneDbfs.map(n=>n.toFixed(1)).join(' / ')} dBFS.\n`
-    + r.products.map((p,i)=>`IMD${p.order} ${i%2===0?'lower':'upper'} (${p.offsetHz.toFixed(0)} Hz IQ offset): ${productText(p)}`).join('\n')
-    + `\nReference: ${r.reference}. ${r.window}; bins ${r.binHz.toFixed(2)} Hz; ENBW ${r.rbwHz.toFixed(2)} Hz.\n`
+    + r.products.map((p,i)=>`IMD${p.order} ${i%2===0?'lower':'upper'} (${p.offsetHz.toFixed(0)} Hz IQ offset): ${productText(p,offset,reference)}`).join('\n')
+    + `\nReference: ${reference==='pep'?`calculated two-tone PEP (${offset.toFixed(2)} dB above weaker tone; not measured watts)`:r.reference}. ${r.window}; bins ${r.binHz.toFixed(2)} Hz; ENBW ${r.rbwHz.toFixed(2)} Hz.\n`
     + `Generation ${r.generation} / config ${r.config} / TX ${r.txEpoch}; diagnostic drops ${r.diagnosticDrops}. Host ${r.sourcePin.slice(0,12)}; firmware identity ${r.firmwareBuild}.\n`
     + 'Relative observation-path estimates, not calibrated RF IMD. Freshness bounds Bridge ingress, not FPGA/RF acquisition age. IQ offset sign is not yet bench-qualified as RF sideband orientation.';
 }
@@ -186,32 +191,6 @@ export async function copyRfMeasurements(view: Pick<RfMonitorView,'status'|'summ
   } catch { /* Keep the selected, visible text available; never claim success. */ }
 }
 
-function draw(view: RfMonitorView, r: RfSpectrum | null, baseline: RfSpectrum | null, live: boolean): void {
-  const canvas=view.canvas; const c=canvas.getContext('2d'); if (!c) return;
-  const width=Math.max(320,Math.round(canvas.getBoundingClientRect().width || 700));
-  if (canvas.width!==width*2) canvas.width=width*2;
-  if (canvas.height!==520) canvas.height=520;
-  c.setTransform(2,0,0,2,0,0); const height=260;
-  c.fillStyle='#07111f';c.fillRect(0,0,width,height);
-  const left=48,right=width-12,top=18,bottom=225;
-  const x=(hz:number)=>left+(hz+8000)/16000*(right-left);
-  const y=(db:number)=>top+(10-Math.max(-110,Math.min(10,db)))/120*(bottom-top);
-  c.font='11px monospace'; c.lineWidth=0.5;
-  for(let db=10;db>=-110;db-=10){ c.strokeStyle=db%20===0?'#334a65':'#172c44';c.beginPath();c.moveTo(left,y(db));c.lineTo(right,y(db));c.stroke();c.fillStyle='#a5b8d1';c.fillText(String(db),5,y(db)+4); }
-  for(let hz=-8000;hz<=8000;hz+=1000){c.strokeStyle='#203751';c.beginPath();c.moveTo(x(hz),top);c.lineTo(x(hz),bottom);c.stroke();if(hz%2000===0){c.fillStyle='#a5b8d1';c.fillText(`${hz/1000}k`,x(hz)-10,bottom+17);}}
-  const trace=(s:RfSpectrum,color:string,dashed:boolean)=>{
-    const ref=twoToneSpectrum(s)?Math.min(...s.toneDbfs):0;c.strokeStyle=color;c.lineWidth=1.2;c.setLineDash(dashed?[4,3]:[]);c.beginPath();
-    s.binsDbfs.forEach((v,i)=>{ const px=x(s.firstBinHz+i*s.binHz),py=y(v-ref);if(i===0)c.moveTo(px,py);else c.lineTo(px,py);});c.stroke();c.setLineDash([]);
-  };
-  if(baseline && (!r || twoToneSpectrum(r)))trace(baseline,'#f5b942',true);
-  if(r){trace(r,live?'#48b8ff':'#67798e',false);
-    if(twoToneSpectrum(r)) {
-      for(const [i,hz] of r.toneHz.entries()){c.fillStyle='#7de9c1';c.fillText(`F${i+1}`,x(hz)-8,14);}
-      for(const p of r.products){c.strokeStyle='#e085a2';c.lineWidth=0.7;c.beginPath();c.moveTo(x(p.offsetHz),top+14);c.lineTo(x(p.offsetHz),bottom);c.stroke();c.fillStyle='#e085a2';c.fillText(`IM${p.order}`,x(p.offsetHz)-10,top+26);}
-    }
-  }
-  c.fillStyle='#a5b8d1';c.fillText(r && !twoToneSpectrum(r)?'relative dBFS':'dBc · weaker tone',left,height-4);c.fillText('IQ offset kHz',Math.max(left,width-100),height-4);
-}
 export function mountRfMonitor(root: HTMLElement, model: RfMonitorState): (connected:boolean,transmitting:boolean,now:number)=>void {
   const canvas=root.querySelector<HTMLCanvasElement>('[data-rf-canvas]')!;
   const status=root.querySelector<HTMLElement>('[data-rf-status]')!;
@@ -221,6 +200,7 @@ export function mountRfMonitor(root: HTMLElement, model: RfMonitorState): (conne
   const pop=root.querySelector<HTMLButtonElement>('[data-rf-popout]')!;
   let live=false, popup:Window|null=null, child:RfMonitorView|null=null;
   const main={element:root,canvas,status,summary};
+  const displays=new Map<RfMonitorView,ViewDisplay>();displays.set(main,createDisplay(main,DEFAULT_PLOT));
   const copy=root.querySelector<HTMLButtonElement>('[data-rf-copy]')!;
   const copyStatus=root.querySelector<HTMLElement>('[data-rf-copy-status]')!;
   copy.addEventListener('click',()=>{void copyRfMeasurements(main,copyStatus);});
@@ -230,29 +210,34 @@ export function mountRfMonitor(root: HTMLElement, model: RfMonitorState): (conne
     const url=URL.createObjectURL(new Blob([JSON.stringify({format:'saturn-rf-spectrum-baseline-v1',kind:'spectrum-only; raw paired samples retained separately on host when configured',frame:model.baseline},null,2)],{type:'application/json'}));
     const a=document.createElement('a');a.href=url;a.download='saturn-ps-off-spectrum-baseline.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   });
-  const panelWindow=new PanelWindow(root,'rf-imd',{width:960,height:700});
+  const panelWindow=new PanelWindow(root,'rf-imd',{width:1100,height:900});
   pop.addEventListener('click',()=>{
     popup=panelWindow.open();if(!popup){if(root.dataset.panelMode!=='expanded')status.textContent='Pop-out blocked; RF / IMD remains docked';return;}
     popup.opener=null;popup.document.title='Saturn RF Feedback / IMD Monitor';
     const body=popup.document.body;body.style.cssText='background:#07111f;color:#d8e7f7;font:14px system-ui;padding:12px';
+    const style=popup.document.createElement('style');style.textContent='button{background:#173750;color:#e0eefb;border:1px solid #3b5d79;border-radius:5px;padding:6px 10px;cursor:pointer}button:hover{background:#244964}h2{font-size:20px}';popup.document.head.append(style);
     const label=popup.document.createElement('h2');label.textContent='RF Feedback / IMD Monitor — read only';
-    const childCanvas=popup.document.createElement('canvas');childCanvas.style.cssText='width:100%;height:260px';
+    const childCanvas=popup.document.createElement('canvas');childCanvas.style.cssText='display:block;position:relative;inset:auto;width:100%;height:clamp(280px,calc(100vh - 430px),760px)';
     const childStatus=popup.document.createElement('p'), childSummary=popup.document.createElement('pre');childSummary.style.cssText='white-space:pre-wrap;user-select:text';
     childStatus.textContent=status.textContent;childSummary.textContent=summary.textContent;
     const childCopy=popup.document.createElement('button');childCopy.type='button';childCopy.textContent='Copy measurements';childCopy.setAttribute('data-rf-copy','');
     const childCopyStatus=popup.document.createElement('div');childCopyStatus.setAttribute('role','status');childCopyStatus.setAttribute('data-rf-copy-status','');
     const childView={element:body,canvas:childCanvas,status:childStatus,summary:childSummary};
     childCopy.addEventListener('click',()=>{void copyRfMeasurements(childView,childCopyStatus);});
-    body.replaceChildren(label,childStatus,childCanvas,childCopy,childCopyStatus,childSummary);child=childView;panelWindow.attach(popup);
+    body.replaceChildren(label,childStatus,childCanvas,childCopy,childCopyStatus,childSummary);
+    if(child)displays.delete(child);child=childView;displays.set(childView,createDisplay(childView,displays.get(main)!.options));panelWindow.attach(popup);
   });
   return (connected,transmitting,now)=>{
     live=model.current(now,connected,transmitting);
     const r=model.frame, match=r?model.baselineMatches(r):false;
     const label=!connected?'DISCONNECTED — no live RF evidence':model.capability!=='raw-pairs-v1'?'UNAVAILABLE — host RF observer not enabled':!transmitting?'RX / held capture — not live':!live?`WAITING / STALE — ${model.note}`:'LIVE RF feedback — relative estimates, RF path unqualified';
-    const text=(r?rfMeasurementText(r):'No real paired feedback window received. Digital TX display is not RF feedback.')
-      + (model.baseline?`\nPS-off-requested baseline: ${match?'matching commanded settings; amber overlay':'settings mismatch — overlay hidden'}. Native correction state is not certified by this spectrum. LP700 power/SWR must be recorded independently.`:'');
+    if(child&&popup?.closed){displays.delete(child);child=null;popup=null;}
     for(const view of [main,...(child&&popup&&!popup.closed?[child]:[])]) {
-      view.status.textContent=label+(root.dataset.panelNotice?` · ${root.dataset.panelNotice}`:'');view.summary.textContent=text;draw(view,r,match?model.baseline:null,live);
+      const ui=displays.get(view)!;
+      const text=(r?rfMeasurementText(r,ui.options.reference):'No real paired feedback window received. Digital TX display is not RF feedback.')
+        + (model.baseline?`\nPS-off-requested baseline: ${match?'matching commanded settings; amber overlay':'settings / source-session mismatch — overlay hidden'}. Native correction state is not certified by this spectrum. LP700 power/SWR must be recorded independently.`:'');
+      view.status.textContent=label+(root.dataset.panelNotice?` · ${root.dataset.panelNotice}`:'');view.summary.textContent=text;
+      updateMetrics(ui,r);ui.plot.update(r,match?model.baseline:null,live);
     }
     save.disabled=!live||!r||r.psRequested||r.clippedComponents>0||!r.reason.startsWith('relative estimate');
     exportButton.disabled=model.baseline===null;

@@ -8401,7 +8401,7 @@
           <div class="setup-section-title">RF Feedback / IMD Monitor</div>
           <p class="small">Raw paired RF observation, separate from the digital TX panadapter. No TX or PS control. Unknown overload coverage remains unknown.</p>
           <output class="small" data-rf-status role="status">RF feedback unavailable — no live capture received</output>
-          <canvas data-rf-canvas style="position:relative;inset:auto;width:100%;height:260px" aria-label="Live RF-feedback spectrum with fundamental and IMD markers"></canvas>
+          <canvas data-rf-canvas style="display:block;position:relative;inset:auto;width:100%;height:clamp(280px,35vw,420px)" aria-label="Live RF-feedback spectrum with fundamental and IMD markers"></canvas>
           <div class="row"><button type="button" class="btn ghost" data-rf-popout>Pop out RF / IMD</button><button type="button" class="btn ghost" data-rf-copy>Copy measurements</button><button type="button" class="btn ghost" data-rf-save disabled>Hold PS-off baseline</button><button type="button" class="btn ghost" data-rf-export disabled>Export baseline</button></div>
           <div class="small" data-rf-copy-status role="status"></div>
           <pre class="small" data-rf-summary style="white-space:pre-wrap;user-select:text">No paired RF evidence received.</pre>
