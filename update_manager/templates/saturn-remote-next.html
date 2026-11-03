@@ -7459,12 +7459,12 @@
                           <button class="btn ghost" id="setup-ps-off" type="button" disabled>PS Off</button>
                           <button class="btn ghost" id="setup-ps-calibrate" type="button" disabled>Calibrate (prepare single)</button>
                         </div>
-                        <p class="small" id="setup-ps-control-contract">Waiting for host PS capabilities. Calibration configuration does not key TX.</p>
-                        <div class="setup-readout" id="setup-ps-committed-mode">Host committed mode: unavailable</div>
+                        <details><summary>Host capabilities</summary><p class="small" id="setup-ps-control-contract">Waiting for host PS capabilities. Calibration configuration does not key TX.</p></details>
+                        <details><summary>Committed settings</summary><div class="setup-readout" id="setup-ps-committed-mode">Host committed mode: unavailable</div></details>
                         <button class="btn ghost" id="setup-ps-ack-fault" type="button" disabled>Acknowledge completed TX fault — stays RX</button>
                         <div class="setup-readout" id="setup-ps-ack-result" role="status">No fault acknowledgment requested</div>
                         <details id="setup-ps-measurement-controls">
-                          <summary>TX power / two-tone duration / measurement tools</summary>
+                          <summary>Power &amp; measurement tools</summary>
                           <label class="label" for="setup-ps-measurement-kind">Measurement stimulus</label>
                           <select class="field" id="setup-ps-measurement-kind">
                             <option value="mode-default">Two-tone (USB/LSB) / silent carrier (AM)</option>
@@ -7489,13 +7489,14 @@
                           <label class="toggle-field"><span>Auto ATT (unavailable here)</span><input id="setup-tx-puresignal-auto-attenuate" type="checkbox" disabled /></label>
                         </div>
                         <div class="setup-row">
-                            <label class="label" for="setup-tx-puresignal-attenuation">Commanded Feedback Attenuation</label>
+                            <label class="label" for="setup-tx-puresignal-attenuation">Feedback attenuation</label>
                           <input id="setup-tx-puresignal-attenuation" type="range" min="0" max="31" step="1" value="0" />
                           <div class="setup-readout" id="setup-tx-puresignal-attenuation-readout">0 dB</div>
                         </div>
                         <div class="setup-button-row" style="grid-template-columns: minmax(0, 1fr);">
                           <button class="btn ghost" id="setup-tx-puresignal-reset" type="button">Reset Calibration</button>
                         </div>
+                        <details><summary>PS diagnostics</summary>
                         <div class="setup-inline-fields">
                           <div class="setup-row"><span class="label">TX owner selection</span><div class="setup-readout" id="setup-ps-owner">Unavailable</div></div>
                           <div class="setup-row"><span class="label">TX audio source</span><div class="setup-readout" id="setup-ps-source">Unavailable</div></div>
@@ -7521,15 +7522,16 @@
                           <div class="setup-row"><span class="label">Reported feedback gaps</span><div class="setup-readout" id="setup-ps-gaps">Unavailable</div></div>
                         </div>
                         <p class="small" id="setup-ps-timing">No PS report received in this connection</p>
+                        </details>
                         <p class="small" id="setup-ps-lock-reason">Connect to a ready Bridge to change PS settings.</p>
                         <button class="btn ghost" id="setup-ps-copy-btn" type="button">Copy PS diagnostics</button>
-                        <div class="setup-section" data-ps-signal-monitor>
-                          <div class="setup-section-title">Digital capture inspector — offline</div>
+                        <details class="setup-section" data-ps-signal-monitor><summary>Offline capture inspector</summary>
+
                           <p class="small">Read-only imported evidence, not live telemetry or calibrated RF IMD.</p>
                           <label class="label">Load offline diagnostic report <input type="file" accept="application/json,.json" data-ps-signal-file /></label>
                           <button class="btn ghost" type="button" data-ps-signal-popout>Pop out capture inspector</button>
                           <pre class="small" style="white-space:pre-wrap" data-ps-signal-summary>No diagnostic capture loaded. Live levels unavailable.</pre>
-                        </div>
+                        </details>
                         <div class="setup-row">
                           <label class="label" for="managed-pcm-select">TX path</label>
                           <select class="field" id="managed-pcm-select">
@@ -7538,10 +7540,10 @@
                             <option value="managed">Managed tagged PCM / SATP — opt-in</option>
                           </select>
                         </div>
-                        <p class="small">Auto follows the host on every connection. TX stays inhibited until negotiation completes; host RF permission and a fresh ARM are still required. No banked Opus.</p>
+                        <details><summary>TX path details</summary><p class="small">Auto follows the host on every connection. TX stays inhibited until negotiation completes; host RF permission and a fresh ARM are still required. No banked Opus.</p></details>
                         <div class="setup-readout" id="managed-pcm-status" role="status" aria-live="polite">Auto — waiting for host TX owner</div>
                         <div class="setup-readout" id="managed-pcm-transaction" role="status">No managed settings result</div>
-                        <p class="small" id="setup-ps-qualification">RF output, feedback calibration and IMD improvement remain unqualified.</p>
+                        <details><summary>Measurement limits</summary><p class="small" id="setup-ps-qualification">RF output, feedback calibration and IMD improvement remain unqualified.</p></details>
                       </div>
                       <div class="setup-section">
                         <div class="setup-section-title">TX Equalizer</div>
@@ -8382,24 +8384,26 @@
       </div>
 
       <section class="panel" id="ps-control-panel" role="tabpanel" aria-labelledby="control-tab-ps" hidden>
-        <div class="panel-head"><h2 class="panel-title">PureSignal</h2><span class="panel-meta">Settings and host reports</span></div>
-        <div class="row"><button class="btn ghost" id="ps-reset-panel-layout" type="button">Reset panel layout</button></div>
+        <div class="panel-head"><h2 class="panel-title">PureSignal</h2><span class="panel-meta">Controls &amp; monitors</span></div>
+        <details><summary>Panel layout</summary><button class="btn ghost" id="ps-reset-panel-layout" type="button">Reset panel layout</button></details>
         <section class="setup-section" id="ps-health-monitor" aria-label="PureSignal status monitor">
           <div class="setup-section-title">PS Monitor</div>
           <button class="btn ghost" type="button" data-ps-health-popout>Pop out PS Monitor</button>
-          <pre class="small" style="white-space:pre-wrap;user-select:text" data-ps-health-summary>No live host status received.</pre>
+          <output class="small" style="display:block;white-space:pre-wrap" data-ps-health-overview>Disconnected</output>
+          <details><summary>Host details</summary><pre class="small" style="white-space:pre-wrap;user-select:text" data-ps-health-summary>No live host status received.</pre></details>
         </section>
         <div class="setup-section" id="ps-two-tone-section">
           <div class="setup-section-title">Two-Tone TX</div>
           <button class="btn" id="ps-two-tone-btn" type="button" aria-pressed="false" aria-describedby="ps-two-tone-note" disabled>Start 2-tone — keys TX</button>
-          <p class="small" id="ps-two-tone-note">Uses the same generator and TX Ready/PTT path as Setup. No microphone needed. This starts TX; it does not enable PureSignal calibration.</p>
+          <details><summary>Test details</summary><p class="small" id="ps-two-tone-note">Keys TX. No microphone needed.</p></details>
           <div class="setup-readout" id="ps-two-tone-settings"></div>
           <p class="small" data-two-tone-host-result>No host two-tone result in this connection</p>
           <output class="small" id="ps-tx-display-status" role="status">TX display unavailable — disconnected</output>
         </div>
+        <div id="ps-control-body"></div>
         <section class="setup-section" id="ps-rf-monitor" aria-label="RF feedback spectrum and IMD monitor">
           <div class="setup-section-title">RF Feedback / IMD Monitor</div>
-          <p class="small">Raw paired RF observation, separate from the digital TX panadapter. No TX or PS control. Unknown overload coverage remains unknown.</p>
+          <p class="small">Relative RF measurements</p>
           <output class="small" data-rf-status role="status">RF feedback unavailable — no live capture received</output>
           <canvas data-rf-canvas style="display:block;position:relative;inset:auto;width:100%;height:clamp(280px,35vw,420px)" aria-label="Live RF-feedback spectrum with fundamental and IMD markers"></canvas>
           <div class="row"><button type="button" class="btn ghost" data-rf-popout>Pop out RF / IMD</button><button type="button" class="btn ghost" data-rf-copy>Copy measurements</button><button type="button" class="btn ghost" data-rf-save disabled>Hold PS-off baseline</button><button type="button" class="btn ghost" data-rf-export disabled>Export baseline</button></div>
@@ -8409,15 +8413,14 @@
         <section class="setup-section" id="ps-correction-monitor" aria-label="WDSP correction and phase monitor">
           <div class="setup-section-title">WDSP Correction / Phase Monitor</div>
           <output class="small" data-correction-status role="status">Native correction display unavailable — disconnected</output>
-          <p class="small">Blue: measured magnitude · Yellow: measured phase · Red: magnitude correction · Green: phase correction. Read only; does not key TX or start calibration.</p>
+          <div class="small" data-correction-legend></div>
           <label class="small">Magnitude scale <select data-correction-scale><option value="db">dB ratio</option><option value="linear">Linear ratio</option></select></label>
-          <canvas data-correction-gain style="display:block;position:relative;inset:auto;width:100%;height:230px" aria-label="WDSP magnitude correction graph"></canvas>
-          <canvas data-correction-phase style="display:block;position:relative;inset:auto;width:100%;height:230px" aria-label="WDSP phase correction graph in degrees"></canvas>
+          <canvas data-correction-gain style="display:block;position:relative;inset:auto;width:100%;height:clamp(230px,25vw,320px)" aria-label="WDSP magnitude correction graph"></canvas>
+          <canvas data-correction-phase style="display:block;position:relative;inset:auto;width:100%;height:clamp(230px,25vw,320px)" aria-label="WDSP phase correction graph in degrees"></canvas>
           <div class="row"><button type="button" class="btn ghost" data-correction-popout>Pop out Correction / Phase</button><button type="button" class="btn ghost" data-correction-copy>Copy measurements</button></div>
           <div class="small" data-correction-copy-status role="status"></div>
           <pre class="small" data-correction-summary style="white-space:pre-wrap;user-select:text">No native correction curve received. RF spectrum data is not substituted for correction data.</pre>
         </section>
-        <div id="ps-control-body"></div>
       </section>
       <div class="stack right-rail">
         <div id="tx-safety-host" class="phone-tx-bar">
@@ -14487,8 +14490,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("setup-ps-measure").textContent = $("setup-ps-measurement-kind")?.value === "timing" ? "Start Timing Measurement — keys RF" : "Start Measure Only — keys RF";
       }
       if ($("setup-ps-measure-stop")) $("setup-ps-measure-stop").disabled = !managed.measurementActive;
-      if ($("setup-ps-ack-fault")) $("setup-ps-ack-fault").disabled = !managed.canAcknowledgeFault;
-      if ($("setup-ps-ack-result")) $("setup-ps-ack-result").textContent = managed.faultAcknowledgment || "Fault acknowledgment unavailable on this host";
+      if ($("setup-ps-ack-fault")) { $("setup-ps-ack-fault").disabled = !managed.canAcknowledgeFault; $("setup-ps-ack-fault").hidden = !managed.canAcknowledgeFault; }
+      if ($("setup-ps-ack-result")) { $("setup-ps-ack-result").textContent = managed.faultAcknowledgment || ""; $("setup-ps-ack-result").hidden = !managed.faultAcknowledgment; }
       const power = $("setup-ps-commanded-watts");
       if (power) {
         power.max = String(managed.twoToneOperatorControlled ? (managed.driveLimitWatts || 1) : Math.min(5, managed.driveLimitWatts || 1));
@@ -17984,7 +17987,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       psTwoToneButton.title = managedPcmSelected() ? (managedTone.twoToneOperatorControlled ? "Start/Stop at the current TX frequency and committed power; no automatic timeout when duration is zero" : "Requires separately enabled host trial and fresh attended confirmation") : twoToneButton.title;
       $("ps-two-tone-note").textContent = managedPcmSelected()
         ? `${managedTone.psMode === "off" ? "PS-off baseline" : managedTone.psMode === "auto" ? "Auto correction" : "Single calibration"}. This separately authorized action keys RF with ${managedTone.nativeTwoToneSupported ? "the balanced 700/1900 Hz WDSP generator before IQC; tagged zero-input frames provide liveness, not tone audio" : "generated 700/1900 Hz PCM and fixed unity gain"}. ${managedTone.twoToneOperatorControlled ? "Uses current TX frequency and power; duration 0 runs until Stop, PTT release or disconnect" : "Uses the attended confirmation and duration above"}; no microphone.`
-        : "Uses the same generator and TX Ready/PTT path as Setup. No microphone needed. This starts TX; it does not enable PureSignal calibration.";
+        : "Keys TX. No microphone needed.";
       $("ps-two-tone-settings").textContent = managedPcmSelected()
         ? `${managedTone.twoToneResult} · ${managedTone.twoToneOperatorControlled ? `Current TX frequency and power (up to ${managedTone.twoToneMaxWatts} W); duration 0 = manual Stop` : managedTone.twoToneLimitMs ? `Host maximum ${managedTone.twoToneLimitMs} ms at ${managedTone.twoToneFrequencyHz} Hz, <=5 commanded W` : "Host generated calibration trial not enabled"}`
         : `${state.txTwoToneFreq1} / ${state.txTwoToneFreq2} Hz · ${safeFixed(state.txTwoToneLevelDb, 1, "0.0")} dB · delay ${state.txTwoToneDelayMs} ms`;

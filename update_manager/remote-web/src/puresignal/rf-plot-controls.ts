@@ -26,7 +26,7 @@ export function createDisplay(view:RfMonitorView,defaults:PlotOptions):ViewDispl
   const cursor=doc.createElement('div');cursor.dataset.rfCursor='';cursor.style.cssText='color:#a5bdd3;font:11px ui-monospace,monospace;margin:7px 0;min-height:28px';cursor.textContent='Move over the trace for frequency and FFT-bin level.';
   const metrics=doc.createElement('div');metrics.dataset.rfMetrics='';metrics.style.cssText='font:12px system-ui;margin:10px 0;color:#c9dced';
   const details=doc.createElement('div');details.dataset.rfResolution='';details.style.cssText='font:11px system-ui;color:#9fb5ca;margin:8px 0;line-height:1.6';
-  view.canvas.after(cursor,metrics,details);
+  record.insertBefore(details,view.summary);view.canvas.after(cursor,metrics);
   return {options,plot:new RfPlot(view.canvas,()=>options,cursor),metrics,details,reference};
 }
 export function updateMetrics(ui:ViewDisplay,r:RfSpectrum|null):void {

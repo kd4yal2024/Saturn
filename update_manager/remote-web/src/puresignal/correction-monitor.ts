@@ -2,6 +2,7 @@ import {PanelWindow} from './panel-layout';
 /** Read-only WDSP AmpView. Curve existence, snapshot freshness and correction
  * application are independent. A recent readback does NOT date the fit. */
 import {copyRfMeasurements} from './rf-monitor';
+import {canvasScale,RF_COLORS} from './rf-plot';
 export interface CorrectionFrame {
   format:'saturn-ps-correction-v1';boot:string;serial:string;snapshotNs:string;publishedNs:string;
   sourcePin:string;backend:'P2'|'DirectXdma';centerHz:number;commandedWatts:number;attenuationCommandDb:number;
@@ -98,22 +99,25 @@ export function correctionSummary(r:CorrectionFrame):string {
 }
 type View={status:HTMLElement;summary:HTMLElement;gain:HTMLCanvasElement;phase:HTMLCanvasElement};
 function plot(canvas:HTMLCanvasElement,series:{points:number[][];color:string;line:boolean}[],ylabel:string,range:[number,number],live:boolean):void {
+  const rect=canvas.getBoundingClientRect();if(rect.width<2||rect.height<2)return;
   const c=canvas.getContext('2d');if(!c)return;
-  const w=Math.max(320,Math.round(canvas.getBoundingClientRect().width||700)),h=230;
-  if(canvas.width!==w*2)canvas.width=w*2;if(canvas.height!==h*2)canvas.height=h*2;
-  c.setTransform(2,0,0,2,0,0);c.fillStyle='#07111f';c.fillRect(0,0,w,h);
+  const w=Math.round(rect.width),h=Math.round(rect.height),scale=canvasScale(w,h,canvas.ownerDocument.defaultView?.devicePixelRatio??1);
+  if(canvas.width!==Math.round(w*scale))canvas.width=Math.round(w*scale);if(canvas.height!==Math.round(h*scale))canvas.height=Math.round(h*scale);
+  c.setTransform(scale,0,0,scale,0,0);const bg=c.createLinearGradient(0,0,0,h);bg.addColorStop(0,'#0c1c30');bg.addColorStop(1,'#050b14');c.fillStyle=bg;c.fillRect(0,0,w,h);
   const left=62,right=w-15,top=25,bottom=h-34;
   const x=(n:number)=>left+n*(right-left),y=(n:number)=>bottom-(n-range[0])/(range[1]-range[0])*(bottom-top);
-  c.font='11px monospace';c.lineWidth=.6;
-  for(let i=0;i<=5;i++){
-    const n=range[0]+i*(range[1]-range[0])/5;c.strokeStyle='#29425c';c.beginPath();c.moveTo(left,y(n));c.lineTo(right,y(n));c.stroke();
-    c.fillStyle='#b7cae0';c.fillText(n.toFixed(1),4,y(n)+4);
-    c.beginPath();c.moveTo(x(i/5),top);c.lineTo(x(i/5),bottom);c.stroke();c.fillText((i/5).toFixed(1),x(i/5)-8,bottom+15);
+  c.font='11px ui-monospace,monospace';c.lineWidth=.6;
+  for(let i=0;i<=10;i++){
+    const n=range[0]+i*(range[1]-range[0])/10;c.strokeStyle=i%2?'#14293c':'#29445e';c.beginPath();c.moveTo(left,y(n));c.lineTo(right,y(n));c.stroke();
+    c.beginPath();c.moveTo(x(i/10),top);c.lineTo(x(i/10),bottom);c.stroke();
+    if(i%2===0){c.fillStyle='#9fb4c9';c.fillText(n.toFixed(1),4,y(n)+4);c.fillText((i/10).toFixed(1),x(i/10)-8,bottom+15);}
   }
-  c.fillStyle='#d8e7f7';c.fillText(ylabel,left,14);c.fillText('Normalized signal magnitude (WDSP x)',left,h-3);
+  c.strokeStyle='#49627b';c.strokeRect(left,top,right-left,bottom-top);
+  c.fillStyle='#cfe2f4';c.fillText(ylabel,left,14);c.fillText('Normalized magnitude (WDSP x)',left,h-6);
+  c.textAlign='right';c.fillStyle=live?'#69dcba':'#a4b2c1';c.fillText(live?'LIVE':'HELD / NOT LIVE',right,h-6);c.textAlign='left';
   c.save();c.beginPath();c.rect(left,top,right-left,bottom-top);c.clip();
-  c.globalAlpha=live?1:.5;
-  for(const s of series){c.strokeStyle=s.color;c.fillStyle=s.color;c.lineWidth=1.6;c.beginPath();let previous:number[]|null=null;
+  c.globalAlpha=live?1:.7;
+  for(const s of series){c.strokeStyle=s.color;c.fillStyle=s.color;c.lineWidth=2;c.beginPath();let previous:number[]|null=null;
     for(const p of s.points){if(!p.every(finite)){previous=null;continue;}
       if(s.line){if(previous&&Math.abs(p[1]!-previous[1]!)<(range[1]-range[0])*.8)c.lineTo(x(p[0]!),y(p[1]!));else c.moveTo(x(p[0]!),y(p[1]!));previous=p;}
       else c.fillRect(x(p[0]!)-.7,y(p[1]!)-.7,1.4,1.4);
@@ -123,6 +127,15 @@ function plot(canvas:HTMLCanvasElement,series:{points:number[][];color:string;li
 export function mountCorrectionMonitor(root:HTMLElement,model:CorrectionMonitorState):(connected:boolean,transmitting:boolean,now:number)=>void {
   const main:View={status:root.querySelector('[data-correction-status]')!,summary:root.querySelector('[data-correction-summary]')!,gain:root.querySelector('[data-correction-gain]')!,phase:root.querySelector('[data-correction-phase]')!};
   let popup:Window|null=null,child:View|null=null,db=true;
+  const decorate=(view:View,legend:HTMLElement)=>{
+    const doc=view.summary.ownerDocument;legend.replaceChildren();legend.style.cssText='display:flex;flex-wrap:wrap;gap:8px 18px;margin:10px 0;font:12px system-ui';
+    for(const [label,color] of [['Magnitude measured',RF_COLORS.trace],['Magnitude correction',RF_COLORS.imd3],['Phase measured',RF_COLORS.imd5],['Phase correction',RF_COLORS.fundamental]]){
+      const item=doc.createElement('span');item.textContent='━ '+label;item.style.color=color!;legend.append(item);
+    }
+    const record=doc.createElement('details'),title=doc.createElement('summary');title.textContent='Curve details';record.style.cssText='margin:12px 0;font-size:12px';
+    view.summary.before(record);record.append(title,view.summary);
+  };
+  decorate(main,root.querySelector('[data-correction-legend]')!);
   const bindCopy=(doc:Document,view:View,button:HTMLButtonElement,feedback:HTMLElement)=>{
     button.addEventListener('click',()=>{void copyRfMeasurements(view,feedback,'Saturn WDSP Correction / Phase Monitor');});
     const exportButton=doc.createElement('button');exportButton.type='button';exportButton.textContent='Export curve JSON';exportButton.setAttribute('data-correction-export','');
@@ -135,19 +148,23 @@ export function mountCorrectionMonitor(root:HTMLElement,model:CorrectionMonitorS
   };
   bindCopy(root.ownerDocument,main,root.querySelector('[data-correction-copy]')!,root.querySelector('[data-correction-copy-status]')!);
   root.querySelector('[data-correction-scale]')!.addEventListener('change',e=>{db=(e.target as HTMLSelectElement).value==='db';});
-  const panelWindow=new PanelWindow(root,'ampview',{width:1000,height:900});
+  const panelWindow=new PanelWindow(root,'ampview',{width:1100,height:900});
   root.querySelector('[data-correction-popout]')!.addEventListener('click',()=>{
     popup=panelWindow.open();if(!popup){if(root.dataset.panelMode!=='expanded')main.status.textContent='Pop-out blocked; Correction / Phase remains docked';return;}
     popup.opener=null;const doc=popup.document;doc.title='Saturn WDSP Correction / Phase Monitor';
     const body=doc.body;body.style.cssText='background:#07111f;color:#d8e7f7;font:14px system-ui;padding:12px';
+    const style=doc.createElement('style');style.textContent='button,select{background:#173750;color:#e0eefb;border:1px solid #3b5d79;border-radius:5px;padding:6px 10px}button{cursor:pointer}button:hover{background:#244964}h2{font-size:20px}';doc.head.append(style);
     const title=doc.createElement('h2');title.textContent='WDSP Correction / Phase Monitor — read only';
-    const legend=doc.createElement('p');legend.textContent='Blue: measured magnitude · Yellow: measured phase · Red: magnitude correction · Green: phase correction';
+    const legend=doc.createElement('div');
+    const scaleLabel=doc.createElement('label');scaleLabel.textContent='Magnitude scale ';const scale=doc.createElement('select');
+    for(const [value,text] of [['db','dB ratio'],['linear','Linear ratio']]){const option=doc.createElement('option');option.value=value!;option.textContent=text!;scale.append(option);}
+    scale.value=db?'db':'linear';scale.addEventListener('change',()=>{db=scale.value==='db';(root.querySelector('[data-correction-scale]') as HTMLSelectElement).value=scale.value;});scaleLabel.append(scale);
     const status=doc.createElement('p'),summary=doc.createElement('pre'),gain=doc.createElement('canvas'),phase=doc.createElement('canvas');
-    summary.style.cssText='white-space:pre-wrap;user-select:text';for(const c of [gain,phase])c.style.cssText='display:block;position:relative;width:100%;height:230px';
+    summary.style.cssText='white-space:pre-wrap;user-select:text';for(const c of [gain,phase])c.style.cssText='display:block;position:relative;inset:auto;width:100%;height:clamp(240px,calc((100vh - 280px)/2),420px);margin:10px 0';
     gain.setAttribute('aria-label','WDSP magnitude correction graph');phase.setAttribute('aria-label','WDSP phase correction graph in degrees');
     const copy=doc.createElement('button');copy.type='button';copy.textContent='Copy measurements';copy.setAttribute('data-correction-copy','');
     const feedback=doc.createElement('div');feedback.setAttribute('role','status');
-    body.replaceChildren(title,status,legend,gain,phase,copy,feedback,summary);child={status,summary,gain,phase};panelWindow.attach(popup);
+    body.replaceChildren(title,status,legend,scaleLabel,gain,phase,copy,feedback,summary);child={status,summary,gain,phase};decorate(child,legend);panelWindow.attach(popup);
     bindCopy(doc,child,copy,feedback);
     // Populate immediately; opening a window never initiates fitting/keying.
     status.textContent=main.status.textContent;summary.textContent=main.summary.textContent;
@@ -165,8 +182,8 @@ export function mountCorrectionMonitor(root:HTMLElement,model:CorrectionMonitorS
     };
     for(const view of [main,...(child&&popup&&!popup.closed?[child]:[])]){
       view.status.textContent=label+(root.dataset.panelNotice?` · ${root.dataset.panelNotice}`:'');view.summary.textContent=summary;
-      plot(view.gain,[{points:measured,color:'#48aaff',line:false},{points:curve,color:'#ff6262',line:true}],db?'Magnitude ratio / inverse gain (dB)':'Magnitude ratio / inverse gain (linear)',bounds([...measured,...curve],db?-1:0,db?1:1.2),fresh&&transmitting);
-      plot(view.phase,[{points:measuredPhase,color:'#ffdf59',line:false},{points:phaseCurve,color:'#67ee9b',line:true}],'Relative phase (degrees)',bounds([...measuredPhase,...phaseCurve],-5,5),fresh&&transmitting);
+      plot(view.gain,[{points:measured,color:RF_COLORS.trace,line:false},{points:curve,color:RF_COLORS.imd3,line:true}],db?'Magnitude / inverse gain (dB)':'Magnitude / inverse gain (linear)',bounds([...measured,...curve],db?-1:0,db?1:1.2),fresh&&transmitting);
+      plot(view.phase,[{points:measuredPhase,color:RF_COLORS.imd5,line:false},{points:phaseCurve,color:RF_COLORS.fundamental,line:true}],'Relative phase (degrees)',bounds([...measuredPhase,...phaseCurve],-5,5),fresh&&transmitting);
     }
   };
 }

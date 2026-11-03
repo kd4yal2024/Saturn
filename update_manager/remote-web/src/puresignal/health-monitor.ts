@@ -12,6 +12,7 @@ export function psHealthText(view:ReturnType<typeof pureSignalTestView>,connecte
 }
 export function mountPsHealthMonitor(root:HTMLElement):(connected:boolean,view:ReturnType<typeof pureSignalTestView>)=>void {
   const output=root.querySelector<HTMLElement>('[data-ps-health-summary]')!;
+  const overview=root.querySelector<HTMLElement>('[data-ps-health-overview]');
   const button=root.querySelector<HTMLButtonElement>('[data-ps-health-popout]')!;
   const layout=new PanelWindow(root,'ps-monitor',{width:750,height:650});
   let popup:Window|null=null,child:HTMLElement|null=null;
@@ -25,6 +26,7 @@ export function mountPsHealthMonitor(root:HTMLElement):(connected:boolean,view:R
   });
   return (connected,view)=>{
     output.textContent=psHealthText(view,connected)+(root.dataset.panelNotice?`\n${root.dataset.panelNotice}`:'');
+    if(overview)overview.textContent=connected?`${view.correcting} · Fits: ${view.calibrations}\n${view.owner}`:'Disconnected';
     if(popup&&!popup.closed&&child)child.textContent=output.textContent;
   };
 }

@@ -147,13 +147,14 @@ try{
       await until(`document.querySelector('[data-correction-status]').textContent.startsWith('LIVE native readback')`);
       assert((await evaluate(`document.querySelector('[data-correction-summary]').textContent`)).includes('Curve age/configuration and overload coverage unknown'));
       await evaluate(`document.querySelector('[data-correction-popout]').click()`);
-      const targets=await command('Target.getTargets');correctionPopup=targets.targetInfos.find(t=>t.title==='Saturn WDSP Correction / Phase Monitor');assert(correctionPopup);
-      const cs=await command('Target.attachToTarget',{targetId:correctionPopup.targetId,flatten:true});
+      const targets=await command('Target.getTargets');correctionPopup=targets.targetInfos.find(t=>t.title==='Saturn WDSP Correction / Phase Monitor');if(width>=600)assert(correctionPopup);else assert.equal(await evaluate(`document.getElementById('ps-correction-monitor').dataset.panelMode`),'expanded');
+      const cs=correctionPopup?await command('Target.attachToTarget',{targetId:correctionPopup.targetId,flatten:true}):{sessionId};
+      if(correctionPopup)await command('Emulation.setDeviceMetricsOverride',{width:1200,height:1000,deviceScaleFactor:2,mobile:false},cs.sessionId);
       await pause(250);
       const check=await command('Runtime.evaluate',{expression:`(async()=>{
         document.querySelector('h2').textContent='OFFLINE REAL-WDSP SYNTHETIC REPLAY — NOT RF';
-        const canvases=[...document.querySelectorAll('canvas')];
-        const colored=canvases.every(canvas=>{const p=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let n=0;for(let i=0;i<p.length;i+=4)if((p[i]>160&&p[i+1]<150)||(p[i+1]>160&&p[i+2]<180))n++;return n>100;});
+        const scope=document.getElementById('ps-correction-monitor')||document.body;const canvases=[...scope.querySelectorAll('canvas')];
+        const colored=canvases.every(canvas=>{const p=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let n=0;for(let i=0;i<p.length;i+=4)if(Math.max(p[i],p[i+1],p[i+2])>150&&Math.max(p[i],p[i+1],p[i+2])-Math.min(p[i],p[i+1],p[i+2])>70)n++;return n>100;});
         Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>{window.__copiedCorrection=text;}}});
         document.querySelector('[data-correction-copy]').click();await new Promise(r=>setTimeout(r,30));
         return{twoGraphs:canvases.length===2,colored,copy:window.__copiedCorrection.includes('Correction / Phase')&&window.__copiedCorrection.includes('Phase = atan2')&&window.__copiedCorrection.includes('not proof of RF improvement')};
@@ -191,7 +192,7 @@ try{
     await evaluate(`window.__rfProbe.sockets.find(s=>!s.url.includes('/saturn/media')).text('tx_state:0,rx;trx:0,false;');window.__rfProbe.emit()`);
     await pause(250);assert((await evaluate(`document.querySelector('[data-rf-status]').textContent`)).includes('not live'));
     assert((await evaluate(`document.querySelector('[data-rf-summary]').textContent`)).includes('Two-tone IMD unavailable'));
-    if(correction){assert((await evaluate(`document.querySelector('[data-correction-status]').textContent`)).includes('not live'));await command('Target.closeTarget',{targetId:correctionPopup.targetId});}
+    if(correction){assert((await evaluate(`document.querySelector('[data-correction-status]').textContent`)).includes('not live'));if(correctionPopup)await command('Target.closeTarget',{targetId:correctionPopup.targetId});}
     const result=await evaluate(`({commands:window.__rfProbe.commands,errors:window.__rfProbe.errors})`);
     assert(!result.commands.some(s=>s.includes('trx:0,true')));assert.deepEqual(result.errors,[]);reports.push({width,...result});
     if(popup)await command('Target.closeTarget',{targetId:popup.targetId});
