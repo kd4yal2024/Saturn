@@ -1,0 +1,47 @@
+{
+  "format": "saturn-ps-ui-installed-v1",
+  "deployment": {
+    "installed": true,
+    "uiCommit": "e4ca192f0dd442a2bcc35921bd878192839f2e04",
+    "radioRelease": "3eb0f729238f228e02da49c7fc80089f8a1d879a",
+    "bridgePid": 5779,
+    "goPid": 530194,
+    "cleanIdle": true,
+    "rxFrames": 70788709,
+    "txPolicyUnchanged": true,
+    "sourceTreeClean": true,
+    "webroot": "/opt/saturn/ui/e4ca192f0dd442a2bcc35921bd878192839f2e04/webroot",
+    "rollbackBackup": "/var/lib/saturn-state/deployments/ps-monitor-ui-before-1iaw748f"
+  },
+  "validation": {
+    "webTestsPassed": 963,
+    "typecheck": "passed",
+    "buildBudget": "passed",
+    "offlineChromeDesktopAndPhone": "passed",
+    "installedAssetHashes": "verified",
+    "liveIqFrames": 175,
+    "liveAudioFrames": 292,
+    "realProxy": true,
+    "bridgeRestarted": false,
+    "pttCommandsSentByInstallerOrVerifier": 0
+  },
+  "limits": {
+    "operatorTxReadinessTested": false,
+    "secondaryViewerStatus": {
+      "role": "viewer",
+      "phase": "fault",
+      "reason": "Settings completion unavailable; reconnect required"
+    },
+    "hostOwnerState": "ReadyOff",
+    "rfQualificationChanged": false
+  },
+  "layout": "Long reports collapsed; controls and status retained; matching RF and WDSP plot theme.",
+  "tools": {
+    "directory": "update_manager/remote-web/scripts/ps-ui-deployment",
+    "identityFile": "identity.json is generated with baseCommit, UI commit and asset SHA-256 values before staging; see preserved Downloads handoff",
+    "rootInstaller": "install-ui.py --apply; rollback command saved in the root-owned backup",
+    "browserVerifier": "run-verify.py supplies authentication privately to verify-ui.mjs via stdin",
+    "sourceChangeAfterDeployment": "Deployment/verification tools and this record only; installed UI remains e4ca192f.",
+    "independentAudit": "audit-monitor-captures.py EVIDENCE_DIRECTORY rechecks the two preserved raw-IQ captures; it does not operate the radio"
+  }
+}
