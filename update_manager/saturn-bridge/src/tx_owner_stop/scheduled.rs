@@ -72,11 +72,12 @@ fn remote_media_scenario(case: &str) {
     for c in clients.lock().unwrap().values_mut() {
         c.state.tx_codec_runtime_flags.opus_decode_enabled = true;
     }
+    let origin = Instant::now();
     let (mut r, ingress) = OwnerLoop::with_shared_ingress(
         life,
         issuer,
         Arc::new(Mutex::new(m.clone())),
-        Instant::now(),
+        origin,
         Timing {
             mic_age_ns: 150_000_000,
             source_stall_ns: 500_000_000,
@@ -132,6 +133,9 @@ fn remote_media_scenario(case: &str) {
     now += 1_000_000;
     r.turn(now);
     assert_eq!(r.life.status().phase, Phase::AwaitingKey);
+    if case == "pcm-delay" {
+        std::thread::sleep(Duration::from_millis(70));
+    }
     let old = ingress.capture(Instant::now()).unwrap();
     let token = ingress.remote_media_token(&old).unwrap();
     let first = crate::tx_thread::ps_media::tests::frame(token, 0, opus);
@@ -147,6 +151,9 @@ fn remote_media_scenario(case: &str) {
         );
     };
     send(8, first.clone());
+    // The actual handler timestamps arrivals with Instant::now(). Its consumer
+    // clock must not remain behind that timestamp when the test was descheduled.
+    now = now.max(origin.elapsed().as_nanos() as u64);
     for _ in 0..20 {
         now += 1_000_000;
         r.turn(now);
@@ -182,6 +189,7 @@ fn remote_media_scenario(case: &str) {
             assert_eq!(r.life.status().primary_fault, None);
             assert_eq!(trace.borrow().nonzero_renders, before);
             send(8, crate::tx_thread::ps_media::tests::frame(new, 0, false));
+            now = now.max(origin.elapsed().as_nanos() as u64);
             for _ in 0..20 {
                 now += 1_000_000;
                 r.turn(now);
@@ -227,6 +235,12 @@ fn remote_media_scenario(case: &str) {
     assert!(r.life.offline_owner().queues_empty());
     d.assert_off();
 }
+
+#[test]
+fn media_paired_pcm_delayed_handler_uses_current_consumer_time() {
+    remote_media_scenario("pcm-delay");
+}
+
 #[test]
 fn media_paired_pcm_reaches_shared_owner_without_legacy_tee() {
     remote_media_scenario("pcm");
