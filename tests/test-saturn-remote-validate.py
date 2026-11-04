@@ -1459,7 +1459,11 @@ class DiagnosticsTests(RigCase):
         self.assertGreater(summary["swap_in_pages_total"], 0)
         self.assertGreater(summary["page_main_thread_busy"], 0.3)
         self.assertLess(summary["page_main_thread_busy"], 0.7)
-        self.assertEqual(summary["owner_counters"]["connections"]["last"], 2, "the owner's own counters are sampled with the browser's")
+        observed_connections = [s["owner"]["connections"] for s in diagnostics["samples"] if "connections" in (s.get("owner") or {})]
+        self.assertIn(2, observed_connections, "the owner's own counters are sampled with the connected browser's")
+        # Cleanup may disconnect the browser before the sampler's final read.
+        # The summary must preserve that real final value, not assume it is 2.
+        self.assertEqual(summary["owner_counters"]["connections"]["last"], observed_connections[-1])
         first = diagnostics["samples"][0]
         self.assertIn("pss_mb", first)
         self.assertEqual(diagnostics["watch"]["errors"], 0)
@@ -1963,6 +1967,17 @@ class WaitStopTests(unittest.TestCase):
 
 
 class UnitTests(unittest.TestCase):
+    def test_diagnostic_summary_preserves_the_last_connection_sample(self):
+        for final in (0, 2):
+            with self.subTest(final=final):
+                summary = V.summarize_diagnostics([
+                    {"owner": {"connections": 2}},
+                    {"owner": {"connections": final}},
+                ], [])
+                self.assertEqual(summary["owner_counters"]["connections"], {
+                    "first": 2, "last": final, "delta": final - 2,
+                })
+
     def test_allowlist_matches_the_injected_guard(self):
         guard = GUARD.read_text()
         listed = re.search(r"ALLOWED_COMMANDS = Object\.freeze\(\[(.*?)\]\)", guard, re.S).group(1)
