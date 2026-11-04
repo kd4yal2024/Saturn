@@ -12,7 +12,7 @@ if [[ "${NODE_BIN}" == *.exe ]]; then
 fi
 
 grep -Fq '#define P2APPVERSION 52' "${ROOT}/sw_projects/P2_app/p2app.c"
-grep -Fq 'SCRIPT_VERSION="1.9"' "${VERSION_SCRIPT}"
+grep -Fq 'SCRIPT_VERSION="2.0"' "${VERSION_SCRIPT}"
 grep -Fq 'generation apply only to those captured occupancy values' "${API_REFERENCE}"
 grep -Fq 'accumulators read separately from the coherent occupancy snapshot' "${API_REFERENCE}"
 make -C "${ROOT}/sw_projects/P2_app" test-fpga-fifo-v29

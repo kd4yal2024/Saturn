@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_VERSION="1.9"
+SCRIPT_VERSION="2.0"
 PERF_URL="${SATURN_LOCAL_P23_PERF_URL:-http://127.0.0.1:8080/p23_perf}"
 CURRENT_TARGET="$(readlink -f /opt/saturn-go/p23-apps/current 2>/dev/null || true)"
 REPO_ROOT="${SATURN_ACTIVE_REPO_ROOT:-${SATURN_REPO_ROOT:-/home/pi/github/Saturn}}"
@@ -86,8 +86,11 @@ if [[ -s "${TMP_PERF_JSON}" ]]; then
   BINARY_MODIFIED="${BINARY_MODIFIED}" \
   python3 - "${TMP_PERF_JSON}" <<'PY'
 import json
+import hashlib
 import os
 import sys
+from pathlib import Path
+from datetime import datetime
 
 path = sys.argv[1]
 current_target = os.environ.get("CURRENT_TARGET", "")
@@ -146,19 +149,47 @@ except Exception as exc:
 perf = data.get("perf") or {}
 telemetry = perf.get("app_telemetry") or {}
 current = telemetry.get("current") or {}
+if telemetry.get("pid_matches_service") is False:
+    current = {}
+    print("  Telemetry: rejected (snapshot PID does not match running service)")
 workload = perf.get("workload") or {}
 service = perf.get("service") or {}
 
 deployment_slot = workload.get("selected_app") or active_app_fallback or "unknown"
 app_identity = current.get("app") or deployment_slot or active_app_fallback or "unknown"
 active_binary = workload.get("current_target_abs") or workload.get("current_target") or current_target or "unknown"
+bridge_metrics = (current.get("gauges") or {}).get("bridge") or {}
+component = {}
+release_commit = None
+# Match the manifest to the executable, not the source checkout or a staged
+# release. Reading these files never starts an application or accesses XDMA.
+try:
+    binary = Path(active_binary).resolve(strict=True)
+    release = binary.parent.parent
+    manifest = json.loads((release / "release-manifest.json").read_text())
+    for candidate in manifest.get("components", []):
+        if (release / candidate["path"]).resolve() != binary:
+            continue
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        running_digest = service.get("running_exe_sha256")
+        if digest == candidate.get("sha256") and (not running_digest or running_digest == digest):
+            component = candidate
+            release_commit = (manifest.get("source") or {}).get("commit")
+            break
+except (OSError, ValueError, KeyError, TypeError):
+    pass
 app_version = current.get("version")
 if app_version is None:
-    app_version = app_version_fallback or "unknown"
+    app_version = bridge_metrics.get("app_version") or component.get("version")
+if app_version is None:
+    app_version = (app_version_fallback + " (checkout source; runtime unverified)") if app_version_fallback and deployment_slot == "p2" else "not published by this runtime"
+app_build = current.get("build_git_sha") or bridge_metrics.get("build_git_sha") or component.get("source_commit") or release_commit
 app_pid = current.get("pid") or service.get("main_pid") or "unknown"
 uptime_sec = current.get("uptime_sec")
 startup_mode = workload.get("startup_mode") or "unknown"
 panel_mode = workload.get("panel_mode") or "unknown"
+if panel_mode == "unknown" and deployment_slot == "xdma":
+    panel_mode = "not applicable (Direct XDMA; see panel detection below)"
 fpga = current.get("fpga") or {}
 
 print(f"  Service: {service.get('name', 'p2app.service')}")
@@ -166,6 +197,16 @@ print(f"  Active binary family: {deployment_slot}")
 print(f"  Runtime app identity: {app_identity}")
 print(f"  Active binary path: {active_binary}")
 print(f"  App version: {app_version}")
+if app_build:
+    print(f"  App build: {app_build}")
+if release_commit:
+    print(f"  Installed release: {release_commit} (executable hash verified)")
+if active_binary != current_target:
+    binary_modified = ""
+try:
+    binary_modified = datetime.fromtimestamp(Path(active_binary).stat().st_mtime).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+except OSError:
+    pass
 if binary_modified:
     print(f"  Binary modified: {binary_modified}")
 print(f"  PID: {app_pid}")
@@ -174,6 +215,8 @@ if uptime_sec is not None:
 print(f"  Startup mode: {startup_mode}")
 print(f"  Panel mode: {panel_mode}")
 if fpga.get("available"):
+    if fpga.get("identity_source") == "acquisition-owner-session-cache":
+        print("  FPGA identity source: acquisition owner; captured at session start")
     print(f"  FPGA product: {fpga.get('product', 'unknown')}; Version = {fpga.get('product_version', 'unknown')}")
     print(f"  FPGA image: {fpga.get('firmware_name', 'unknown')}")
     identity_status = fpga.get("build_identity_status")
@@ -205,6 +248,8 @@ if fpga.get("available"):
             print(f"  Die Temp (runtime): {float(fpga.get('die_temp_c')):.1f}C")
         except Exception:
             pass
+else:
+    print("  FPGA identity: not published by this runtime (hardware presence not determined by this report)")
 classification = classify_saturn_hardware(fpga)
 print("Hardware classification")
 print(f"  System role: {classification['system_role']}")
@@ -258,7 +303,11 @@ fi
 say "  Front panel: ${FRONT_PANEL_TYPE}"
 if [[ -n "${LCD_INFO}" ]]; then
   say "  Compute module: $(kv_value "module_family" "${LCD_INFO}")"
-  say "  Storage variant: $(kv_value "storage_variant" "${LCD_INFO}")"
+  STORAGE_VARIANT="$(kv_value "storage_variant" "${LCD_INFO}")"
+  if [[ -z "${STORAGE_VARIANT}" || "${STORAGE_VARIANT}" == "unknown" ]]; then
+    STORAGE_VARIANT="not identified (device-tree model does not distinguish Lite/eMMC)"
+  fi
+  say "  Storage variant: ${STORAGE_VARIANT}"
   say "  Platform vendor: $(kv_value "platform_vendor" "${LCD_INFO}")"
   say "  LCD size: $(kv_value "size" "${LCD_INFO}") ($(kv_value "size_source" "${LCD_INFO}"))"
   say "  LCD profile: $(kv_value "profile" "${LCD_INFO}")"
@@ -266,6 +315,20 @@ if [[ -n "${LCD_INFO}" ]]; then
   say "  Panel overlay: $(kv_value "recommended_panel_overlay" "${LCD_INFO}")"
 else
   say "  LCD/profile detector: unavailable"
+fi
+
+# Boot media is observable in kernel metadata even when the CM4 SKU is not.
+# Do not infer Lite/eMMC module identity from the card used to boot.
+if command -v findmnt >/dev/null 2>&1 && command -v lsblk >/dev/null 2>&1; then
+  ROOT_DEVICE="$(findmnt -nro SOURCE / 2>/dev/null || true)"
+  if [[ "${ROOT_DEVICE}" == /dev/* ]]; then
+    ROOT_PARENT="$(lsblk -dnro PKNAME -- "${ROOT_DEVICE}" 2>/dev/null || true)"
+    ROOT_PARENT="${ROOT_PARENT:-$(basename "${ROOT_DEVICE}")}"
+    if [[ "${ROOT_PARENT}" =~ ^[[:alnum:]_-]+$ && -r "/sys/class/block/${ROOT_PARENT}/device/type" ]]; then
+      BOOT_MEDIA="$(cat "/sys/class/block/${ROOT_PARENT}/device/type")"
+      say "  Boot medium: ${BOOT_MEDIA} (${ROOT_DEVICE}; kernel-reported)"
+    fi
+  fi
 fi
 
 say

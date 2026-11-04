@@ -465,6 +465,18 @@ impl RuntimeIo for Io {
                             );
                             assert!(client.monitor_caps_reports > 0, "late clients must receive monitor capabilities without a configuration change");
                             let perf = std::fs::read_to_string(&perf_path).unwrap();
+                            assert!(perf.contains(concat!(
+                                "\"app_version\":\"",
+                                env!("CARGO_PKG_VERSION"),
+                                "\""
+                            )));
+                            assert!(perf.contains("\"pure_signal_available\":true"));
+                            assert_eq!(
+                                perf.contains("\"fpga_identity_source\":\"acquisition-owner-session-cache\""),
+                                direct,
+                                "only Direct XDMA publishes this acquisition session's cached identity: {perf}"
+                            );
+                            assert!(!perf.contains("\"clock_mask\":"));
                             for field in [
                                 "\"connections\":1",
                                 "\"client\":1",

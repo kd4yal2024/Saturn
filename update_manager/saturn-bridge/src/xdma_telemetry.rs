@@ -258,6 +258,9 @@ pub(crate) struct SharedHostObservation<'a> {
     pub model: &'a crate::radio_model::RadioModel,
     pub clients: &'a crate::tci::TciClientSnapshot,
     pub ddc_per_second: f64,
+    /// Immutable identity captured by the acquisition owner when it opened.
+    /// Clock status is deliberately not republished as a live observation.
+    pub identity: Option<&'a crate::xdma::SaturnIdentity>,
 }
 
 pub(crate) fn record_shared_observed_host_status(
@@ -270,6 +273,11 @@ pub(crate) fn record_shared_observed_host_status(
     rx_iq_pairs: u64,
     observation: Option<&SharedHostObservation<'_>>,
 ) -> io::Result<()> {
+    let identity = observation.and_then(|o| o.identity).map(|id| {
+        format!(",\"product_id\":{},\"pcb_version\":{},\"software_id\":{},\"firmware_major\":{},\"firmware_minor\":{},\"fpga_build_id\":{},\"fallback_config\":{},\"fpga_identity_source\":\"acquisition-owner-session-cache\"",
+            id.product_id, id.pcb_version, id.software_id, id.firmware_major,
+            id.firmware_minor, id.user_version, id.is_fallback())
+    }).unwrap_or_default();
     let observed = observation.map(|o| {
         let d = &o.model.desired;
         // ReadyOff follows completed stop/cleanup; Active follows the backend
@@ -284,9 +292,10 @@ pub(crate) fn record_shared_observed_host_status(
     }).unwrap_or_default();
     let host = format!("{{\"schema\":\"shared-owner-v1\",\"clean_idle\":{clean_idle},\"receive_ready\":{},\"rx_frames\":{rx_frames},\"rx_iq_pairs\":{rx_iq_pairs}}}",
         clean_idle && phase == "shared-ready-off" && rx_frames >= 4 && rx_iq_pairs >= 1024);
-    let document=format!("{{\"schema_version\":1,\"updated_at_ms\":{},\"source\":\"saturn-bridge\",\"backend\":{},\"status\":\"review-only\",\"tx_owner\":\"shared\",\"rf_safe\":null,\"rf_qualified\":false,\"phase\":{},\"metrics\":{{\"pid\":{},\"build_git_sha\":{},\"source_pin\":{},\"legacy_performance_available\":false,\"rx_counter_v31\":{}{}}}}}\n",
+    let document=format!("{{\"schema_version\":1,\"updated_at_ms\":{},\"source\":\"saturn-bridge\",\"backend\":{},\"status\":\"review-only\",\"tx_owner\":\"shared\",\"rf_safe\":null,\"rf_qualified\":false,\"phase\":{},\"metrics\":{{\"pid\":{},\"build_git_sha\":{},\"source_pin\":{},\"app_version\":{},\"pure_signal_available\":{},\"legacy_performance_available\":false,\"rx_counter_v31\":{}{}{}}}}}\n",
         unix_time_ms(),json_string(backend),json_string(phase),std::process::id(),json_string(env!("SATURN_BRIDGE_GIT_SHA")),
-        json_string(env!("SATURN_BRIDGE_SOURCE_PIN")),counter_json.unwrap_or_else(||"null".into()), observed);
+        json_string(env!("SATURN_BRIDGE_SOURCE_PIN")),json_string(env!("CARGO_PKG_VERSION")),cfg!(feature = "managed-puresignal"),
+        counter_json.unwrap_or_else(||"null".into()), observed, identity);
     // The base schema remains unchanged; append an explicitly named host-only
     // readiness object rather than changing review-only/RF qualification.
     let document = format!(
@@ -417,6 +426,73 @@ mod tests {
     use super::{serialize_snapshot, write_snapshot_atomic, LatencyHistogram, TelemetryValue};
     use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    #[cfg(feature = "managed-puresignal")]
+    #[test]
+    fn shared_owner_reports_cached_identity_without_inventing_live_clock_status() {
+        let path = std::env::temp_dir().join(format!(
+            "saturn-shared-identity-{}.json",
+            std::process::id()
+        ));
+        let model = crate::radio_model::RadioModel::new(
+            6, 7_200_000, 0, 384, 24, 16384, false, 16384, false,
+        );
+        let clients = crate::tci::TciClientSnapshot::default();
+        let identity = crate::xdma::SaturnIdentity {
+            product_id: 1,
+            pcb_version: 2,
+            software_id: 4,
+            firmware_major: 1,
+            firmware_minor: 31,
+            clock_mask: 15,
+            user_version: 0x53460004,
+        };
+        for known in [true, false] {
+            let observation = super::SharedHostObservation {
+                model: &model,
+                clients: &clients,
+                ddc_per_second: 1.,
+                identity: known.then_some(&identity),
+            };
+            super::record_shared_observed_host_status(
+                &path,
+                "xdma",
+                "shared-ready-off",
+                None,
+                true,
+                8,
+                2048,
+                Some(&observation),
+            )
+            .unwrap();
+            let document = fs::read_to_string(&path).unwrap();
+            let parsed = std::process::Command::new("python3")
+                .args(["-c", "import json,sys; json.load(open(sys.argv[1]))"])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                parsed.status.success(),
+                "{}",
+                String::from_utf8_lossy(&parsed.stderr)
+            );
+            assert!(document.contains(concat!(
+                "\"app_version\":\"",
+                env!("CARGO_PKG_VERSION"),
+                "\""
+            )));
+            assert!(document.contains("\"pure_signal_available\":true"));
+            assert_eq!(document.contains("\"firmware_minor\":31"), known);
+            assert_eq!(document.contains("\"fpga_build_id\":1397096452"), known);
+            assert_eq!(
+                document.contains("\"fpga_identity_source\":\"acquisition-owner-session-cache\""),
+                known
+            );
+            assert!(!document.contains("\"clock_mask\":"));
+            assert!(document.contains("\"rf_safe\":null"));
+            assert!(document.contains("\"rf_qualified\":false"));
+        }
+        fs::remove_file(path).unwrap();
+    }
     #[cfg(feature = "managed-puresignal")]
     #[test]
     fn shared_host_receive_readiness_requires_idle_and_actual_progress_without_rf_claims() {

@@ -3277,6 +3277,8 @@ fn bridge_perf_file_telemetry(
             "pid": snapshot_pid,
             "timestamp_epoch": updated_at_ms / 1000,
             "app": "saturn-bridge",
+            "version": text("app_version"),
+            "build_git_sha": text("build_git_sha"),
             "state": {
                 "sdr_active": sdr_active,
                 "tx_mode": if document.get("tx_owner").and_then(serde_json::Value::as_str) == Some("shared") {
@@ -3324,7 +3326,8 @@ fn bridge_perf_file_telemetry(
                 "duc_fifo_faults": integer("tx_fifo_faults").unwrap_or(0),
             },
             "features": {
-                "pure_signal": false,
+                // Capability is separate from enabled/fitting/correcting state.
+                "pure_signal": boolean("pure_signal_available").unwrap_or(false),
             },
             "routing": {
                 "ddc": [{
@@ -3346,7 +3349,8 @@ fn bridge_perf_file_telemetry(
                 "build_id_raw": integer("fpga_build_id"),
                 "date_code_hex": metrics.get("date_code_hex"),
                 "clock_mask": clock_mask,
-                "all_clocks_present": clock_mask == Some(15),
+                "all_clocks_present": clock_mask.map(|mask| mask == 15),
+                "identity_source": text("fpga_identity_source"),
                 "fallback_config": boolean("fallback_config"),
             },
         },
@@ -5291,6 +5295,45 @@ mod tests {
 
     async fn consume_request_body(_body: Bytes) -> StatusCode {
         StatusCode::NO_CONTENT
+    }
+
+    #[test]
+    fn shared_owner_identity_and_version_survive_api_adaptation() {
+        let path = std::env::temp_dir().join(format!(
+            "saturn-shared-identity-perf-{}.json",
+            std::process::id()
+        ));
+        let document = serde_json::json!({
+            "schema_version":1, "updated_at_ms":10000, "source":"saturn-bridge", "backend":"xdma", "tx_owner":"shared",
+            "metrics": {"pid":42, "app_version":"0.1.0", "build_git_sha":"3eb0f729238f228e02da49c7fc80089f8a1d879a",
+                "product_id":1,"pcb_version":2,"software_id":4,"firmware_major":1,"firmware_minor":31,
+                "fpga_build_id":0x53460004_u32,"fallback_config":false,
+                "fpga_identity_source":"acquisition-owner-session-cache", "pure_signal_available":true,"tx_keyed":false}
+        });
+        std::fs::write(&path, document.to_string()).unwrap();
+        let mut report = bridge_perf_file_telemetry(&path, Some(42), 11000).unwrap();
+        crate::fpga_image_identity::annotate(&mut report);
+        let current = &report["current"];
+        assert_eq!(current["version"], "0.1.0");
+        assert_eq!(
+            current["build_git_sha"],
+            "3eb0f729238f228e02da49c7fc80089f8a1d879a"
+        );
+        assert_eq!(current["fpga"]["available"], true);
+        assert_eq!(current["fpga"]["product_version"], 2);
+        assert_eq!(current["fpga"]["firmware_display"], "1.31.002");
+        assert_eq!(current["fpga"]["rx_filter"], "22/Q24 saturated");
+        assert_eq!(
+            current["fpga"]["identity_source"],
+            "acquisition-owner-session-cache"
+        );
+        assert!(current["fpga"]["clock_mask"].is_null());
+        assert!(current["fpga"]["all_clocks_present"].is_null());
+        assert_eq!(current["features"]["pure_signal"], true);
+        assert_eq!(current["state"]["tx_mode"], false);
+        assert!(bridge_perf_file_telemetry(&path, Some(43), 11000).is_err());
+        assert!(bridge_perf_file_telemetry(&path, Some(42), 20000).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -78,7 +78,7 @@ pub struct TciFrontend {
     _accept_thread: JoinGuard,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct TciClientSnapshot {
     pub active: bool,
     pub iq_stream_enabled: bool,

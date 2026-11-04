@@ -204,6 +204,10 @@ fn run_inner_with_state_store<I: RuntimeIo>(
     let initial_receive = model.lock_unpoisoned().desired.clone();
     config.ddc0_frequency_hz = initial_receive.iq_center_hz;
     let (radio, mut acquisition) = io.open(&mut config, backend, &model)?;
+    let acquisition_identity = match &acquisition {
+        Acquisition::Direct(rx) => Some(rx.identity().clone()),
+        Acquisition::P2(_) => None,
+    };
     config.remote_tx_rf_enabled &= options.managed_rf_permitted;
     let (frontend, commands) = TciFrontend::reserve_shared_startup(&config, model.clone(), true)?;
     let frontend = Arc::new(frontend);
@@ -532,6 +536,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                     model: &snapshot,
                     clients: &clients,
                     ddc_per_second,
+                    identity: acquisition_identity.as_ref(),
                 };
                 if let Err(error) = crate::xdma_telemetry::record_shared_observed_host_status(
                     path,

@@ -404,6 +404,9 @@ jobs:
       - name: Test historical P3 retirement contract
         run: tests/test-p3-retirement.sh
 
+      - name: Test runtime version report
+        run: python3 tests/test-g2-version-info.py
+
       - name: Test XDMA DKMS rerun behavior
         run: tests/test-xdma-dkms-idempotency.sh
 
