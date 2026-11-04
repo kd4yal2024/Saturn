@@ -20407,7 +20407,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     const hardwarePtt = new _next.HardwarePttSession({
       canStart: () => state.connected && state.remoteClientRole === "operator",
       transmitting: () => state.moxRequested || state.txEnabled,
-      start: token => { logEvent("Rear PTT pressed"); return setPtt(true, {hardwarePttToken: token}); },
+      start: token => {
+        logEvent("Rear PTT pressed");
+        // The fresh physical press is the operator's ready-window gesture.
+        // Fault acknowledgment remains a separate deliberate control.
+        if (state.txLockReason !== "tx-fault" && !normalizeTxReadyState()) armTxReady("rear-ptt");
+        return setPtt(true, {hardwarePttToken: token});
+      },
       stop: token => { void setPtt(false, {hardwarePttRelease: token}); },
       changed: active => { state.hardwarePttActive = active; },
       ready: () => !managedPcmSelected() || managedPcm.status().phase === "ready",

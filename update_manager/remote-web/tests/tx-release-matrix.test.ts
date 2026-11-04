@@ -228,6 +228,18 @@ describe('TX release matrix', () => {
     expect(h.commands).not.toContain('trx:0,false;');
     expect(h.state.hardwarePttActive).toBe(false); expectIdleAfterRelease(h);
   });
+  it('a fresh rear press establishes local readiness without a separate mouse click', async () => {
+    const h=txReleaseHarness(); h.state.txReadyExpiresAt=0; h.state.txLockReason='idle-timeout';
+    h.api.hardwarePtt.text('saturn_ptt:0,true,18;'); await h.flush();
+    expect(h.commands).toContain('saturn_ptt:0,18;'); expect(h.state.moxRequested).toBe(true);
+    h.api.hardwarePtt.text('saturn_ptt:0,false,18;'); await h.flush(); expectIdleAfterRelease(h);
+  });
+  it('a rear press does not acknowledge a latched TX fault', async () => {
+    const h=txReleaseHarness(); h.state.txReadyExpiresAt=0; h.state.txLockReason='tx-fault';
+    h.api.hardwarePtt.text('saturn_ptt:0,true,18;'); await h.flush();
+    expect(h.commands).not.toContain('saturn_ptt:0,18;'); expect(h.state.moxRequested).toBe(false);
+    expect(h.state.txLockReason).toBe('tx-fault');
+  });
   it('releases on pointerup', async () => {
     const h = txReleaseHarness();
     await h.keyViaPtt();
