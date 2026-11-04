@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
+import { HardwarePttSession } from '../src/transport/hardware-ptt';
 
 // Phase 3 acceptance gate: every path that can end a transmission must actually
 // end it. This drives the real template handlers (not copies) through each
@@ -25,9 +26,10 @@ const CODE = [
   slice('    function clearPointerPttTracking() {', '    function bindKeyboardPttControls() {'),
   slice('    function normalizeTxReadyState(', '    function txReadyRemainingMs('),
   slice('    function lockTx(', '    function resetTxUplinkStats('),
+  slice('    function sendTxShutdownIfPossible(', '    async function setPtt('),
   slice('    async function setPtt(', '    async function setTwoToneEnabled('),
   slice('    function bindPttButton() {', '    async function goLive() {'),
-  '({ bindPttButton, setPtt, lockTx, holdPttActive, clearPointerPttTracking })',
+  '({ bindPttButton, setPtt, lockTx, holdPttActive, clearPointerPttTracking, hardwarePtt })',
 ].join('\n');
 
 type FakeElement = {
@@ -117,7 +119,7 @@ function txReleaseHarness() {
     TX_READY_WINDOW_MS: 300_000,
     TX_LOCAL_REQUEST_PERMIT_MS: 5_000,
     satpSourceRequestAt: 0,
-    _next: { txUsesBrowserMic: () => false, satpTxBlockReason: () => null },
+    _next: { HardwarePttSession, txUsesBrowserMic: () => false, satpTxBlockReason: () => null },
     clearInterval: () => {},
     setInterval: () => 1,
     clearTimeout: () => {},
@@ -128,7 +130,10 @@ function txReleaseHarness() {
     navigator: { onLine: true },
     rfDisabledBlocksTx: () => false,
     clientRoleBlocksTx: () => false,
-    sendTci: (command: string) => { commands.push(command); },
+    sendTci: (command: string) => {
+      commands.push(command);
+      if (command === 'trx:0,false;' || /^saturn_ptt:0,stop,/.test(command)) shutDowns += 1;
+    },
     stopMicCapture: () => { micStops += 1; state.micCapturing = false; },
     recoverRxAfterMox: () => { rxRecoveries += 1; },
     applyTxOpusLabCfcGuard: () => false,
@@ -152,7 +157,6 @@ function txReleaseHarness() {
     setTxUplinkDegraded: () => {},
     updateTxZone: () => {},
     // The unkey command is emitted here, not as a literal trx:false in setPtt.
-    sendTxShutdownIfPossible: () => { shutDowns += 1; },
     startMicCapture: async () => true,
     clearKeyboardPttTracking: () => {},
     txLockReasonLabel: (reason: string) => reason,
@@ -171,6 +175,7 @@ function txReleaseHarness() {
   const api = runInNewContext(`${CODE}`, context) as {
     bindPttButton: () => void;
     setPtt: (active: boolean, options?: { useMic?: boolean }) => Promise<boolean>;
+    hardwarePtt: HardwarePttSession;
   };
   api.bindPttButton();
 
@@ -212,6 +217,17 @@ function expectIdleAfterRelease(harness: ReturnType<typeof txReleaseHarness>): v
 }
 
 describe('TX release matrix', () => {
+  it('routes rear-switch events through the actual PTT handler and clears on release', async () => {
+    const h = txReleaseHarness();
+    h.api.hardwarePtt.text('saturn_ptt:0,true,17;'); await h.flush();
+    expect(h.commands).toContain('saturn_ptt:0,17;');
+    expect(h.commands).not.toContain('trx:0,true,tci;');
+    expect(h.state.moxRequested).toBe(true); expect(h.state.hardwarePttActive).toBe(true);
+    h.api.hardwarePtt.text('saturn_ptt:0,false,17;'); await h.flush();
+    expect(h.commands).toContain('saturn_ptt:0,stop,17;');
+    expect(h.commands).not.toContain('trx:0,false;');
+    expect(h.state.hardwarePttActive).toBe(false); expectIdleAfterRelease(h);
+  });
   it('releases on pointerup', async () => {
     const h = txReleaseHarness();
     await h.keyViaPtt();

@@ -17312,7 +17312,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function txControlSource() {
-      return holdPttActive() ? "ptt" : ((state.moxRequested || state.txEnabled) ? "mox" : "");
+      return (holdPttActive() || state.hardwarePttActive) ? "ptt" : ((state.moxRequested || state.txEnabled) ? "mox" : "");
     }
 
     function txControlSourceLabel(source = txControlSource()) {
@@ -20246,18 +20246,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       logEvent("Mic capture stopped");
     }
 
-    function sendTxShutdownIfPossible(clearTwoTone = false) {
-      if (managedPcmSelected()) { managedPcm.release(); return; }
+    function sendTxShutdownIfPossible(clearTwoTone = false, hardwarePttToken = null) {
+      if (managedPcmSelected()) { managedPcm.release(hardwarePttToken || undefined); return; }
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return;
       }
       if (clearTwoTone) {
         sendTci("tx_two_tone:0,false;");
       }
-      sendTci("trx:0,false;");
+      sendTci(hardwarePttToken ? `saturn_ptt:0,stop,${hardwarePttToken};` : "trx:0,false;");
     }
 
     async function setPtt(active, options = {}) {
+      if (!options.hardwarePttToken && !options.hardwarePttRelease) hardwarePtt.disown();
       const voiceRequested = options.useMic !== false;
       const useMic = _next.txUsesBrowserMic(state.satp, voiceRequested);
       if (active) {
@@ -20288,7 +20289,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txLocalRequestPermitExpiresAt = 0;
         scheduleNextBridgeRttPing();
         updateUi();
-        sendTxShutdownIfPossible(false);
+        sendTxShutdownIfPossible(false, options.hardwarePttRelease);
         setTxMediaPriority(false);
         stopMicCapture();
         recoverRxAfterMox();
@@ -20365,7 +20366,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           sendTci("tx_two_tone:0,false;");
         }
         if (managedPcmSelected()) {
-          if (!managedPcm.arm(state.satp?.source === "satp" ? "satp" : "tci")) {
+          if (!managedPcm.arm(state.satp?.source === "satp" ? "satp" : "tci", options.hardwarePttToken)) {
             state.moxRequested = false; state.txLocalRequestActive = false;
             state.txLocalRequestPermitExpiresAt = 0; recoverRxAfterMox(); updateUi();
             return false;
@@ -20373,7 +20374,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           logEvent("Managed TX fresh authorized request sent");
           return true; // capture starts ONLY after the matching fresh generation
         }
-        sendTci("trx:0,true,tci;");
+        sendTci(options.hardwarePttToken ? `saturn_ptt:0,${options.hardwarePttToken};` : "trx:0,true,tci;");
         logEvent("TX MOX command sent");
         if (useMic) {
           const started = await startMicCapture(requestId);
@@ -20402,6 +20403,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateUi();
       return true;
     }
+
+    const hardwarePtt = new _next.HardwarePttSession({
+      canStart: () => state.connected && state.remoteClientRole === "operator",
+      transmitting: () => state.moxRequested || state.txEnabled,
+      start: token => { logEvent("Rear PTT pressed"); return setPtt(true, {hardwarePttToken: token}); },
+      stop: token => { void setPtt(false, {hardwarePttRelease: token}); },
+      changed: active => { state.hardwarePttActive = active; },
+      ready: () => !managedPcmSelected() || managedPcm.status().phase === "ready",
+    });
 
     let twoToneAction = 0;
     async function setTwoToneEnabled(enabled) {
@@ -20784,6 +20794,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
       ws.onclose = (event) => {
         if (ws !== state.ws) return;
+        hardwarePtt.reset();
         managedPcm.disconnect();
         resetRxAudioCodecTransport();
         const closedAt = performance.now();
@@ -20995,6 +21006,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const result = _next.applyTciText(text, state);
       syncTciUiSideEffects(previous, result.state, result);
       if (managedPcmSelected()) managedPcm.setOperator(state.remoteClientRole === "operator");
+      hardwarePtt.text(text);
       if (state.satp && !state.satp.pending && state.satp.source === satpRequestedSource) satpSourceRequestAt = 0;
       if (!previous.satp?.paired && state.satp?.paired) scheduleNextBridgeRttPing();
       if (previous.satp?.source !== "satp" && state.satp?.source === "satp") stopMicCapture();

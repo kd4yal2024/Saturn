@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { HardwarePttSession } from '../src/transport/hardware-ptt';
 import { readFileSync } from 'node:fs';
 import { parseSatpState, satpTxBlockReason, txUsesBrowserMic } from '../src/audio/satp';
 import { applyTciText } from '../src/tci/apply';
@@ -17,7 +18,7 @@ function pttHarness(source: 'tci' | 'satp', ready = true) {
   const commands: string[]=[]; let micCalls=0;
   const context: any={state,performance:{now:()=>100},satpSourceRequestAt:0,WebSocket:{OPEN:1},TX_LOCAL_REQUEST_PERMIT_MS:1000,
     managedPcmSelected:()=>false,
-    _next:{txUsesBrowserMic,satpTxBlockReason:(s:any)=>satpTxBlockReason(s,100)},
+    _next:{HardwarePttSession,txUsesBrowserMic,satpTxBlockReason:(s:any)=>satpTxBlockReason(s,100)},
     rfDisabledBlocksTx:()=>false,clientRoleBlocksTx:()=>false,normalizeTxReadyState:()=>true,
     generatedTxSourceActive:()=>false,sendTci:(s:string)=>commands.push(s),
     startMicCapture:async()=>{micCalls++;return false;}, // browser mic unavailable/denied

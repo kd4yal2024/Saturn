@@ -114,6 +114,7 @@ export interface AppState {
   micNode: { ctx: AudioContext; source: MediaStreamAudioSourceNode; proc: AudioNode; silentGain: GainNode } | null;
   micCapturing: boolean;
   pttRequestId: number;
+  hardwarePttActive: boolean;
   twoToneEnabled: boolean;
   twoTonePttOwned: boolean;
   txTwoToneFreq1: number;
@@ -502,6 +503,7 @@ export function createAppState(): AppState {
     micNode: null,
     micCapturing: false,
     pttRequestId: 0,
+    hardwarePttActive: false,
     twoToneEnabled: false,
     twoTonePttOwned: false,
     txTwoToneFreq1: 700,

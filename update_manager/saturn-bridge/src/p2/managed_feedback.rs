@@ -150,6 +150,7 @@ pub(crate) mod tests {
         pub(crate) feedback: UdpSocket,
         pub(crate) layout: UdpSocket,
         pub(crate) hp: UdpSocket,
+        pub(crate) status: UdpSocket,
         pub(crate) duc: UdpSocket,
         pub(crate) destination: SocketAddr,
     }
@@ -158,6 +159,7 @@ pub(crate) mod tests {
             let feedback = UdpSocket::bind("127.0.0.1:0").unwrap();
             let layout = UdpSocket::bind("127.0.0.1:0").unwrap();
             let hp = UdpSocket::bind("127.0.0.1:0").unwrap();
+            let status = UdpSocket::bind("127.0.0.1:0").unwrap();
             let duc = UdpSocket::bind("127.0.0.1:0").unwrap();
             for socket in [&layout, &hp, &duc] {
                 socket.set_nonblocking(true).unwrap();
@@ -170,6 +172,7 @@ pub(crate) mod tests {
             config.port_map.ddc_iq_base = feedback.local_addr().unwrap().port();
             config.port_map.ddc_specific = layout.local_addr().unwrap().port();
             config.port_map.high_priority_to_sdr = hp.local_addr().unwrap().port();
+            config.port_map.high_priority_from_sdr = status.local_addr().unwrap().port();
             config.port_map.duc_iq = duc.local_addr().unwrap().port();
             config.port_map.duc_specific = duc.local_addr().unwrap().port();
             let session = Arc::new(P2Session::bind_offline_fenced(config).unwrap());
@@ -179,6 +182,7 @@ pub(crate) mod tests {
                 feedback,
                 layout,
                 hp,
+                status,
                 duc,
                 destination,
             }

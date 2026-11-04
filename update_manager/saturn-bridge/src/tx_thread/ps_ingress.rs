@@ -64,6 +64,12 @@ pub(crate) struct Capture {
     stop_id: u64,
     ack_eligible: bool,
 }
+
+impl Capture {
+    pub(crate) fn hardware_ptt_context(&self) -> (u64, u64) {
+        (self.stamp.revision, self.stamp.release)
+    }
+}
 /// Acknowledgment is settings authority, never a fresh TX action. All fields
 /// are sealed before queuing and checked again by the sole native owner.
 pub(crate) struct FaultAck {
@@ -2340,11 +2346,19 @@ impl SharedIngress {
                 self.release();
                 return Ok(true);
             }
-            TciCommand::SetTxEnabled(true) => {
+            TciCommand::SetTxEnabled(true) | TciCommand::HardwarePttArm(_) => {
                 if self.measurement_only_mode() || self.generated_trials_only() {
                     return Err(Fault::InvalidConfig);
                 }
                 let c = capture.ok_or(Fault::CleanupPending)?;
+                let hardware_ptt = if let TciCommand::HardwarePttArm(permit) = command {
+                    if !permit.live() || permit.context != Some(c.hardware_ptt_context()) {
+                        return Err(Fault::CleanupPending);
+                    }
+                    Some(permit.clone())
+                } else {
+                    None
+                };
                 let credential = self.operator.receive(
                     client,
                     "trx:0,true",
@@ -2352,9 +2366,9 @@ impl SharedIngress {
                     c.stamp.fence,
                     c.stamp.revision,
                 )?;
-                self.send_command(TxCommand::PureSignalAuthorizedArm(AuthorizedArm::new(
-                    credential,
-                )))?;
+                let mut arm = AuthorizedArm::new(credential);
+                arm.hardware_ptt = hardware_ptt;
+                self.send_command(TxCommand::PureSignalAuthorizedArm(arm))?;
                 return Ok(true);
             }
             TciCommand::MicAudioFrame(frame) => {

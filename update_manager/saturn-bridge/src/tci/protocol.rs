@@ -86,6 +86,7 @@ pub enum TciCommand {
     SetAudioFrameSamples(u32),
     SetAudioChannels(u32),
     SetTxEnabled(bool),
+    HardwarePttArm(super::HardwarePttPermit),
     SetNoiseBlankerMode(NoiseBlankerMode),
     SetNoiseBlankerThreshold(f64),
     SetAnfEnabled(bool),

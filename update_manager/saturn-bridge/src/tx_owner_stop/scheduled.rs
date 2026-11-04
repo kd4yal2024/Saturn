@@ -237,13 +237,84 @@ fn remote_media_scenario(case: &str) {
 }
 
 #[test]
-fn media_paired_pcm_delayed_handler_uses_current_consumer_time() {
-    remote_media_scenario("pcm-delay");
+fn hardware_ptt_cancel_after_enqueue_is_not_a_fault_or_a_new_arm() {
+    let d = DirectFixture::with_key_clock();
+    d.fifo_ready();
+    let (mut iq, mut mic) = queues();
+    let mut m = model();
+    m.desired.tx_drive = 5;
+    let mut owner = OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap();
+    owner.enable_offline_handoff(&m, 5).unwrap();
+    let trace = Rc::new(RefCell::new(Trace::default()));
+    let life = controller(Fake { trace }, owner, Backend::DirectXdma);
+    let (mut r, ingress) = OwnerLoop::with_shared_ingress(
+        life,
+        OperatorIngress::fixture(),
+        Arc::new(Mutex::new(m.clone())),
+        Instant::now(),
+        Timing {
+            mic_age_ns: 150_000_000,
+            source_stall_ns: 500_000_000,
+            tx_duration_ns: 2_000_000_000,
+        },
+    )
+    .unwrap();
+    let mut now = 0;
+    for _ in 0..20 {
+        now += 1_000_000;
+        r.turn(now);
+    }
+    ingress.bootstrap(m, cfg(11), TxAudioSource::Tci).unwrap();
+    for _ in 0..20 {
+        now += 1_000_000;
+        r.turn(now);
+    }
+    let c = ingress.capture(Instant::now()).unwrap();
+    let permit = crate::tci::HardwarePttPermit::new(1, Some(c.hardware_ptt_context()));
+    assert!(permit.claim());
+    ingress
+        .tci(
+            7,
+            Some(&c),
+            &crate::tci::TciCommand::HardwarePttArm(permit.clone()),
+        )
+        .unwrap();
+    // Pause the input caller before it publishes the lifecycle release. The
+    // queued arm must already be invalid, without inventing TxAuthority.
+    assert!(permit.cancel());
+    now += 1_000_000;
+    r.turn(now);
+    let status = r.life.status();
+    assert_eq!(status.phase, Phase::ReadyOff);
+    assert!(
+        status.primary_fault.is_none()
+            && status.authority_fault.is_none()
+            && status.cleanup_fault.is_none()
+    );
+    let c = ingress.capture(Instant::now()).unwrap();
+    let fresh = crate::tci::HardwarePttPermit::new(2, Some(c.hardware_ptt_context()));
+    assert!(fresh.claim());
+    ingress
+        .tci(7, Some(&c), &crate::tci::TciCommand::HardwarePttArm(fresh))
+        .unwrap();
+    now += 1_000_000;
+    r.turn(now);
+    assert_eq!(r.life.status().phase, Phase::AwaitingKey);
+    ingress.release();
+    for _ in 0..40 {
+        now += 1_000_000;
+        r.turn(now);
+    }
+    assert_eq!(r.life.status().phase, Phase::ReadyOff);
 }
-
 #[test]
 fn media_paired_pcm_reaches_shared_owner_without_legacy_tee() {
     remote_media_scenario("pcm");
+}
+
+#[test]
+fn media_paired_pcm_delayed_handler_uses_current_consumer_time() {
+    remote_media_scenario("pcm-delay");
 }
 #[test]
 fn media_paired_opus_reaches_shared_owner_with_real_decode() {

@@ -117,6 +117,7 @@ import {
 
 import { createLegacySocketAdapter } from './transport/legacy-socket-adapter';
 import { ManagedPcmSession, managedSettingsMessage } from './transport/managed-pcm';
+import { HardwarePttSession } from './transport/hardware-ptt';
 import { TxPathNegotiator } from './transport/tx-path';
 import { microphoneManagedCapture } from './audio/managed-pcm-capture';
 import { twoToneManagedCapture } from './audio/managed-two-tone';
@@ -335,6 +336,7 @@ const api = {
   createReconnectSupervisor,
   createLegacySocketAdapter,
   ManagedPcmSession,
+  HardwarePttSession,
   TxPathNegotiator,
   managedSettingsMessage,
   microphoneManagedCapture,

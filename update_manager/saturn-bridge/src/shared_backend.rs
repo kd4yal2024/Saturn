@@ -312,6 +312,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
         initial_receive.rx_attenuation_db,
     );
     loop {
+        frontend.service_hardware_ptt(Instant::now());
         if io.stop_requested() && !stopping {
             runtime.request_stop();
             stopping = true;
@@ -399,6 +400,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                             model.lock_unpoisoned().apply_ddc_frame(frame);
                         }
                         Some(P2Event::HighPriorityFromSdr(packet)) => {
+                            frontend.observe_hardware_ptt(packet.ptt_bits & 1 != 0, Instant::now());
                             if transmitting
                                 && (packet.adc_overflows & 1 != 0
                                     || crate::saturn_adc_to_watts(
@@ -415,6 +417,10 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                     }
                 }
                 Acquisition::Direct(rx) => {
+                    let now = Instant::now();
+                    if frontend.hardware_ptt_poll_due(now) {
+                        frontend.observe_hardware_ptt(rx.read_ptt_input()?, now);
+                    }
                     // Tuning/relay/attenuation application waits until the sole
                     // lifecycle is clean/off, never overwriting a keyed route.
                     if runtime.ingress.startup_ready() || runtime.link.preparing() {

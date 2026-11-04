@@ -1473,6 +1473,13 @@ impl OperationalRxSession {
         Ok((overflow, adc1_peak, adc2_peak))
     }
 
+    /// Same active-high PTT_IN1 bit used by Saturn's GetPTTInput(). Reading
+    /// status uses the existing acquisition owner; no additional DMA reader.
+    pub(crate) fn read_ptt_input(&self) -> Result<bool, XdmaError> {
+        let registers = self.registers.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(registers.read_register(0x4000)? & 1 != 0)
+    }
+
     pub(crate) fn sample_extended_telemetry(&mut self) -> Result<(), XdmaError> {
         let registers = self
             .registers

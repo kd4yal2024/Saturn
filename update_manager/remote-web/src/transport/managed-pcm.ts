@@ -285,7 +285,9 @@ export class ManagedPcmSession {
     }
     try { this.control(text); } catch { this.fail('Control transport unavailable'); }
   }
-  arm(source: Source): boolean {
+  arm(source: Source, hardwarePttToken?: string): boolean {
+    if (hardwarePttToken !== undefined && !/^[1-9][0-9]{0,19}$/.test(hardwarePttToken)) return false;
+    if (hardwarePttToken !== undefined && BigInt(hardwarePttToken) > 0xffffffffffffffffn) return false;
     if (this.generatedOnly) return false;
     if (this.psCapability === 'measurement-only') return false; // use the explicit finite action
     if (!this.selected || this.phase !== 'ready' || !this.operator || this.owner?.source !== source
@@ -293,7 +295,7 @@ export class ManagedPcmSession {
     this.invalidate(); this.requested = source; this.deadline = this.options.now() + 5000;
     this.phase = 'arming'; this.reason = source === 'tci' ? 'Waiting for fresh generation and microphone' : 'Waiting for SATP owner key';
     this.publish();
-    try { this.control('trx:0,true;'); } catch { this.fail('Arm transport unavailable'); return false; }
+    try { this.control(hardwarePttToken ? `saturn_ptt:0,${hardwarePttToken};` : 'trx:0,true;'); } catch { this.fail('Arm transport unavailable'); return false; }
     return true;
   }
   /** Configure one fit. This action never arms, keys, starts audio or retries. */
@@ -369,7 +371,8 @@ export class ManagedPcmSession {
     catch { this.fail('Measurement stop transport unavailable; cleanup unverified'); }
     this.publish();
   }
-  release(): void {
+  release(hardwarePttToken?: string): void {
+    const alreadyClean = Boolean(hardwarePttToken && this.phase === 'ready' && !this.requested && this.owner?.clean);
     this.ackPending = null;
     this.settingsQueue = []; this.tuningEchoTargets.clear();
     if (this.measurement) { this.stopMeasurement(); return; }
@@ -379,7 +382,8 @@ export class ManagedPcmSession {
     if (this.cleanupAfterStop === null) this.cleanupAfterStop = this.owner?.stop ?? 0n;
     if (this.phase !== 'fault' && this.phase !== 'unavailable') this.phase = 'releasing';
     if (this.phase !== 'fault' && this.phase !== 'unavailable') this.reason = 'Output inhibited; waiting for owner stop/cleanup';
-    try { this.control?.('trx:0,false;'); } catch { this.reason = 'Release transport unavailable; reconnect required'; }
+    try { this.control?.(hardwarePttToken ? `saturn_ptt:0,stop,${hardwarePttToken};` : 'trx:0,false;'); } catch { this.reason = 'Release transport unavailable; reconnect required'; }
+    if (alreadyClean) { this.cleanupAfterStop = null; this.deadline = 0; this.refresh(); return; }
     this.publish();
   }
   private fail(reason: string): void {

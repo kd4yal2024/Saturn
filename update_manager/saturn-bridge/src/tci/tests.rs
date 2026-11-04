@@ -21,6 +21,207 @@ fn test_client_registry(client_id: u64) -> ClientRegistry {
     Arc::new(Mutex::new(clients))
 }
 
+fn rear_ptt_frontend() -> (TciFrontend, TciCommandMailboxReceiver) {
+    let mut config = BridgeConfig::default();
+    config.tci_bind_addr = "127.0.0.1:0".parse().unwrap();
+    let model = Arc::new(Mutex::new(RadioModel::new(
+        6, 7_200_000, 0, 384, 24, 2048, true, 4096, true,
+    )));
+    let (front, commands) = TciFrontend::bind(&config, model).unwrap();
+    client_with_state(&front.clients, 7, true);
+    front.operator_client_id.store(7, Ordering::SeqCst);
+    (front, commands)
+}
+fn rear_ptt_press(front: &TciFrontend, t: Instant) {
+    front.observe_hardware_ptt(false, t);
+    front.observe_hardware_ptt(true, t + Duration::from_millis(1));
+    front.service_hardware_ptt(t + Duration::from_millis(10));
+}
+fn rear_ptt_command(
+    front: &TciFrontend,
+    commands: &TciCommandMailboxSender,
+    client: u64,
+    text: &str,
+) {
+    handle_incoming_message(
+        Message::Text(text.into()),
+        commands,
+        &front.clients,
+        &front.operator_client_id,
+        &front.operator_control_at,
+        client,
+    );
+}
+#[test]
+fn hardware_ptt_release_cancels_an_actual_queued_arm() {
+    let (front, commands) = rear_ptt_frontend();
+    let t = Instant::now();
+    rear_ptt_press(&front, t);
+    assert!(drain_all_text(&front.clients, 7)
+        .iter()
+        .any(|v| v == "saturn_ptt:0,true,1;"));
+    rear_ptt_command(&front, &front.hardware_commands, 7, "saturn_ptt:0,1;");
+    assert_eq!(commands.snapshot().control_depth, 1);
+    front.observe_hardware_ptt(false, t + Duration::from_millis(11));
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::SetTxEnabled(false))
+    ));
+    assert!(commands.try_recv().is_err());
+}
+#[test]
+fn hardware_ptt_rejects_delayed_duplicate_and_viewer_commands_but_allows_a_fresh_press() {
+    let (front, commands) = rear_ptt_frontend();
+    let t = Instant::now();
+    rear_ptt_press(&front, t);
+    front.observe_hardware_ptt(false, t + Duration::from_millis(11));
+    rear_ptt_command(&front, &front.hardware_commands, 7, "saturn_ptt:0,1;");
+    assert!(commands.try_recv().is_err());
+    rear_ptt_press(&front, t + Duration::from_millis(20));
+    client_with_state(&front.clients, 8, false);
+    rear_ptt_command(&front, &front.hardware_commands, 8, "saturn_ptt:0,2;");
+    assert!(commands.try_recv().is_err());
+    rear_ptt_command(
+        &front,
+        &front.hardware_commands,
+        7,
+        "saturn_ptt:0,2;saturn_ptt:0,2;",
+    );
+    let TciCommand::HardwarePttArm(permit) = commands.try_recv().unwrap() else {
+        panic!("missing physical arm");
+    };
+    assert!(permit.live());
+    assert!(commands.try_recv().is_err());
+    front.operator_client_id.store(8, Ordering::SeqCst);
+    assert!(
+        !permit.live(),
+        "a queued arm cannot survive operator replacement"
+    );
+    front.service_hardware_ptt(t + Duration::from_millis(40));
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::SetTxEnabled(false))
+    ));
+}
+#[test]
+fn hardware_ptt_unclaimed_switch_or_superseded_claim_does_not_release_manual_mox() {
+    let (front, commands) = rear_ptt_frontend();
+    let t = Instant::now();
+    rear_ptt_press(&front, t);
+    front.observe_hardware_ptt(false, t + Duration::from_millis(11));
+    assert!(commands.try_recv().is_err());
+    rear_ptt_press(&front, t + Duration::from_millis(20));
+    rear_ptt_command(
+        &front,
+        &front.hardware_commands,
+        7,
+        "saturn_ptt:0,2;trx:0,true;",
+    );
+    let TciCommand::HardwarePttArm(permit) = commands.try_recv().unwrap() else {
+        panic!("missing physical arm");
+    };
+    assert!(!permit.live());
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::SetTxEnabled(true))
+    ));
+    front.observe_hardware_ptt(false, t + Duration::from_millis(40));
+    assert!(
+        commands.try_recv().is_err(),
+        "physical release must not cancel a newer manual action"
+    );
+}
+#[test]
+fn hardware_ptt_malformed_trx_does_not_remove_the_release_obligation() {
+    let (front, commands) = rear_ptt_frontend();
+    let t = Instant::now();
+    rear_ptt_press(&front, t);
+    rear_ptt_command(
+        &front,
+        &front.hardware_commands,
+        7,
+        "saturn_ptt:0,1;trx:0,nonsense;trx:0;",
+    );
+    let TciCommand::HardwarePttArm(permit) = commands.try_recv().unwrap() else {
+        panic!("missing physical arm");
+    };
+    assert!(permit.live());
+    assert!(
+        matches!(
+            commands.try_recv(),
+            Ok(TciCommand::RequestRadioState { .. })
+        ),
+        "a read-only TX query must leave the physical release obligation intact"
+    );
+    front.observe_hardware_ptt(false, t + Duration::from_millis(11));
+    assert!(!permit.live());
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::SetTxEnabled(false))
+    ));
+}
+
+#[test]
+fn hardware_ptt_old_browser_stop_cannot_cancel_a_new_press_or_repeat_cleanup() {
+    let (front, commands) = rear_ptt_frontend();
+    let t = Instant::now();
+    rear_ptt_press(&front, t);
+    rear_ptt_command(&front, &front.hardware_commands, 7, "saturn_ptt:0,1;");
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::HardwarePttArm(_))
+    ));
+    front.observe_hardware_ptt(false, t + Duration::from_millis(11));
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::SetTxEnabled(false))
+    ));
+    rear_ptt_press(&front, t + Duration::from_millis(20));
+    rear_ptt_command(
+        &front,
+        &front.hardware_commands,
+        7,
+        "saturn_ptt:0,2;saturn_ptt:0,stop,1;",
+    );
+    let TciCommand::HardwarePttArm(current) = commands.try_recv().unwrap() else {
+        panic!("missing fresh physical arm");
+    };
+    assert!(current.live());
+    assert!(commands.try_recv().is_err());
+    rear_ptt_command(
+        &front,
+        &front.hardware_commands,
+        7,
+        "saturn_ptt:0,stop,2;saturn_ptt:0,stop,2;",
+    );
+    assert!(!current.live());
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::SetTxEnabled(false))
+    ));
+    assert!(
+        commands.try_recv().is_err(),
+        "a duplicate release must not create another stop generation"
+    );
+}
+
+#[test]
+fn hardware_ptt_outbound_edges_are_not_coalesced_or_reordered() {
+    let (front, _) = rear_ptt_frontend();
+    let t = Instant::now();
+    rear_ptt_press(&front, t);
+    front.observe_hardware_ptt(false, t + Duration::from_millis(11));
+    rear_ptt_press(&front, t + Duration::from_millis(20));
+    assert_eq!(
+        drain_all_text(&front.clients, 7),
+        vec![
+            "saturn_ptt:0,true,1;",
+            "saturn_ptt:0,false,1;",
+            "saturn_ptt:0,true,2;"
+        ]
+    );
+}
+
 #[test]
 fn satp_control_requires_operator_role_and_strict_actions() {
     let clients = test_client_registry(7);

@@ -16,6 +16,7 @@ use crate::tx_codec::TxCodecRuntimeFlags;
 
 mod client;
 mod command_queue;
+mod hardware_ptt;
 mod outbound;
 mod protocol;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
@@ -36,6 +37,7 @@ mod tests;
 
 pub(crate) use client::*;
 pub(crate) use command_queue::*;
+pub(crate) use hardware_ptt::*;
 pub(crate) use outbound::*;
 pub(crate) use protocol::*;
 pub(crate) use rx_codec::*;
@@ -52,6 +54,8 @@ pub struct TciFrontend {
     shared_tx: Arc<Mutex<Option<crate::tx_thread::ps_ingress::SharedIngress>>>,
     drop_count: Arc<AtomicU64>,
     command_queue: TciCommandMailboxReceiver,
+    hardware_commands: TciCommandMailboxSender,
+    hardware_ptt: Mutex<HardwarePttRouting>,
     active_connections: Arc<AtomicU64>,
     rejected_connections: Arc<AtomicU64>,
     connection_high_watermark: Arc<AtomicU64>,
@@ -285,6 +289,7 @@ impl TciFrontend {
             opus_decode_enabled: config.tx_opus_decode_enabled,
         };
 
+        let hardware_commands = command_tx.clone();
         let client_registry = clients.clone();
         let accept_ready = Arc::new(AtomicBool::new(accept_clients));
         let accept_gate = accept_ready.clone();
@@ -389,6 +394,8 @@ impl TciFrontend {
             shared_tx,
             drop_count,
             command_queue: command_rx.clone(),
+            hardware_commands,
+            hardware_ptt: Mutex::new(HardwarePttRouting::default()),
             active_connections,
             rejected_connections,
             connection_high_watermark,

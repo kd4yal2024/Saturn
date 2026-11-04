@@ -77,6 +77,7 @@ pub(crate) struct DisplayTransport {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ClientState {
+    pub(crate) hardware_ptt: Option<HardwarePttPermit>,
     #[cfg(feature = "offline-puresignal-owner-adapters")]
     pub(crate) authorization_live: Arc<std::sync::atomic::AtomicBool>,
     /// Only trusted loopback clients may become the radio operator. Raw TCI
@@ -132,6 +133,7 @@ impl Default for ClientState {
 impl ClientState {
     pub(crate) fn with_tx_codec_runtime_flags(tx_codec_runtime_flags: TxCodecRuntimeFlags) -> Self {
         Self {
+            hardware_ptt: None,
             #[cfg(feature = "offline-puresignal-owner-adapters")]
             authorization_live: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             operator_eligible: true,
@@ -1327,6 +1329,25 @@ pub(crate) fn handle_incoming_message_shared(
     }
     impl<S: TciCommandSink> TciCommandSink for Sink<'_, S> {
         fn send(&self, command: TciCommand) -> Result<(), std::sync::mpsc::SendError<TciCommand>> {
+            let command = if let TciCommand::HardwarePttArm(permit) = command {
+                if !permit.live()
+                    || self
+                        .capture
+                        .as_ref()
+                        .is_none_or(|c| permit.context != Some(c.hardware_ptt_context()))
+                {
+                    permit.cancel();
+                    send_safety_text_to_client_or_control(
+                        self.clients,
+                        self.client,
+                        format!("saturn_ptt_rejected:0,{},Expired;", permit.id),
+                    );
+                    return Ok(());
+                }
+                TciCommand::HardwarePttArm(permit)
+            } else {
+                command
+            };
             if crate::tx_thread::ps_ingress::is_tx_configuration(&command) {
                 let mut configs = self.configs.borrow_mut();
                 if configs.len() == 64 {
@@ -1339,8 +1360,10 @@ pub(crate) fn handle_incoming_message_shared(
                 configs.push(command);
                 return Ok(());
             }
-            if matches!(command, TciCommand::SetTxEnabled(true))
-                && !self.configs.borrow().is_empty()
+            if matches!(
+                command,
+                TciCommand::SetTxEnabled(true) | TciCommand::HardwarePttArm(_)
+            ) && !self.configs.borrow().is_empty()
             {
                 let batch = self.configs.take();
                 if self
@@ -1358,7 +1381,14 @@ pub(crate) fn handle_incoming_message_shared(
                 Ok(true) => Ok(()),
                 Ok(false) => self.legacy.send(command),
                 Err(fault) => {
-                    if !matches!(command, TciCommand::MicAudioFrame(_)) {
+                    if let TciCommand::HardwarePttArm(permit) = &command {
+                        permit.cancel();
+                        send_safety_text_to_client_or_control(
+                            self.clients,
+                            self.client,
+                            format!("saturn_ptt_rejected:0,{},Rejected{fault:?};", permit.id),
+                        );
+                    } else if !matches!(command, TciCommand::MicAudioFrame(_)) {
                         send_safety_text_to_client_or_control(
                             self.clients,
                             self.client,
@@ -1408,6 +1438,65 @@ fn handle_incoming_message_inner(
                 .map(str::trim)
                 .filter(|part| !part.is_empty())
             {
+                if let Some(args) = command.strip_prefix("saturn_ptt:") {
+                    if let Some(value) = args.strip_prefix("0,stop,") {
+                        let id = value.parse::<u64>().ok();
+                        let permit = clients
+                            .lock_unpoisoned()
+                            .get(&client_id)
+                            .and_then(|c| c.state.hardware_ptt.clone());
+                        if operator_client_id.load(Ordering::SeqCst) == client_id
+                            && permit
+                                .as_ref()
+                                .is_some_and(|p| Some(p.id) == id && p.cancel())
+                        {
+                            let _ = command_tx.send(TciCommand::SetTxEnabled(false));
+                        }
+                        continue;
+                    }
+                    let token = args.strip_prefix("0,").and_then(|v| v.parse::<u64>().ok());
+                    let permit = clients
+                        .lock_unpoisoned()
+                        .get(&client_id)
+                        .and_then(|c| c.state.hardware_ptt.clone());
+                    if operator_client_id.load(Ordering::SeqCst) == client_id
+                        && permit
+                            .as_ref()
+                            .is_some_and(|p| Some(p.id) == token && p.live())
+                    {
+                        if let Some(permit) = permit.filter(|p| p.claim()) {
+                            reset_client_tx_uplink_attempt(clients, client_id);
+                            let _ = command_tx.send(TciCommand::HardwarePttArm(permit));
+                        }
+                    } else {
+                        send_text_to_client(
+                            clients,
+                            client_id,
+                            format!(
+                                "saturn_ptt_rejected:0,{},ReleasedOrNotOperator;",
+                                token.unwrap_or(0)
+                            ),
+                        );
+                    }
+                    continue;
+                }
+                let manual_trx = command.split_once(':').is_some_and(|(name, args)| {
+                    let args: Vec<_> = args.split(',').map(str::trim).collect();
+                    name.eq_ignore_ascii_case("trx")
+                        && !standard_tci_read_request(&name.to_ascii_lowercase(), &args)
+                        && args
+                            .get(if args.len() >= 2 { 1 } else { 0 })
+                            .is_some_and(|v| parse_tci_bool(v).is_some())
+                });
+                if manual_trx && operator_client_id.load(Ordering::SeqCst) == client_id {
+                    if let Some(permit) = clients
+                        .lock_unpoisoned()
+                        .get(&client_id)
+                        .and_then(|c| c.state.hardware_ptt.as_ref())
+                    {
+                        permit.cancel();
+                    }
+                }
                 parse_tci_command_with_roles(
                     command,
                     command_tx,

@@ -642,6 +642,11 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 result?;
             }
             TxCommand::PureSignalAuthorizedArm(mut arm) => {
+                // A cancelled physical press is ordinary cancellation, not an
+                // authorization fault. Never restamp it at the owner boundary.
+                if arm.hardware_ptt.as_ref().is_some_and(|p| !p.live()) {
+                    return Ok(());
+                }
                 let result = (|| {
                     if self
                         .ingress

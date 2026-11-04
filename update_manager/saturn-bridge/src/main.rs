@@ -595,6 +595,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut tx_uplink_fault_active = false;
     let mut tx_control_watchdog_fault_active = false;
     loop {
+        tci.service_hardware_ptt(Instant::now());
         if P2_STOP_REQUESTED.load(Ordering::Relaxed) {
             println!("saturn-bridge: P2 shutdown signal received; disarming TX");
             break;
@@ -608,6 +609,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         for _ in 0..MAX_TCI_COMMANDS_PER_LOOP {
             let Ok(command) = tci_command_rx.try_recv() else {
                 break;
+            };
+            let command = match command {
+                TciCommand::HardwarePttArm(permit) => {
+                    if !permit.live() {
+                        continue;
+                    }
+                    TciCommand::SetTxEnabled(true)
+                }
+                other => other,
             };
             did_work = true;
             let targeted_state_read = matches!(&command, TciCommand::RequestRadioState { .. });
@@ -871,6 +881,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         );
                     }
                 }
+                TciCommand::HardwarePttArm(_) => {}
                 TciCommand::SetTxEnabled(enabled) => {
                     if enabled
                         && !model
@@ -1343,6 +1354,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             did_work = true;
             match event {
                 RxEvent::HighPriority(packet) => {
+                    tci.observe_hardware_ptt(packet.ptt_bits & 1 != 0, Instant::now());
                     status_hp_packets = status_hp_packets.saturating_add(1);
                     let forward_watts =
                         saturn_adc_to_watts(packet.forward_power, 32, tx_power_meter_scale);

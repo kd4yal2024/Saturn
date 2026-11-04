@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 import { createAppState } from '../src/state/app-state';
+import { HardwarePttSession } from '../src/transport/hardware-ptt';
 import { applyTciText } from '../src/tci/apply';
 import type { TciRadioState } from '../src/tci/state';
 import { txActionAvailability, txControlPresentationState } from '../src/ui/tx-presentation';
@@ -48,7 +49,7 @@ function txHarness() {
     TX_READY_WINDOW_MS: 300_000,
     TX_LOCAL_REQUEST_PERMIT_MS: 5_000,
     satpSourceRequestAt: 0,
-    _next: { txUsesBrowserMic: () => false, satpTxBlockReason: () => null },
+    _next: { HardwarePttSession, txUsesBrowserMic: () => false, satpTxBlockReason: () => null },
     clearInterval: () => {},
     setInterval: () => 1,
     rfDisabledBlocksTx: () => rfBlocked,

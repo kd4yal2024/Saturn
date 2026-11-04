@@ -27,6 +27,7 @@ pub(crate) struct Client {
     pub(crate) native_applied: Vec<bool>,
     pub(crate) native_calibrations: Vec<i32>,
     pub(crate) two_tone_results: Vec<String>,
+    pub(crate) hardware_ptt: Vec<(bool, u64)>,
 }
 impl Client {
     pub(crate) fn open(address: std::net::SocketAddr) -> Self {
@@ -60,6 +61,7 @@ impl Client {
             native_applied: Vec::new(),
             native_calibrations: Vec::new(),
             two_tone_results: Vec::new(),
+            hardware_ptt: Vec::new(),
         };
         if control_only {
             client.text("session_open:production-fixture,operator;session_lane:production-fixture,control;tx_codec_caps:pcm;");
@@ -75,6 +77,11 @@ impl Client {
     pub(crate) fn drain(&mut self) {
         for _ in 0..128 {
             match self.ws.read() {
+                Ok(Message::Text(text)) if text.starts_with("saturn_ptt:") => {
+                    let args: Vec<_> = text.trim_end_matches(';').split(',').collect();
+                    self.hardware_ptt
+                        .push((args[1] == "true", args[2].parse().unwrap()));
+                }
                 Ok(Message::Text(text)) if text.starts_with("saturn_tx_generation:psg1,") => {
                     let encoded = text.trim_end_matches(';').split(',').nth(1).unwrap();
                     let token = if encoded == "off" {

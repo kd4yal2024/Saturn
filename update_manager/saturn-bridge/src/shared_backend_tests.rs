@@ -33,6 +33,7 @@ enum Case {
     ReceiveMeter,
     ReceiveSpectrum,
     ShutdownActive,
+    RearPtt,
     AcquisitionFailure,
     SatpBindFailure,
     AttachmentFailure,
@@ -95,6 +96,8 @@ struct Io {
     dma_burst_stage: usize,
     dma_burst_complete: Arc<AtomicBool>,
     output_packets: Arc<AtomicU64>,
+    hardware_down: Arc<AtomicBool>,
+    hardware_sent: Instant,
 }
 fn options() -> Options {
     Options {
@@ -203,6 +206,7 @@ impl RuntimeIo for Io {
         let perf_path = self.perf_path.clone();
         let dma_burst_complete = self.dma_burst_complete.clone();
         let output_packets = self.output_packets.clone();
+        let hardware_down = self.hardware_down.clone();
         let (ingress, link, stop, stop_baseline, fail, joined, p2, address, case) = (
             runtime.ingress.clone(),
             runtime.link.clone(),
@@ -369,6 +373,13 @@ impl RuntimeIo for Io {
                 }
                 if let Some(c) = &mut client {
                     c.drain();
+                    if case == Case::RearPtt {
+                        for (down, id) in std::mem::take(&mut c.hardware_ptt) {
+                            if down {
+                                c.text(&format!("saturn_ptt:0,{id};"));
+                            }
+                        }
+                    }
                 }
                 let status = ingress.lifecycle_status().unwrap();
                 if case.native_two_tone() && status.phase == Phase::Active {
@@ -561,7 +572,11 @@ impl RuntimeIo for Io {
                             }
                         }) =>
                     {
-                        client.as_mut().unwrap().text("trx:0,true;");
+                        if case == Case::RearPtt {
+                            hardware_down.store(true, Ordering::Release);
+                        } else {
+                            client.as_mut().unwrap().text("trx:0,true;");
+                        }
                         stage = 3;
                     }
                     3 | 5
@@ -592,10 +607,17 @@ impl RuntimeIo for Io {
                         if stage == 3
                             && matches!(
                                 case,
-                                Case::ShutdownActive | Case::AutoCorrection | Case::AutoSustained
+                                Case::ShutdownActive
+                                    | Case::RearPtt
+                                    | Case::AutoCorrection
+                                    | Case::AutoSustained
                             )
                         {
-                            client.as_mut().unwrap().text("trx:0,false;");
+                            if case == Case::RearPtt {
+                                hardware_down.store(false, Ordering::Release);
+                            } else {
+                                client.as_mut().unwrap().text("trx:0,false;");
+                            }
                             stage = 4;
                         } else {
                             stop_baseline.store(status.stop_id, Ordering::Release);
@@ -616,7 +638,14 @@ impl RuntimeIo for Io {
                         wave = Wave::new();
                         auto_active_since = None;
                         client.as_mut().unwrap().native_calibrations.clear();
-                        client.as_mut().unwrap().text("trx:0,true;");
+                        if case == Case::RearPtt {
+                            // A delayed old press must not consume or fault the
+                            // next physical generation after completed cleanup.
+                            client.as_mut().unwrap().text("saturn_ptt:0,1;");
+                            hardware_down.store(true, Ordering::Release);
+                        } else {
+                            client.as_mut().unwrap().text("trx:0,true;");
+                        }
                         stage = 5;
                     }
                     _ => {}
@@ -683,7 +712,10 @@ impl RuntimeIo for Io {
                     0
                 } else if matches!(
                     case,
-                    Case::ShutdownActive | Case::AutoCorrection | Case::AutoSustained
+                    Case::ShutdownActive
+                        | Case::RearPtt
+                        | Case::AutoCorrection
+                        | Case::AutoSustained
                 ) {
                     2
                 } else {
@@ -694,6 +726,18 @@ impl RuntimeIo for Io {
         }));
     }
     fn before_receive(&mut self, acquisition: &mut Acquisition) -> Result<bool, Box<dyn Error>> {
+        if self.case == Case::RearPtt && self.hardware_sent.elapsed() >= Duration::from_millis(5) {
+            let down = self.hardware_down.load(Ordering::Acquire);
+            if let Some(files) = &self.files {
+                files.write(0x4000, u32::from(down));
+            }
+            if let Some(p) = &self.p2 {
+                let mut packet = [0u8; 60];
+                packet[4] = u8::from(down);
+                p.status.send_to(&packet, p.destination)?;
+            }
+            self.hardware_sent = Instant::now();
+        }
         if self.case.diagnostic() {
             if self.dma_burst_stage == 0 && self.ingress.as_ref().unwrap().startup_ready() {
                 // Three already completed small reads. No producer or wall
@@ -924,6 +968,8 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         dma_burst_stage: 0,
         dma_burst_complete: Arc::new(AtomicBool::new(false)),
         output_packets: Arc::new(AtomicU64::new(0)),
+        hardware_down: Arc::new(AtomicBool::new(false)),
+        hardware_sent: Instant::now() - Duration::from_secs(1),
     };
     let directory = std::env::temp_dir().join(format!(
         "saturn-runtime-{}-{}",
@@ -1023,6 +1069,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         matches!(
             case,
             Case::ShutdownActive
+                | Case::RearPtt
                 | Case::AutoCorrection
                 | Case::AutoSustained
                 | Case::BaselineTwoTone
@@ -1305,6 +1352,14 @@ fn actual_run_inner_browser_long_measurement_both_backends() {
 fn actual_run_inner_receive_release_rearm_active_shutdown_both_backends() {
     for direct in [false, true] {
         exercise(direct, Case::ShutdownActive);
+    }
+}
+
+#[test]
+#[ignore = "serial real-WDSP rear PTT through actual runtime and backend status inputs; no hardware"]
+fn actual_run_inner_rear_ptt_release_rearm_both_backends() {
+    for direct in [false, true] {
+        exercise(direct, Case::RearPtt);
     }
 }
 #[test]

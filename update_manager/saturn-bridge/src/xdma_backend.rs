@@ -529,6 +529,11 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
 
     let runtime_result = (|| -> Result<(), Box<dyn Error>> {
         while !STOP_REQUESTED.load(Ordering::Relaxed) {
+            let now = Instant::now();
+            if tci.hardware_ptt_poll_due(now) {
+                tci.observe_hardware_ptt(rx.read_ptt_input()?, now);
+            }
+            tci.service_hardware_ptt(now);
             let mut did_work = false;
             if last_media_demand_refresh.elapsed() >= MEDIA_DEMAND_REFRESH {
                 media_demand = tci.media_demand();
@@ -1215,6 +1220,15 @@ fn handle_command(
     remote_tx_rf_enabled: bool,
     tx_audio_ingress: &TxAudioIngress,
 ) -> Result<CommandEffects, Box<dyn Error>> {
+    let command = match command {
+        TciCommand::HardwarePttArm(permit) => {
+            if !permit.live() {
+                return Ok(CommandEffects::default());
+            }
+            TciCommand::SetTxEnabled(true)
+        }
+        other => other,
+    };
     let mut effects = command_effects(&command);
     let command = match command {
         TciCommand::MicAudioFrame(frame) => {
@@ -1413,6 +1427,7 @@ fn handle_command(
             model.desired.tx_phase = TxPhase::Rx;
             model.desired.two_tone_enabled = false;
         }
+        TciCommand::HardwarePttArm(_) => {}
         TciCommand::SetTxEnabled(enabled) => {
             if enabled && tx_control.stopping {
                 // Consume the previous stop event before accepting a fresh

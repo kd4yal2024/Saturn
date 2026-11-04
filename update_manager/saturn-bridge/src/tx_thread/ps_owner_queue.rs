@@ -15,6 +15,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 pub struct AuthorizedArm {
     pub(super) credential: Credential,
     pub(super) trial: Option<super::ps_ingress::TwoToneTrial>,
+    pub(super) hardware_ptt: Option<crate::tci::HardwarePttPermit>,
 }
 /// Sealed, explicit diagnostic request. No boolean arm or settings completion
 /// can become this action at dequeue. Capacity/context are fixed before queue.
@@ -53,12 +54,14 @@ impl AuthorizedArm {
         Self {
             credential,
             trial: None,
+            hardware_ptt: None,
         }
     }
     pub(super) fn two_tone(credential: Credential, trial: super::ps_ingress::TwoToneTrial) -> Self {
         Self {
             credential,
             trial: Some(trial),
+            hardware_ptt: None,
         }
     }
 }
@@ -92,6 +95,9 @@ pub(crate) fn service_next<N: CooperativeNative>(
         // the legacy native owner. Release is an out-of-band mailbox, not this.
         return Err(Fault::TxAuthority);
     };
+    if arm.hardware_ptt.as_ref().is_some_and(|p| !p.live()) {
+        return Ok(true);
+    }
     // This small legacy arm harness cannot service a generated trial's
     // host deadline/replies. Only the actual scheduled owner may consume it.
     if arm.trial.is_some() {

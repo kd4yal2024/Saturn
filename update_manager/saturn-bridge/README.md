@@ -23,6 +23,24 @@ RX and TX, and exposes a TCI WebSocket frontend to browser clients.
   - 48 kHz stereo audio output (both channels from panel copy mode)
 
 ### TX Chain
+
+Rear-panel PTT is supported through the existing TX owner on Direct XDMA and
+Protocol 2. With Saturn Remote connected as the operator, a fresh switch press
+uses the selected Browser Microphone or paired SATP input; release returns to RX.
+Normal RF permission, source readiness and fault handling still apply. The
+browser reports the rear switch as PTT and logs `Rear PTT pressed`.
+
+The acquisition owner reads the active-high status bit (XDMA register `0x4000`,
+bit 0, or P2 high-priority byte 4, bit 0). P2's bit retains its existing combined
+PTT/keyer meaning. Presses have an 8 ms debounce; release is immediate on
+observation. Missing status for 500 ms cancels a hardware-owned request. These
+are software input deadlines, not measurements of physical RF release latency.
+There is no second DMA reader or change to firmware, driver or RXC1 health polling.
+
+A switch already held at startup, or across reconnect/fault recovery, must be
+released before a new press can request TX. Press tokens are operator-specific,
+single-use, tied to the current shared settings boundary, and remain cancellable
+through the owner queue. An unused switch event does not release unrelated MOX.
 - WDSP TX DSP channel (channel 1):
   - Bandpass filter, ALC, CFIR mic conditioning
   - Adjustable mic gain via `SetTXAPanelGain1`

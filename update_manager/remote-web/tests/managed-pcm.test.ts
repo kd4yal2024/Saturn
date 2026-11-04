@@ -23,6 +23,21 @@ function setup(capture?: ManagedCaptureFactory) {
 }
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
+  it('uses a rear-switch token with the same generation and capture lifecycle', async () => {
+    const h=setup(); h.ready();
+    expect(h.session.arm('tci','17')).toBe(true);
+    expect(h.control).toContain('saturn_ptt:0,17;'); expect(h.control).not.toContain('trx:0,true;');
+    h.offer(); await settle(); h.input(); expect(h.media.length).toBeGreaterThan(0);
+    h.session.release(); const sent=h.media.length; h.input(); expect(h.media.length).toBe(sent);
+    expect(h.control.at(-1)).toBe('trx:0,false;');
+  });
+  it('scopes a delayed rear release and accepts already-completed host cleanup', async () => {
+    const h=setup(); h.ready(); expect(h.session.arm('tci','17')).toBe(true);
+    h.offer(); await settle();
+    h.ready('tci',2); expect(h.session.status().phase).toBe('ready');
+    h.session.release('17'); expect(h.control.at(-1)).toBe('saturn_ptt:0,stop,17;');
+    expect(h.session.status().phase).toBe('ready'); expect(h.session.arm('tci','18')).toBe(true);
+  });
   it('scopes manual feedback-attenuation support to the negotiated connection', () => {
     const h=setup();h.ready();
     expect(h.session.status().manualAttenuationSupported).toBe(false);

@@ -71,12 +71,19 @@ impl TciCommandQueues {
         let queued_arms = self
             .control
             .iter()
-            .filter(|c| matches!(c, TciCommand::SetTxEnabled(true)))
+            .filter(|c| {
+                matches!(
+                    c,
+                    TciCommand::SetTxEnabled(true) | TciCommand::HardwarePttArm(_)
+                )
+            })
             .count();
         self.control.retain(|queued| {
             !matches!(
                 queued,
-                TciCommand::SetTxEnabled(true) | TciCommand::SetTxTwoToneTest(true)
+                TciCommand::SetTxEnabled(true)
+                    | TciCommand::HardwarePttArm(_)
+                    | TciCommand::SetTxTwoToneTest(true)
             )
         });
         self.arm_cancelled = self.arm_cancelled.saturating_add(queued_arms as u64);

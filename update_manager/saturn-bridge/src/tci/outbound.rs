@@ -1109,6 +1109,11 @@ fn tci_text_coalesce_key(text: &str) -> Option<String> {
     }
     let text = text.strip_suffix(';').unwrap_or(text);
     let (name, rest) = text.split_once(':')?;
+    // Input edges carry press identity. Coalescing could reorder an old
+    // release around a later press, so preserve their FIFO order.
+    if name == "saturn_ptt" {
+        return None;
+    }
     if name.is_empty() || rest.is_empty() {
         return None;
     }
