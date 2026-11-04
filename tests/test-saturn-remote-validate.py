@@ -401,7 +401,10 @@ class Rig:
         target = directory / binary
         shutil.copy(shutil.which("sleep"), target)
         child_env = {"PATH": os.environ["PATH"], **env}
-        process = subprocess.Popen([str(target), "3600"], env=child_env, start_new_session=True)
+        # Ubuntu runners may provide sleep through a multicall coreutils binary.
+        # Keep argv[0] as the applet name, while /proc/PID/exe still identifies
+        # the copied executable in this fixture's release directory.
+        process = subprocess.Popen(["sleep", "3600"], executable=str(target), env=child_env, start_new_session=True)
         self.procs.append(process)
         (self.pids / unit).write_text(f"{process.pid}\n")
         return process.pid

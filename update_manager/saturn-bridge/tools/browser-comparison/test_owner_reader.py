@@ -103,7 +103,7 @@ class Reader(unittest.TestCase):
         copy = os.path.join(self.dir, "sleep-copy")
         shutil.copy(source, copy)
         os.chmod(copy, 0o755)
-        child = subprocess.Popen([copy, "30"])
+        child = subprocess.Popen(["sleep", "30"], executable=copy)
         self.addCleanup(child.kill)
         time.sleep(0.2)
         with open(copy, "rb") as fh:
@@ -140,7 +140,7 @@ class Reader(unittest.TestCase):
         weird = os.path.join(self.dir, "a) (b c")
         shutil.copy(shutil.which("sleep"), weird)
         os.chmod(weird, 0o755)
-        child = subprocess.Popen([weird, "30"])
+        child = subprocess.Popen(["sleep", "30"], executable=weird)
         self.addCleanup(child.kill)
         time.sleep(0.2)
         with open(f"/proc/{child.pid}/stat") as fh:

@@ -45,6 +45,13 @@ jobs:
         run: cargo test --locked
         working-directory: ${{ matrix.crate }}
 
+      - name: Install Bridge codec test dependency
+        if: ${{ matrix.crate == 'update_manager/saturn-bridge' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopus0
+          python3 -c 'import ctypes; opus = ctypes.CDLL("libopus.so.0"); opus.opus_get_version_string.restype = ctypes.c_char_p; print(opus.opus_get_version_string().decode())'
+
       - name: Test with native DSP stubs
         if: ${{ matrix.run_tests == false }}
         env:
