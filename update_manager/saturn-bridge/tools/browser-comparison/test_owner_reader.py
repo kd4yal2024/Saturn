@@ -2,6 +2,8 @@
 """Tests for owner_reader.py: the read-only reader of the acquisition owner's cached telemetry.
 
   python3 tools/browser-comparison/test_owner_reader.py
+
+Requires Linux and a C compiler for the real executable-identity fixture.
 """
 import hashlib
 import json
@@ -11,6 +13,11 @@ import sys
 import tempfile
 import time
 import unittest
+from pathlib import Path
+
+SERVICE_FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="saturn-reader-fixture-")
+SERVICE_FIXTURE = Path(SERVICE_FIXTURE_DIR.name) / "proc-sleeper"
+subprocess.run(["cc", str(Path(__file__).resolve().parents[4] / "tests/support/proc-sleeper.c"), "-o", str(SERVICE_FIXTURE)], check=True)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 READER = os.environ.get("OWNER_READER_UNDER_TEST", os.path.join(HERE, "owner_reader.py"))
@@ -99,11 +106,11 @@ class Reader(unittest.TestCase):
     def _copied_sleep(self):
         """A running process whose executable is a file we control, so its hash is known independently."""
         import shutil
-        source = shutil.which("sleep")
+        source = SERVICE_FIXTURE
         copy = os.path.join(self.dir, "sleep-copy")
         shutil.copy(source, copy)
         os.chmod(copy, 0o755)
-        child = subprocess.Popen(["sleep", "30"], executable=copy)
+        child = subprocess.Popen([copy])
         self.addCleanup(child.kill)
         time.sleep(0.2)
         with open(copy, "rb") as fh:
@@ -138,9 +145,9 @@ class Reader(unittest.TestCase):
     def test_a_command_name_containing_parentheses_and_spaces_does_not_confuse_the_start_time(self):
         import shutil
         weird = os.path.join(self.dir, "a) (b c")
-        shutil.copy(shutil.which("sleep"), weird)
+        shutil.copy(SERVICE_FIXTURE, weird)
         os.chmod(weird, 0o755)
-        child = subprocess.Popen(["sleep", "30"], executable=weird)
+        child = subprocess.Popen([weird])
         self.addCleanup(child.kill)
         time.sleep(0.2)
         with open(f"/proc/{child.pid}/stat") as fh:

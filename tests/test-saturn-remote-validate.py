@@ -2,6 +2,7 @@
 """Tests for update_manager/scripts/saturn-remote-validate.py.
 
 The validator is exercised as the update process runs it: as a separate program, started in the background, waited for, held, then stopped.
+Linux and a C compiler are required for the real process-identity fixture.
 Everything it talks to is replaced by a fake that behaves like the real thing in the one way that matters here:
 
   * a fake Chromium that speaks DevTools over file descriptors 3 and 4 and follows a scripted scenario;
@@ -28,6 +29,9 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+SERVICE_FIXTURE_DIR = tempfile.TemporaryDirectory(prefix="saturn-service-fixture-")
+SERVICE_FIXTURE = Path(SERVICE_FIXTURE_DIR.name) / "proc-sleeper"
+subprocess.run(["cc", str(REPO / "tests/support/proc-sleeper.c"), "-o", str(SERVICE_FIXTURE)], check=True)
 VALIDATOR = REPO / "update_manager/scripts/saturn-remote-validate.py"
 GUARD = REPO / "update_manager/scripts/saturn-remote-receive-guard.js"
 COMMIT = "f10a087fc9f949b5cf8eb31a781ce74d23512581"
@@ -399,12 +403,11 @@ class Rig:
         directory = self.releases / commit / "bin"
         directory.mkdir(parents=True, exist_ok=True)
         target = directory / binary
-        shutil.copy(shutil.which("sleep"), target)
+        # Multicall utilities may dispatch from /proc/self/exe rather than
+        # argv[0]. This fixture must remain alive under arbitrary release names.
+        shutil.copy(SERVICE_FIXTURE, target)
         child_env = {"PATH": os.environ["PATH"], **env}
-        # Ubuntu runners may provide sleep through a multicall coreutils binary.
-        # Keep argv[0] as the applet name, while /proc/PID/exe still identifies
-        # the copied executable in this fixture's release directory.
-        process = subprocess.Popen(["sleep", "3600"], executable=str(target), env=child_env, start_new_session=True)
+        process = subprocess.Popen([str(target)], env=child_env, start_new_session=True)
         self.procs.append(process)
         (self.pids / unit).write_text(f"{process.pid}\n")
         return process.pid
