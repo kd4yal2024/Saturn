@@ -530,6 +530,17 @@ impl OwnerStopAdapter<'_> {
             }
         };
         if done {
+            if let OutputOwner::Direct(radio) = &self.owner {
+                radio.monitor_iq(
+                    &iq,
+                    self.rearm
+                        .model
+                        .as_ref()
+                        .ok_or(Fault::InvalidConfig)?
+                        .desired
+                        .mode,
+                );
+            }
             self.pending_iq.drain(..480);
             self.rearm.consume_iq(480);
         }

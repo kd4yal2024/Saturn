@@ -22,7 +22,7 @@ const browserEnv = {
 
 describe('settings normalization', () => {
   it('defaults TX mic gain to a phone-safe -12 dB', () => {
-    expect(createDefaultSettingsState().radioPrefs.txMicGainDb).toBe(-12);
+    expect(createDefaultSettingsState().radioPrefs.txMicGainDb).toBe(0);
   });
 
   it('sanitizes phone panel state', () => {

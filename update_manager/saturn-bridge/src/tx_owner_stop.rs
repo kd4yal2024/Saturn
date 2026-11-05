@@ -497,6 +497,9 @@ impl TxAuthority for OwnerStopAdapter<'_> {
     fn begin_stop(&mut self, request: StopRequest) -> Result<(), Fault> {
         // Even malformed requests fence immediately; they cannot mint receipts.
         self.fence.close();
+        if let OutputOwner::Direct(radio) = &self.owner {
+            crate::tx_thread::TxRadio::stop_monitor(radio.as_ref());
+        }
         if let Some(c) = &self.diagnostic_last {
             c.event(crate::tx_signal_capture::shared::Kind::Stop, None);
         }

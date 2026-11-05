@@ -41,6 +41,22 @@ A switch already held at startup, or across reconnect/fault recovery, must be
 released before a new press can request TX. Press tokens are operator-specific,
 single-use, tied to the current shared settings boundary, and remain cancellable
 through the owner queue. An unused switch event does not release unrelated MOX.
+
+Normal microphone gain defaults to 0 dB (unity). Explicit saved profiles and
+operator gain commands remain authoritative. Direct XDMA shared-owner MON uses
+the existing G2 headphone codec worker: completed processed TX IQ is copied to
+its bounded queue, and stopping invalidates queued monitor audio. This is local
+headphone monitoring, not browser sidetone or an additional RF output path.
+
+For PTT startup diagnosis, the operator log records managed microphone device
+acquisition, graph readiness and first-frame times from one browser monotonic
+clock. The host logs rear-switch browser acknowledgment round-trip time and
+extends its existing lifecycle timing record with first accepted frame, first
+keyable microphone level and first keyable native IQ, relative to owner arm.
+Missing observations stay unavailable. Browser and host clocks are separate;
+none of these timestamps proves physical RF onset or LP700 display latency.
+No extra delay or periodic packet logging is introduced by these observations.
+
 - WDSP TX DSP channel (channel 1):
   - Bandpass filter, ALC, CFIR mic conditioning
   - Adjustable mic gain via `SetTXAPanelGain1`

@@ -302,6 +302,18 @@ pub(crate) struct Counters {
     pub(crate) active_max_publish_ns: u64,
     pub(crate) active_max_render_ns: u64,
 }
+// Observation only: never qualifies samples, changes their age, or delays TX.
+#[derive(Default)]
+struct ArmSignalTiming {
+    first_frame: Option<u64>,
+    first_mic: Option<u64>,
+    first_iq: Option<u64>,
+}
+impl ArmSignalTiming {
+    fn elapsed_us(at: Option<u64>, armed: Option<u64>) -> Option<u64> {
+        at?.checked_sub(armed?).map(|ns| ns / 1000)
+    }
+}
 pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     pub(crate) life: TxLifecycle<N, OwnerStopAdapter<'a>>,
     commands: Receiver<TxCommand>,
@@ -321,6 +333,7 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     next_mic: u64,
     next_iq: u64,
     armed: Option<u64>,
+    arm_signal_timing: ArmSignalTiming,
     last_arrival: Option<u64>,
     seen_stop: u64,
     command_closed: bool,
@@ -391,6 +404,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             next_mic: 0,
             next_iq: 0,
             armed: None,
+            arm_signal_timing: ArmSignalTiming::default(),
             last_arrival: None,
             seen_stop,
             command_closed: false,
@@ -473,10 +487,17 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 status.cleanup_fault, self.counters.mic_blocks, self.counters.iq_packets,
                 self.counters.rejected, self.counters.max_turn_ns,
                 self.counters.max_pump_ns, self.counters.max_feedback_age_ns);
-            eprintln!("saturn-bridge: shared TX active timing phase={:?} stop_id={} active_max_turn_ns={} active_max_hook_ns={} active_max_publish_ns={} active_max_render_ns={}",
+            let published = self.origin.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+            // Extend the existing once-per-transition timing record; no new
+            // packet-rate logging or synchronous capture/file work.
+            eprintln!("saturn-bridge: shared TX active timing phase={:?} stop_id={} active_max_turn_ns={} active_max_hook_ns={} active_max_publish_ns={} active_max_render_ns={} first_frame_us={:?} first_keyable_mic_us={:?} first_keyable_iq_us={:?} arm_to_publication_us={:?} clock=bridge-owner physical_rf=unverified",
                 status.phase, status.stop_id,
                 self.counters.active_max_turn_ns, self.counters.active_max_hook_ns,
-                self.counters.active_max_publish_ns, self.counters.active_max_render_ns);
+                self.counters.active_max_publish_ns, self.counters.active_max_render_ns,
+                ArmSignalTiming::elapsed_us(self.arm_signal_timing.first_frame, self.armed),
+                ArmSignalTiming::elapsed_us(self.arm_signal_timing.first_mic, self.armed),
+                ArmSignalTiming::elapsed_us(self.arm_signal_timing.first_iq, self.armed),
+                ArmSignalTiming::elapsed_us(Some(published), self.armed));
             self.reported_lifecycle = Some(transition);
         }
         if let Some(ingress) = self.ingress.clone() {
@@ -743,6 +764,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         }
                     }
                     self.armed = Some(now);
+                    self.arm_signal_timing = ArmSignalTiming::default();
                     self.counters.active_max_turn_ns = 0;
                     self.counters.active_max_hook_ns = 0;
                     self.counters.active_max_publish_ns = 0;
@@ -836,6 +858,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         }
                     }
                     self.armed = Some(now);
+                    self.arm_signal_timing = ArmSignalTiming::default();
                     self.counters.last_stale = None;
                     self.last_arrival = Some(now);
                     self.next_mic = now;
@@ -999,6 +1022,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                     audio.stamp.output.ok_or(Fault::GenerationMismatch)?,
                     observed,
                 )?;
+                self.arm_signal_timing.first_frame.get_or_insert(now);
                 // Silence qualifies an AM carrier's source, never SSB speech.
                 self.last_arrival = Some(self.last_arrival.unwrap_or(0).max(observed));
             }
@@ -1444,6 +1468,9 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                     // qualification; both watchdogs remain based on ingress.
                     self.counters.input_component_peak =
                         mic.iter().fold(0.0_f32, |p, v| p.max(v.abs()));
+                    if self.counters.input_component_peak >= super::TX_KEY_MIC_PEAK_THRESHOLD {
+                        self.arm_signal_timing.first_mic.get_or_insert(now);
+                    }
                     let capture = self
                         .life
                         .offline_owner()
@@ -1479,6 +1506,19 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                             }
                             self.counters.native_iq_component_peak =
                                 iq.iter().fold(0.0_f32, |p, v| p.max(v.abs()));
+                            if super::can_key_rf(
+                                true,
+                                self.counters.native_iq_component_peak,
+                                true,
+                                false,
+                            ) {
+                                let rendered_at = if realtime {
+                                    now.max(self.origin.elapsed().as_nanos() as u64)
+                                } else {
+                                    now
+                                };
+                                self.arm_signal_timing.first_iq.get_or_insert(rendered_at);
+                            }
                             self.life
                                 .offline_owner()
                                 .enqueue_iq(output_stamp, observed, &iq)

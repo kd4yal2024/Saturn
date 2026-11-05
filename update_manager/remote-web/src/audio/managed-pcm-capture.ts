@@ -27,17 +27,26 @@ class ManagedPcmCapture extends AudioWorkletProcessor {
 registerProcessor('saturn-managed-pcm', ManagedPcmCapture);
 `;
 
+export interface MicrophoneStartupTiming {
+  acquisitionMs: number;
+  graphReadyMs: number;
+  firstFrameMs: number;
+  baseLatencyMs: number;
+}
 export function microphoneManagedCapture(deviceId: () => string,
-  level: (samples: Float32Array) => void): ManagedCaptureFactory {
+  level: (samples: Float32Array) => void,
+  timing?: (value: MicrophoneStartupTiming) => void): ManagedCaptureFactory {
   return async (token, deliver, failed) => {
     if (!globalThis.isSecureContext || !navigator.mediaDevices?.getUserMedia)
       throw new Error('Secure microphone capture required');
+    const started = performance.now();
     const id = deviceId();
     const stream = await navigator.mediaDevices.getUserMedia({audio: {
       sampleRate: 48000, channelCount: 1, echoCancellation: false,
       noiseSuppression: false, autoGainControl: false,
       ...(id ? {deviceId: {exact: id}} : {}),
     }});
+    const acquired = performance.now();
     let context: AudioContext | null = null;
     let input: MediaStreamAudioSourceNode | null = null;
     let node: AudioWorkletNode | null = null;
@@ -63,6 +72,7 @@ export function microphoneManagedCapture(deviceId: () => string,
         processorOptions: {startFrame},
       });
       const ctx = context;
+      let firstFrame = true;
       node.port.onmessage = e => {
         if (closed) return;
         const samples: unknown = e.data?.samples, frame: unknown = e.data?.oldestFrame;
@@ -71,6 +81,11 @@ export function microphoneManagedCapture(deviceId: () => string,
         }
         // Conservative graph age, NOT physical microphone ADC or RF-output age.
         const oldest = Math.min(performance.now(), reset + frame / 48 - audioAnchor - ctx.baseLatency * 1000);
+        if (firstFrame) {
+          firstFrame = false;
+          timing?.({acquisitionMs: acquired - started, graphReadyMs: reset - started,
+            firstFrameMs: performance.now() - started, baseLatencyMs: ctx.baseLatency * 1000});
+        }
         level(samples); deliver(samples, oldest);
       };
       node.onprocessorerror = () => { if (!closed) failed('Managed PCM worklet failed'); };

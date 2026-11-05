@@ -492,7 +492,7 @@ export function createAppState(): AppState {
     txPhase: 'rx',
     txDrive: 10,
     remoteTxRfEnabled: null,
-    txMicGainDb: -12,
+    txMicGainDb: 0,
     txMonitorSupported: false,
     txMonitorEnabled: false,
     txMonitorLevelDb: -30,

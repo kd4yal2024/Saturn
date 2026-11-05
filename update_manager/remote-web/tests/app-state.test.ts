@@ -68,7 +68,7 @@ describe('createAppState', () => {
   // ── TX defaults ──
   it('txEnabled defaults to false', () => expect(createAppState().txEnabled).toBe(false));
   it('txDrive defaults to a conservative 10 W target', () => expect(createAppState().txDrive).toBe(10));
-  it('txMicGainDb defaults to a phone-safe -12 dB', () => expect(createAppState().txMicGainDb).toBe(-12));
+  it('txMicGainDb defaults to unity (0 dB)', () => expect(createAppState().txMicGainDb).toBe(0));
   it('phase rotator starts disabled at the WDSP default corner', () => {
     const s = createAppState();
     expect(s.txPhaseRotatorEnabled).toBe(false);

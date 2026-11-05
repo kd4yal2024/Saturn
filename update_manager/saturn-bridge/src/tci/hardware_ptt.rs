@@ -14,6 +14,7 @@ pub(crate) struct HardwarePttPermit {
     live: Arc<AtomicBool>,
     claimed: Arc<AtomicBool>,
     operator: Option<(Arc<AtomicU64>, u64)>,
+    pub(crate) observed_at: Instant,
 }
 impl HardwarePttPermit {
     pub(crate) fn new(id: u64, context: Option<(u64, u64)>) -> Self {
@@ -23,6 +24,7 @@ impl HardwarePttPermit {
             live: Arc::new(AtomicBool::new(true)),
             claimed: Arc::new(AtomicBool::new(false)),
             operator: None,
+            observed_at: Instant::now(),
         }
     }
     fn for_operator(mut self, operator: Arc<AtomicU64>, client: u64) -> Self {

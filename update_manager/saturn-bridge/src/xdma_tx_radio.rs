@@ -1011,6 +1011,8 @@ pub(crate) struct DirectXdmaTxRadio {
     offline_output_fence: Option<std::sync::Arc<crate::tx_owner_stop::OutputFence>>,
     #[cfg(test)]
     test_key_clock: Option<Mutex<(Instant, Instant)>>,
+    #[cfg(test)]
+    monitor_observation: Mutex<(u64, f32, u64)>,
 }
 
 impl DirectXdmaTxRadio {
@@ -1039,7 +1041,14 @@ impl DirectXdmaTxRadio {
             offline_output_fence: None,
             #[cfg(test)]
             test_key_clock: None,
+            #[cfg(test)]
+            monitor_observation: Mutex::new((0, 0., 0)),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn monitor_observation(&self) -> (u64, f32, u64) {
+        *self.monitor_observation.lock().unwrap()
     }
 
     pub(crate) fn snapshot(&self) -> DirectTxSnapshot {
@@ -1327,9 +1336,19 @@ impl TxRadio for DirectXdmaTxRadio {
             .map(|w| w.producer())
     }
     fn monitor_iq(&self, iq: &[f32], mode: crate::radio_model::DemodMode) {
+        #[cfg(test)]
+        {
+            let mut seen = self.monitor_observation.lock().unwrap();
+            seen.0 += 1;
+            seen.1 = iq.iter().fold(seen.1, |peak, v| peak.max(v.abs()));
+        }
         self.monitor.push(iq, mode);
     }
     fn stop_monitor(&self) {
+        #[cfg(test)]
+        {
+            self.monitor_observation.lock().unwrap().2 += 1;
+        }
         self.monitor.stop();
     }
     fn configure_puresignal_feedback(&self) -> TxRadioResult {

@@ -92,6 +92,7 @@ struct Io {
     link: Option<Link>,
     driver: Option<thread::JoinHandle<usize>>,
     status: Option<LifecycleStatus>,
+    state_model: Option<Arc<Mutex<RadioModel>>>,
     wave: Wave,
     sequence: u64,
     restore_hold: Option<Instant>,
@@ -152,6 +153,12 @@ impl RuntimeIo for Io {
         backend: RadioBackend,
         model: &Arc<Mutex<RadioModel>>,
     ) -> Result<(Radio, Acquisition), Box<dyn Error>> {
+        self.state_model = Some(model.clone());
+        if self.direct && self.case == Case::MicrophoneBypass {
+            let mut m = model.lock_unpoisoned();
+            m.desired.tx_monitor_available = true;
+            m.desired.rx_headphones_available = true;
+        }
         if let Some(expected) = &self.expected_rx {
             let initial = model.lock_unpoisoned();
             assert_eq!(&crate::rx_state::capture(&initial), expected);
@@ -209,6 +216,7 @@ impl RuntimeIo for Io {
             );
         }
         self.link = Some(runtime.link.clone());
+        let state_model = self.state_model.as_ref().unwrap().clone();
         let check_persistence = self.expected_rx.is_some();
         let direct = self.direct;
         let perf_path = self.perf_path.clone();
@@ -565,6 +573,11 @@ impl RuntimeIo for Io {
                             stage = 11;
                             continue;
                         }
+                        if case == Case::MicrophoneBypass && direct {
+                            client.as_mut().unwrap().text(
+                                "tx_monitor:0,true;tx_monitor_level:0,-18;rx_headphones:0,true;",
+                            );
+                        }
                         if case.microphone_bypass() {
                             // Exactly the normal voice profile that exposed the
                             // accidental MeasurementOnly unity-gain requirement.
@@ -615,6 +628,15 @@ impl RuntimeIo for Io {
                                 || auto_active_since
                                     .is_some_and(|t| t.elapsed() >= Duration::from_secs(15))) =>
                     {
+                        if case == Case::MicrophoneBypass && direct {
+                            let m = state_model.lock_unpoisoned();
+                            assert_eq!(m.desired.tx_monitor_enabled, stage == 3);
+                            assert_eq!(m.desired.rx_headphones_enabled, stage == 3);
+                            assert_eq!(
+                                m.desired.tx_monitor_level_db,
+                                if stage == 3 { -18. } else { -60. }
+                            );
+                        }
                         corrected += 1;
                         if matches!(case, Case::AutoCorrection | Case::AutoSustained) {
                             assert!(ingress.owner_status_message().unwrap().contains(",auto;"));
@@ -666,6 +688,11 @@ impl RuntimeIo for Io {
                             status.authority_completed_ns.is_some()
                                 && status.cleanup_completed_ns.is_some()
                         );
+                        if case == Case::MicrophoneBypass && direct {
+                            client.as_mut().unwrap().text(
+                                "tx_monitor:0,false;rx_headphones:0,false;tx_monitor_level:0,-100;",
+                            );
+                        }
                         wave = Wave::new();
                         bypass_active_since = None;
                         bypass_packets = output_packets.load(Ordering::Acquire);
@@ -991,6 +1018,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         link: None,
         driver: None,
         status: None,
+        state_model: None,
         wave: Wave::new(),
         sequence: 0,
         restore_hold: None,
@@ -1097,6 +1125,14 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
             Some(0),
             "actual runtime final P2 command clears RUN and MOX"
         );
+    }
+    if direct && case == Case::MicrophoneBypass {
+        let (frames, peak, stops) = io.files.as_ref().unwrap().radio.monitor_observation();
+        assert!(
+            frames > 30 && peak > 0.001,
+            "completed processed IQ reaches MON: {frames} {peak}"
+        );
+        assert!(stops >= 2, "release and shutdown invalidate monitor output");
     }
     let status = io.status.unwrap();
     assert_eq!(

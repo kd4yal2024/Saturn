@@ -581,7 +581,7 @@ impl RadioModel {
                 ddc0_sample_rate_khz,
                 ddc0_sample_size_bits,
                 tx_drive: 10,
-                tx_mic_gain_db: -12.0,
+                tx_mic_gain_db: 0.0,
                 tx_monitor_available: false,
                 tx_monitor_enabled: false,
                 tx_monitor_level_db: -30.0,

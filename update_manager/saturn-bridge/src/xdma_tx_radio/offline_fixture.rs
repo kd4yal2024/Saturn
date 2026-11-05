@@ -105,6 +105,7 @@ impl DirectFixture {
                 crate::tx_owner_stop::OutputFence::new_open_for_offline_trial(),
             )),
             test_key_clock: None,
+            monitor_observation: Mutex::new((0, 0., 0)),
         });
         Self {
             radio,

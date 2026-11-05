@@ -8505,9 +8505,9 @@
               <div class="range-wrap">
                 <div class="row spread">
                   <span class="label" style="margin: 0;">Mic Gain</span>
-                  <span class="mono small" id="tx-mic-gain-readout">-12.0 dB</span>
+                  <span class="mono small" id="tx-mic-gain-readout">0.0 dB</span>
                 </div>
-                <input id="tx-mic-gain" type="range" min="-20" max="20" step="0.5" value="-12" />
+                <input id="tx-mic-gain" type="range" min="-20" max="20" step="0.5" value="0" />
               </div>
             </div>
 
@@ -18298,6 +18298,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         let peak = 0;
         for (const sample of samples) peak = Math.max(peak, Math.abs(sample));
         state.txMicLevel = peak; state.txMicLevelAt = performance.now();
+      }, timing => {
+        logEvent(`Managed microphone startup: acquisition=${timing.acquisitionMs.toFixed(0)} ms graph=${timing.graphReadyMs.toFixed(0)} ms first-frame=${timing.firstFrameMs.toFixed(0)} ms base-latency=${timing.baseLatencyMs.toFixed(1)} ms (browser clock)`);
       }),
       changed: status => {
         if (status.selected) {

@@ -1465,6 +1465,7 @@ fn handle_incoming_message_inner(
                             .is_some_and(|p| Some(p.id) == token && p.live())
                     {
                         if let Some(permit) = permit.filter(|p| p.claim()) {
+                            eprintln!("saturn-bridge: rear PTT browser acknowledgment press_id={} round_trip_us={} physical_rf=unverified", permit.id, permit.observed_at.elapsed().as_micros());
                             reset_client_tx_uplink_attempt(clients, client_id);
                             let _ = command_tx.send(TciCommand::HardwarePttArm(permit));
                         }

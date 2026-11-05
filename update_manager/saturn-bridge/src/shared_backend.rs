@@ -674,6 +674,18 @@ fn receive_control(
             dsp.set_audio_frame_float_count(samples as usize);
         }
         SetRxVolume(value) => m.desired.rx_volume_db = value.clamp(-40., 12.),
+        SetTxMonitor(enabled) => {
+            m.desired.tx_monitor_enabled = enabled && m.desired.tx_monitor_available;
+            front.publish_radio_state(&m);
+        }
+        SetRxHeadphones(enabled) => {
+            m.desired.rx_headphones_enabled = enabled && m.desired.rx_headphones_available;
+            front.publish_radio_state(&m);
+        }
+        SetTxMonitorLevel(level) => {
+            m.desired.tx_monitor_level_db = crate::tx_monitor::clamp_level(level);
+            front.publish_radio_state(&m);
+        }
         SetFilterBand { low_hz, high_hz } => {
             m.desired.filter_low_hz = low_hz;
             m.desired.filter_high_hz = high_hz;
