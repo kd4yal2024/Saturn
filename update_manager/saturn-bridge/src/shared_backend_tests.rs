@@ -377,6 +377,7 @@ impl RuntimeIo for Io {
             let mut gap_completed = false;
             let mut auto_active_since: Option<Instant> = None;
             let mut bypass_active_since: Option<Instant> = None;
+            let mut silent_ptt_started: Option<Instant> = None;
             let mut bypass_packets = 0;
             while !joined.load(Ordering::Acquire) {
                 assert!(
@@ -439,8 +440,17 @@ impl RuntimeIo for Io {
                         return 0;
                     }
                 }
-                if case.microphone_bypass() && status.phase == Phase::Active {
-                    bypass_active_since.get_or_insert_with(Instant::now);
+                if case.microphone_bypass()
+                    && matches!(status.phase, Phase::AwaitingKey | Phase::Active)
+                {
+                    let started = silent_ptt_started.get_or_insert_with(Instant::now);
+                    assert!(
+                        status.phase == Phase::Active || started.elapsed() < Duration::from_secs(1),
+                        "ordinary PTT must key on fresh silence, before speech"
+                    );
+                    if status.phase == Phase::Active {
+                        bypass_active_since.get_or_insert_with(Instant::now);
+                    }
                 }
                 if case == Case::AutoSustained && status.phase == Phase::Active {
                     auto_active_since.get_or_insert_with(Instant::now);
@@ -620,7 +630,7 @@ impl RuntimeIo for Io {
                                 status.correction_applied != Some(true)
                                     && output_packets.load(Ordering::Acquire) > bypass_packets + 30
                                     && bypass_active_since
-                                        .is_some_and(|t| t.elapsed() >= Duration::from_millis(100))
+                                        .is_some_and(|t| t.elapsed() >= Duration::from_millis(300))
                             } else {
                                 status.correction_applied == Some(true)
                             }
@@ -695,6 +705,7 @@ impl RuntimeIo for Io {
                         }
                         wave = Wave::new();
                         bypass_active_since = None;
+                        silent_ptt_started = None;
                         bypass_packets = output_packets.load(Ordering::Acquire);
                         auto_active_since = None;
                         client.as_mut().unwrap().native_calibrations.clear();
@@ -756,6 +767,12 @@ impl RuntimeIo for Io {
                             if !paused {
                                 client.as_mut().unwrap().zero_keepalive();
                             }
+                        } else if case.microphone_bypass()
+                            && bypass_active_since
+                                .is_none_or(|t| t.elapsed() < Duration::from_millis(150))
+                        {
+                            // Key and sustain output before the first syllable.
+                            client.as_mut().unwrap().zero_keepalive();
                         } else {
                             client.as_mut().unwrap().mic();
                         }

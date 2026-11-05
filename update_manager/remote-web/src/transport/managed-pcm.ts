@@ -8,9 +8,13 @@ export interface ManagedCapture {
   historyResetAtMs: number;
   close(): void;
 }
-export type ManagedCaptureFactory = (token: string,
+export type ManagedCaptureFactory = ((token: string,
   deliver: (samples: Float32Array, oldestMs: number) => void,
-  failed: (reason: string) => void) => Promise<ManagedCapture>;
+  failed: (reason: string) => void) => Promise<ManagedCapture>) & {
+    prepare?(): Promise<void>;
+    cancel?(): void;
+    dispose?(): void;
+  };
 type Phase = 'disabled' | 'disconnected' | 'negotiating' | 'unsupported' | 'unavailable'
   | 'ready' | 'arming' | 'streaming' | 'releasing' | 'fault';
 type Source = 'tci' | 'satp';
@@ -18,6 +22,7 @@ export interface ManagedPcmStatus {
   selected: boolean; phase: Phase; reason: string; pendingSettings: number;
   lastTransaction: string; source: Source; sentFrames: number;
   ownerPhase: string | null;
+  microphonePreparation: 'cold' | 'preparing' | 'ready' | 'unavailable';
   psCapability?: 'unavailable' | 'single' | 'measurement-only';
   psMode?: string;
   measurementLimitMs?: number | undefined;
@@ -85,6 +90,9 @@ export class ManagedPcmSession {
   private offered = 0n;
   private token: string | null = null;
   private capture: ManagedCapture | null = null;
+  private microphonePreparation: ManagedPcmStatus['microphonePreparation'] = 'cold';
+  private microphonePreparationVersion = 0;
+  private microphoneDeviceChanged = false;
   private requested: Source | null = null;
   private deadline = 0;
   private sequence = 0;
@@ -139,7 +147,7 @@ export class ManagedPcmSession {
     return { selected: this.selected, phase: this.phase, reason: this.reason,
       pendingSettings: this.awaitingQueue.length + this.transactions.size + this.settingsQueue.length,
       lastTransaction: this.lastTransaction, source: this.owner?.source ?? 'tci', sentFrames: this.sentFrames,
-      ownerPhase: this.owner?.phase ?? null, psCapability: this.psCapability, psMode: this.psMode,
+      ownerPhase: this.owner?.phase ?? null, microphonePreparation: this.microphonePreparation, psCapability: this.psCapability, psMode: this.psMode,
       measurementLimitMs: this.diagnostic?.maxMs, measurementFrequencyHz: this.diagnostic?.frequencyHz,
       measurementCaptureMode: this.diagnostic?.captureMode, measurementResult: this.measurementResult,
       measurementActive: this.measurement !== null, timingSupported: this.timingSupported,
@@ -153,9 +161,41 @@ export class ManagedPcmSession {
       canAcknowledgeFault: this.canAcknowledgeFault(), faultAcknowledgment: this.ackResult,
       generatedTrialsOnly: this.generatedOnly };
   }
-  private publish(): void { this.options.changed(this.status()); }
+  private publish(): void { this.prepareMicrophone(); this.options.changed(this.status()); }
+  private resetMicrophone(): void {
+    this.microphonePreparationVersion++;
+    this.microphonePreparation = 'cold'; this.microphoneDeviceChanged = false;
+    this.options.capture.dispose?.();
+  }
+  /** Device preparation is not a TX action. It retains no PCM and grants no
+   * output generation; every press still creates a fresh worklet and track. */
+  private prepareMicrophone(): void {
+    if (this.microphoneDeviceChanged && !this.requested) this.resetMicrophone();
+    const wanted = this.selected && this.operator && this.bridgeReady && this.supported && this.accepted
+      && this.owner?.source === 'tci' && !this.generatedOnly && this.psCapability !== 'measurement-only'
+      && !['disabled', 'disconnected', 'fault', 'unsupported', 'unavailable'].includes(this.phase);
+    if (!wanted) {
+      if (this.microphonePreparation !== 'cold') this.resetMicrophone();
+      return;
+    }
+    if (!this.options.capture.prepare || this.microphonePreparation !== 'cold') return;
+    const version = ++this.microphonePreparationVersion;
+    this.microphonePreparation = 'preparing';
+    void this.options.capture.prepare().then(() => {
+      if (version !== this.microphonePreparationVersion) return;
+      this.microphonePreparation = 'ready'; this.publish();
+    }, () => {
+      if (version !== this.microphonePreparationVersion) return;
+      this.microphonePreparation = 'unavailable'; this.publish();
+    });
+  }
+  refreshMicrophone(): void {
+    if (this.requested) { this.microphoneDeviceChanged = true; return; }
+    this.resetMicrophone(); this.publish();
+  }
   private invalidate(): void {
     this.version++; this.token = null; this.sequence = 0;
+    this.options.capture.cancel?.();
     const old = this.capture; this.capture = null; old?.close();
   }
   select(enabled: boolean): void {
@@ -175,7 +215,7 @@ export class ManagedPcmSession {
     this.publish(); return this.epoch;
   }
   disconnect(): void {
-    this.invalidate(); this.epoch++;
+    this.invalidate(); this.resetMicrophone(); this.epoch++;
     this.control = null; this.media = null; this.requested = null; this.deadline = 0;
     this.bridgeReady = false; this.operator = false; this.supported = false; this.accepted = false;
     this.owner = null; this.offered = 0n; this.transactions.clear(); this.awaitingQueue = []; this.terminal.clear();

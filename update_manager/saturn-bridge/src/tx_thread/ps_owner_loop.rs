@@ -749,6 +749,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         }
                         return Err(fault);
                     }
+                    if arm.trial.is_none() {
+                        let stamp = self.life.offline_owner().output_stamp()?;
+                        self.life.offline_owner().manual_ptt(stamp)?;
+                    }
                     self.cancel_handle().invalidate_settings();
                     self.discard_local();
                     if self.selected == TxAudioSource::Satp {

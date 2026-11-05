@@ -42,6 +42,21 @@ released before a new press can request TX. Press tokens are operator-specific,
 single-use, tied to the current shared settings boundary, and remain cancellable
 through the owner queue. An unused switch event does not release unrelated MOX.
 
+Ordinary managed PTT keys from a fresh authorized input stream, including
+silence. It does not wait for speech level or discard the opening voiced IQ
+while qualifying an audio-level detector. Source freshness, generation and
+release checks, native cleanup and backend FIFO preparation still apply.
+MeasurementOnly and generated diagnostic actions retain their separate signal
+qualification.
+
+With managed Browser Microphone selected for the connected operator, Saturn
+Remote prepares and keeps the microphone device open between PTT presses. The
+browser shows `mic ready`. No PCM is retained during RX: each authorized
+generation gets a new cloned track, AudioContext, worklet and history boundary.
+Release cancels pending/active generation capture; disconnect, role loss,
+faults and switching to SATP also dispose the prepared device. Changing the
+microphone during TX takes effect after release. Preparation never keys RF.
+
 Normal microphone gain defaults to 0 dB (unity). Explicit saved profiles and
 operator gain commands remain authoritative. Direct XDMA shared-owner MON uses
 the existing G2 headphone codec worker: completed processed TX IQ is copied to

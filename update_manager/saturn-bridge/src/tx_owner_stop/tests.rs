@@ -6,87 +6,101 @@ use saturn_bridge::puresignal::{tx_lifecycle::StopCause, Fence};
 use std::{net::UdpSocket, sync::atomic::AtomicBool, thread};
 
 #[test]
-fn am_silent_source_keys_both_adapters_but_absent_or_stale_source_does_not() {
+fn manual_ptt_keys_in_silence_but_requires_fresh_source_and_diagnostic_gates_remain() {
     use crate::radio_model::DemodMode;
     use crate::tci::ps_authorization::OperatorIngress;
-    for direct in [false, true] {
-        for source in [None, Some(0), Some(1_000_000_000)] {
-            let d = DirectFixture::with_key_clock();
-            d.fifo_ready();
-            let (session, _hp, _duc) = p2_separate_lanes();
-            let (mut iq, mut mic) = queues();
-            let mut m = model();
-            m.desired.mode = DemodMode::Am;
-            m.desired.tx_drive = 5;
-            let backend = if direct {
-                Backend::DirectXdma
-            } else {
-                Backend::P2
-            };
-            let mut owner = if direct {
-                OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap()
-            } else {
-                OwnerStopAdapter::p2(session, &m, &mut iq, &mut mic).unwrap()
-            };
-            owner.enable_offline_handoff(&m, 5).unwrap();
-            let r = request(backend, 1);
-            owner.begin_stop(r).unwrap();
-            let mut stopped = false;
-            for _ in 1..200 {
-                if owner.poll_stop(1).unwrap().is_some() {
-                    stopped = true;
-                    break;
+    for (mode, manual, iq_level) in [
+        (DemodMode::Am, false, 0.353553),
+        (DemodMode::Usb, true, 0.),
+        (DemodMode::Lsb, true, 0.),
+        (DemodMode::Usb, false, 0.), // diagnostic/unstamped zero IQ never keys
+    ] {
+        for direct in [false, true] {
+            for source in [None, Some(0), Some(1_000_000_000)] {
+                let d = DirectFixture::with_key_clock();
+                d.fifo_ready();
+                let (session, _hp, _duc) = p2_separate_lanes();
+                let (mut iq, mut mic) = queues();
+                let mut m = model();
+                m.desired.mode = mode;
+                m.desired.tx_drive = 5;
+                let backend = if direct {
+                    Backend::DirectXdma
+                } else {
+                    Backend::P2
+                };
+                let mut owner = if direct {
+                    OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap()
+                } else {
+                    OwnerStopAdapter::p2(session, &m, &mut iq, &mut mic).unwrap()
+                };
+                owner.enable_offline_handoff(&m, 5).unwrap();
+                let r = request(backend, 1);
+                owner.begin_stop(r).unwrap();
+                let mut stopped = false;
+                for _ in 1..200 {
+                    if owner.poll_stop(1).unwrap().is_some() {
+                        stopped = true;
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(1));
                 }
-                thread::sleep(Duration::from_millis(1));
-            }
-            assert!(stopped);
-            owner.cleanup_complete(1, r.fence).unwrap();
-            let ingress = OperatorIngress::fixture();
-            let credential = ingress
-                .receive(7, "trx:0,true", 0, r.fence, owner.ready_revision().unwrap())
-                .unwrap();
-            let action = owner.authorize(credential).unwrap();
-            owner.begin_arm(action, 1).unwrap();
-            let stamp = owner.output_stamp().unwrap();
-            if let Some(observed) = source {
-                owner.note_source(stamp, observed).unwrap();
-            }
-            let mut keyed = false;
-            for i in 0..35 {
-                let now = 1_001_000_000 + i * 1_000_000;
-                owner.set_test_key_time(now);
-                if !owner.has_iq_packet() {
-                    owner.enqueue_mic(stamp, now, &[0.; 512]).unwrap();
-                    assert!(owner.take_mic(stamp).unwrap().iter().all(|v| *v == 0.));
-                    owner.enqueue_iq(stamp, now, &[0.353553; 480]).unwrap();
+                assert!(stopped);
+                owner.cleanup_complete(1, r.fence).unwrap();
+                let ingress = OperatorIngress::fixture();
+                let credential = ingress
+                    .receive(7, "trx:0,true", 0, r.fence, owner.ready_revision().unwrap())
+                    .unwrap();
+                let action = owner.authorize(credential).unwrap();
+                owner.begin_arm(action, 1).unwrap();
+                let stamp = owner.output_stamp().unwrap();
+                if manual {
+                    owner.manual_ptt(stamp).unwrap();
                 }
-                if owner.poll_key(now).unwrap().is_some() {
-                    keyed = true;
-                    break;
+                if let Some(observed) = source {
+                    owner.note_source(stamp, observed).unwrap();
                 }
-            }
-            assert_eq!(
-                keyed,
-                source == Some(1_000_000_000),
-                "direct={direct} source={source:?}"
-            );
-            owner.begin_stop(request(backend, 2)).unwrap();
-            let mut stopped = false;
-            for _ in 0..200 {
-                if owner.poll_stop(2).unwrap().is_some() {
-                    stopped = true;
-                    break;
+                let mut keyed = false;
+                for i in 0..35 {
+                    let now = 1_001_000_000 + i * 1_000_000;
+                    owner.set_test_key_time(now);
+                    if !owner.has_iq_packet() {
+                        owner.enqueue_mic(stamp, now, &[0.; 512]).unwrap();
+                        assert!(owner.take_mic(stamp).unwrap().iter().all(|v| *v == 0.));
+                        owner.enqueue_iq(stamp, now, &[iq_level; 480]).unwrap();
+                    }
+                    if owner.poll_key(now).unwrap().is_some() {
+                        keyed = true;
+                        break;
+                    }
                 }
-                thread::sleep(Duration::from_millis(1));
-            }
-            assert!(stopped);
-            assert!(
-                owner.note_source(stamp, 240_000_000).is_err(),
-                "old source cannot cross cancellation"
-            );
-            assert!(owner.queues_empty());
-            if direct {
-                d.assert_off();
+                assert_eq!(
+                    keyed,
+                    source == Some(1_000_000_000) && (manual || mode == DemodMode::Am),
+                    "direct={direct} source={source:?}"
+                );
+                owner.begin_stop(request(backend, 2)).unwrap();
+                let mut stopped = false;
+                for _ in 0..200 {
+                    if owner.poll_stop(2).unwrap().is_some() {
+                        stopped = true;
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(1));
+                }
+                assert!(stopped);
+                assert!(
+                    owner.note_source(stamp, 240_000_000).is_err(),
+                    "old source cannot cross cancellation"
+                );
+                assert!(
+                    owner.manual_ptt(stamp).is_err(),
+                    "cancelled arm cannot grant manual PTT"
+                );
+                assert!(owner.queues_empty());
+                if direct {
+                    d.assert_off();
+                }
             }
         }
     }

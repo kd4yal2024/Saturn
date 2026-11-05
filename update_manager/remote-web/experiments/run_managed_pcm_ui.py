@@ -150,6 +150,20 @@ def main():
                     route.continue_()
             context.route('**/*', loopback_only)
             page = context.new_page()
+            page.add_init_script("""(() => {
+                window.managedMicrophoneDevices=[]; window.managedMicrophoneTracks=[];
+                const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+                navigator.mediaDevices.getUserMedia=async constraints => {
+                    const stream=await original(constraints);
+                    window.managedMicrophoneDevices.push(stream);
+                    window.managedMicrophoneTracks.push(...stream.getTracks());
+                    const clone=stream.clone.bind(stream);
+                    stream.clone=() => {
+                        const copy=clone(); window.managedMicrophoneTracks.push(...copy.getTracks()); return copy;
+                    };
+                    return stream;
+                };
+            })();""")
             page.on('request', lambda request: requests.append({'url': request.url, 'method': request.method}))
             page.set_default_timeout(7000)
             page.on('pageerror', lambda e: errors.append(str(e)))
@@ -177,7 +191,7 @@ def main():
                     tx:document.querySelector('#mox-btn').textContent
                 })).observe(document.querySelector('#managed-pcm-status'),{childList:true});
             }''')
-            assert page.locator('#managed-pcm-select').input_value() == 'legacy'
+            assert page.locator('#managed-pcm-select').input_value() in ('auto', 'legacy')
             assert not frames, 'default page must not open or arm a managed radio'
             page.evaluate('''() => {
                 const select = document.querySelector('#managed-pcm-select');
@@ -201,6 +215,10 @@ def main():
                 # EQ is a separate real UI message, not a batched parser input.
                 page.evaluate("document.querySelector('#tx-eq-enable-btn').click()")
                 page.wait_for_function("document.querySelector('#managed-pcm-status').dataset.phase === 'ready' && document.querySelector('#managed-pcm-transaction').textContent.includes('applied')", timeout=5000)
+                page.wait_for_function("document.querySelector('#managed-pcm-status').textContent.includes('mic ready')", timeout=5000)
+                acquisition_count = page.evaluate('window.managedMicrophoneDevices.length')
+                assert acquisition_count > 0
+                assert page.locator('#tx-mic-gain').input_value() == '-3'
                 for action in range(2):
                     page.evaluate("document.querySelector('#tx-arm-btn').click()")
                     page.wait_for_function("!document.querySelector('#mox-btn').disabled", timeout=2000)
@@ -208,10 +226,12 @@ def main():
                     page.wait_for_function("document.querySelector('#managed-pcm-status').dataset.phase === 'streaming'", timeout=5000)
                     page.wait_for_function("document.querySelector('#mox-btn').textContent.includes('ON')", timeout=5000)
                     page.wait_for_timeout(300)
+                    assert page.evaluate('window.managedMicrophoneDevices.length') == acquisition_count, 'PTT must reuse the prepared device, not reopen the microphone'
                     snapshots.append({'session': session, 'action': action,
                         'status': page.locator('#managed-pcm-status').text_content(),
                         'transaction': page.locator('#managed-pcm-transaction').text_content(),
-                        'tx': page.locator('#mox-btn').text_content()})
+                        'tx': page.locator('#mox-btn').text_content(),
+                        'microphoneDeviceAcquisitions': acquisition_count})
                     if session == 1 and action == 1:
                         # Actual socket loss while keyed. UI disconnect path is
                         # not replaced by a direct controller call.
@@ -261,16 +281,24 @@ def main():
                         })
                     page.evaluate("document.querySelector('#go-live-btn').click()")
                     page.wait_for_function("document.querySelector('#managed-pcm-status').dataset.phase === 'disconnected'", timeout=5000)
+                page.wait_for_function("window.managedMicrophoneTracks.every(track => track.readyState === 'ended')", timeout=3000)
                 page.wait_for_timeout(200)
                 if proxy:
                     proxy.wait_metrics(0, 0, f'connection {session}: all proxy slots released')
                 page.evaluate("window.dispatchEvent(new Event('online'))")
             assert not errors, errors
+            applied = {(e['requestId'], match.group(0)) for e in events
+                       if e['response']['opcode'] == 1
+                       for match in re.finditer(r'tx_config:0,[1-9][0-9]*,applied,[1-9][0-9]*;', e['response']['payloadData'])}
+            assert len(applied) >= 6, 'each connection must commit separate gain and EQ requests'
+            (output / 'settings-completions.count').write_text(str(len(applied)) + '\n')
+            write_json(output / 'settings-completions.json', {
+                'appliedCount': len(applied), 'reports': sorted(applied)})
             assert len(snapshots) == 6
             assert any(e['response']['opcode'] == 2 for e in frames), 'no actual PCM frames'
             assert all('opus' not in e['response']['payloadData'] for e in frames
                        if e['response']['opcode'] == 1 and 'tx_codec_caps:' in e['response']['payloadData'])
-            page.evaluate("document.querySelector('#header-setup-btn').click(); document.querySelector('#setup-tab-tx').click()")
+            page.evaluate("document.querySelector('#control-tab-ps').click()")
             page.locator('#setup-tx-puresignal-section').scroll_into_view_if_needed()
             page.screenshot(path=str(output / 'remote-ui.png'), full_page=True)
             if proxy:

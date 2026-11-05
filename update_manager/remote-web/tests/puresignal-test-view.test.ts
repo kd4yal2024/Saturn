@@ -7,7 +7,7 @@ const state = (): PsTestState => ({ connected: true, bridgeReady: true, connecti
   remoteClientRole: 'operator', txPhase: 'rx', moxRequested: false, txEnabled: false,
   pureSignalEnabled: false, pureSignalAutoAttenuate: true, pureSignalAttenuationDb: 0 });
 const managed = (): ManagedPcmStatus => ({ selected: false, phase: 'disabled', reason: 'Legacy TX selected',
-  pendingSettings: 0, lastTransaction: 'No managed settings result', source: 'tci', sentFrames: 0, ownerPhase: null });
+  pendingSettings: 0, lastTransaction: 'No managed settings result', source: 'tci', sentFrames: 0, ownerPhase: null, microphonePreparation: 'cold' });
 
 describe('PS tab presentation without invented measurements', () => {
   it('operator-controlled duration zero keeps Start available without relaxing role or RX gates', () => {

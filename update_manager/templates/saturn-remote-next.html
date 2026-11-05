@@ -18313,7 +18313,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
         if (status.committedWatts !== undefined && status.pendingSettings === 0 && status.phase === "ready") state.txDrive = status.committedWatts;
         const label = $("managed-pcm-status"), result = $("managed-pcm-transaction");
-        if (label) { label.textContent = `${status.phase}: ${status.reason}`; label.dataset.phase = status.phase; }
+        if (label) { label.textContent = `${status.phase}: ${status.reason}${status.microphonePreparation === "ready" ? " · mic ready" : status.microphonePreparation === "preparing" ? " · preparing mic" : ""}`; label.dataset.phase = status.phase; }
         if (result) result.textContent = `${status.lastTransaction} · ${status.pendingSettings} pending`;
         if (["disconnected", "disabled"].includes(status.phase) && $("setup-ps-attended")) $("setup-ps-attended").checked = false;
         if ((status.measurementActive || status.twoToneActive) && ["arming", "streaming"].includes(status.phase)) {
@@ -22336,6 +22336,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("setup-audio-input-select")?.addEventListener("change", () => {
         state.audioInputDeviceId = $("setup-audio-input-select").value;
         try { localStorage.setItem(AUDIO_INPUT_DEVICE_KEY, state.audioInputDeviceId); } catch {}
+        managedPcm.refreshMicrophone();
         logEvent(state.micCapturing
           ? "Microphone input device changed; takes effect on the next transmission"
           : "Microphone input device set");

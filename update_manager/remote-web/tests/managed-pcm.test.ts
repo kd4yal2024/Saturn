@@ -23,6 +23,64 @@ function setup(capture?: ManagedCaptureFactory) {
 }
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
+  it('prepares only the selected operator microphone without granting TX, and keeps it prepared across release', async () => {
+    const close = vi.fn(), prepare = vi.fn(async () => {}), dispose = vi.fn(), cancel = vi.fn();
+    const factory: ManagedCaptureFactory = Object.assign(async (token: string) => ({token, historyResetAtMs: 100, close}), {prepare, dispose, cancel});
+    const h = setup(factory);
+    expect(prepare).not.toHaveBeenCalled(); h.ready(); await settle();
+    expect(prepare).toHaveBeenCalledOnce(); expect(h.session.status().microphonePreparation).toBe('ready');
+    expect(h.control).toEqual(['tx_codec_caps:0,pcm;']); expect(h.media).toHaveLength(0);
+    expect(h.session.arm('tci')).toBe(true); h.offer(); await settle();
+    const previous = dispose.mock.calls.length;
+    h.session.release(); expect(close).toHaveBeenCalledOnce();
+    expect(dispose).toHaveBeenCalledTimes(previous); expect(prepare).toHaveBeenCalledOnce();
+    h.session.disconnect(); expect(dispose).toHaveBeenCalledTimes(previous+1);
+    expect(h.session.status().microphonePreparation).toBe('cold');
+  });
+  it('cannot let an old preparation completion make a reconnected session ready', async () => {
+    const completions: (() => void)[] = [];
+    const factory: ManagedCaptureFactory = Object.assign(vi.fn(), {
+      prepare: vi.fn(() => new Promise<void>(resolve => completions.push(resolve))), dispose: vi.fn(),
+    });
+    const h = setup(factory); h.ready();
+    expect(h.session.status().microphonePreparation).toBe('preparing');
+    const epoch = h.session.connect(s => h.control.push(s), f => h.media.push(f));
+    h.session.setOperator(true);
+    h.session.text('saturn_tx_media_caps:psg1,pcm,owner1,transactions1;tx_codec_accept:0,pcm;ready;saturn_tx_owner:shared,1,ReadyOff,2,11,tci,true,none;', epoch);
+    expect(completions).toHaveLength(2);
+    completions[0]!(); await settle(); expect(h.session.status().microphonePreparation).toBe('preparing');
+    completions[1]!(); await settle(); expect(h.session.status().microphonePreparation).toBe('ready');
+    expect(factory).not.toHaveBeenCalled(); expect(h.media).toHaveLength(0);
+  });
+  it.each(['satp', 'operator-loss', 'fault'])('stops prepared microphone on %s', async how => {
+    const factory: ManagedCaptureFactory = Object.assign(vi.fn(), {prepare: vi.fn(async () => {}), dispose: vi.fn()});
+    const h = setup(factory); h.ready(); await settle();
+    const dispose = vi.mocked(factory.dispose!); const count = dispose.mock.calls.length;
+    if (how === 'satp') h.ready('satp', 2);
+    else if (how === 'operator-loss') h.session.setOperator(false);
+    else h.session.text('tx_fault:0,shared_config,InvalidConfig;', h.epoch);
+    expect(dispose.mock.calls.length).toBeGreaterThan(count);
+    expect(h.session.status().microphonePreparation).toBe('cold'); expect(h.media).toHaveLength(0);
+  });
+  it('defers a device change during TX until release, then prepares the new device without rearming', async () => {
+    const prepare = vi.fn(async () => {}), dispose = vi.fn();
+    const factory: ManagedCaptureFactory = Object.assign(async (token: string) => ({token, historyResetAtMs: 100, close: vi.fn()}), {prepare, dispose});
+    const h = setup(factory); h.ready(); await settle();
+    expect(h.session.arm('tci')).toBe(true); h.offer(); await settle();
+    const before = dispose.mock.calls.length;
+    h.session.refreshMicrophone(); expect(dispose).toHaveBeenCalledTimes(before);
+    h.session.release(); await settle();
+    expect(dispose).toHaveBeenCalledTimes(before+1); expect(prepare).toHaveBeenCalledTimes(2);
+    expect(h.control.filter(c => c === 'trx:0,true;')).toHaveLength(1);
+  });
+  it('does not retry permission failure or key automatically', async () => {
+    const prepare = vi.fn(async () => { throw new Error('permission denied'); });
+    const factory: ManagedCaptureFactory = Object.assign(vi.fn(), {prepare, dispose: vi.fn()});
+    const h = setup(factory); h.ready(); await settle();
+    expect(h.session.status().microphonePreparation).toBe('unavailable');
+    h.advance(100); h.advance(100); await settle(); expect(prepare).toHaveBeenCalledOnce();
+    expect(h.control).toEqual(['tx_codec_caps:0,pcm;']); expect(h.media).toHaveLength(0);
+  });
   it('uses a rear-switch token with the same generation and capture lifecycle', async () => {
     const h=setup(); h.ready();
     expect(h.session.arm('tci','17')).toBe(true);

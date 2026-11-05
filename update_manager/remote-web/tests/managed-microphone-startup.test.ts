@@ -9,9 +9,9 @@ describe('managed microphone startup observations', () => {
     const stop = vi.fn(), disconnect = vi.fn(), close = vi.fn();
     vi.stubGlobal('performance', {now: () => now});
     vi.stubGlobal('isSecureContext', true);
-    vi.stubGlobal('navigator', {mediaDevices: {getUserMedia: vi.fn(async () => {
-      now = 600; return {getTracks: () => [{stop}]};
-    })}});
+    const stream = () => ({getTracks: () => [{stop, readyState: 'live'}], clone: () => stream()}) as unknown as MediaStream;
+    const getUserMedia = vi.fn(async () => { now += 600; return stream(); });
+    vi.stubGlobal('navigator', {mediaDevices: {getUserMedia}});
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:managed-test');
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
     vi.stubGlobal('AudioContext', class {
@@ -27,7 +27,7 @@ describe('managed microphone startup observations', () => {
       connect = vi.fn(); disconnect = disconnect;
       constructor() { node = this; }
     });
-    return {stop, close, frame: (samples: unknown = new Float32Array(512)) => {
+    return {stop, close, getUserMedia, stream, frame: (samples: unknown = new Float32Array(512)) => {
       now += 30;
       node.port.onmessage?.({data: {samples, oldestFrame: 48000}});
     }};
@@ -52,4 +52,64 @@ describe('managed microphone startup observations', () => {
     capture.close(); f.frame();
     expect(timing).not.toHaveBeenCalled();
   });
+  it('prepares the device without delivering PCM, then creates fresh graphs without reopening it', async () => {
+    const f = fixture(), deliver = vi.fn(), timings: MicrophoneStartupTiming[] = [];
+    const factory = microphoneManagedCapture(() => '', vi.fn(), t => timings.push(t));
+    await factory.prepare!();
+    expect(f.getUserMedia).toHaveBeenCalledOnce(); expect(deliver).not.toHaveBeenCalled();
+    const first = await factory('first', deliver, vi.fn());
+    f.frame(); first.close();
+    const second = await factory('second', deliver, vi.fn());
+    f.frame(); second.close();
+    expect(f.getUserMedia).toHaveBeenCalledOnce();
+    expect(timings.map(t => t.acquisitionMs)).toEqual([0, 0]);
+    expect(first.historyResetAtMs).toBeLessThan(second.historyResetAtMs);
+    expect(deliver).toHaveBeenCalledTimes(2);
+    factory.dispose!(); expect(f.stop).toHaveBeenCalledTimes(3);
+  });
+  it('cancels a generation waiting for device acquisition while retaining preparation for the next arm', async () => {
+    const f = fixture(); let resolve!: (s: MediaStream) => void;
+    f.getUserMedia.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    const factory = microphoneManagedCapture(() => '', vi.fn());
+    const old = factory('old', vi.fn(), vi.fn());
+    factory.cancel!(); resolve(f.stream());
+    await expect(old).rejects.toThrow('Microphone capture cancelled');
+    const fresh = await factory('fresh', vi.fn(), vi.fn());
+    expect(f.getUserMedia).toHaveBeenCalledOnce();
+    fresh.close(); factory.dispose!();
+  });
+  it('discards late device acquisition after disconnect instead of warming another session', async () => {
+    const f = fixture(); let resolve!: (s: MediaStream) => void;
+    f.getUserMedia.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    const factory = microphoneManagedCapture(() => '', vi.fn());
+    const opening = factory.prepare!(); factory.dispose!(); resolve(f.stream());
+    await expect(opening).rejects.toThrow('Microphone preparation cancelled');
+    expect(f.stop).toHaveBeenCalledOnce();
+    await factory.prepare!(); expect(f.getUserMedia).toHaveBeenCalledTimes(2);
+    factory.dispose!();
+  });
+  it('cancels graph setup before a delayed context resume and prevents stale delivery', async () => {
+    const f = fixture(); let resume!: () => void;
+    vi.stubGlobal('AudioContext', class {
+      async resume() { await new Promise<void>(r => { resume = r; }); }
+      close = f.close;
+    });
+    const factory = microphoneManagedCapture(() => '', vi.fn()), deliver = vi.fn();
+    const opening = factory('old', deliver, vi.fn());
+    for (let i=0; i<8; i++) await Promise.resolve();
+    factory.cancel!(); resume();
+    await expect(opening).rejects.toThrow('Microphone capture cancelled');
+    expect(deliver).not.toHaveBeenCalled(); expect(f.close).toHaveBeenCalledOnce();
+    factory.dispose!();
+  });
+
+  it('replaces the prepared device and gives the new generation a valid capture revision', async () => {
+    const f = fixture(); let id = 'first';
+    const factory = microphoneManagedCapture(() => id, vi.fn());
+    await factory.prepare!(); id = 'second'; await factory.prepare!();
+    expect(f.getUserMedia).toHaveBeenCalledTimes(2); expect(f.stop).toHaveBeenCalledOnce();
+    const capture = await factory('new-device', vi.fn(), vi.fn());
+    expect(capture.token).toBe('new-device'); capture.close(); factory.dispose!();
+  });
+
 });

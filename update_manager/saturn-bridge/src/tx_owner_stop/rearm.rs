@@ -26,6 +26,7 @@ pub(super) struct Rearm {
     iq_spans: VecDeque<(usize, u64)>, // at most one partial tail plus one native block
     pending_mic_observed: Option<u64>,
     keyed: bool,
+    manual_ptt: Option<OutputStamp>,
     direct_stage: crate::xdma_tx_radio::DirectKeyStage,
     model: Option<RadioModel>,
     max_watts: u8,
@@ -48,6 +49,7 @@ impl Rearm {
         self.iq_spans.clear();
         self.pending_mic_observed = None;
         self.keyed = false;
+        self.manual_ptt = None;
         self.stimulus = Default::default();
         self.direct_stage = Default::default();
     }
@@ -313,6 +315,13 @@ impl OwnerStopAdapter<'_> {
         }
         Ok(())
     }
+    /// Set only after the scheduling owner admits an ordinary operator arm.
+    /// The validated current output stamp cannot authorize another generation.
+    pub(crate) fn manual_ptt(&mut self, stamp: OutputStamp) -> Result<(), Fault> {
+        self.validate_stamp(stamp)?;
+        self.rearm.manual_ptt = Some(stamp);
+        Ok(())
+    }
     pub(crate) fn enqueue_mic(
         &mut self,
         stamp: OutputStamp,
@@ -458,13 +467,37 @@ impl OwnerStopAdapter<'_> {
         }
         let iq: Vec<f32> = self.pending_iq.iter().take(480).copied().collect();
         let peak = iq.iter().fold(0.0_f32, |p, v| p.max(v.abs()));
-        if !self
-            .rearm
-            .qualification
-            .as_mut()
-            .unwrap()
-            .observe(can_key_rf(true, peak, qualified, two_tone))
-        {
+        // Manual PTT is not VOX. A fresh, authorized source may key in
+        // silence, before the first syllable. Native recreation, generation,
+        // source-age and FIFO checks still apply; zero fill cannot establish
+        // source liveness. Diagnostic actions keep their signal qualification.
+        let manual = self.rearm.manual_ptt == Some(stamp)
+            && matches!(
+                self.rearm
+                    .model
+                    .as_ref()
+                    .ok_or(Fault::InvalidConfig)?
+                    .desired
+                    .mode,
+                crate::radio_model::DemodMode::Usb
+                    | crate::radio_model::DemodMode::Lsb
+                    | crate::radio_model::DemodMode::Dsb
+                    | crate::radio_model::DemodMode::DigU
+                    | crate::radio_model::DemodMode::DigL
+                    | crate::radio_model::DemodMode::Am
+                    | crate::radio_model::DemodMode::Sam
+                    | crate::radio_model::DemodMode::Fm
+            );
+        let ready = if manual {
+            source_recent
+        } else {
+            self.rearm
+                .qualification
+                .as_mut()
+                .unwrap()
+                .observe(can_key_rf(true, peak, qualified, two_tone))
+        };
+        if !ready {
             self.pending_iq.drain(..480);
             self.rearm.consume_iq(480);
             return Ok(None);

@@ -3410,9 +3410,27 @@ mod native {
                     active_generations, 6,
                     "each fresh PCM action reaches actual native/output eligibility"
                 );
+                let expected_configurations = if actual_ui {
+                    // The current UI also restores ordinary profiles. Match
+                    // every actual committed transaction, rather than a stale
+                    // fixed count from the earlier minimal UI.
+                    let applied: u64 =
+                        std::fs::read_to_string(format!("{result}/settings-completions.count"))
+                            .unwrap()
+                            .trim()
+                            .parse()
+                            .unwrap();
+                    assert!(
+                        applied >= 6,
+                        "separate gain and EQ settings on every reconnect"
+                    );
+                    applied + 1 // initial owner bootstrap
+                } else {
+                    7
+                };
                 assert_eq!(
-                    r.counters.configurations, 7,
-                    "every reconnect settings pair committed"
+                    r.counters.configurations, expected_configurations,
+                    "all browser-applied settings correspond to native owner commits"
                 );
                 assert_eq!(r.life.status().primary_fault, None);
             }
