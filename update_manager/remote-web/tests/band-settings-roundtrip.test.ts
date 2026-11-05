@@ -171,6 +171,19 @@ describe('automatic band operating settings', () => {
     checked = true; change(); expect(f.api.currentRadioPrefs().pureSignalMode).toBe('single');
   });
 
+  it('keeps loaded memories intact during disconnected startup/profile saves while allowing explicit offline edits', () => {
+    const f = fixture(); f.state.connected = false; f.state.bridgeReady = false;
+    const memory = normalizeBandMemory({ '40m': { frequency: 7_250_000,
+      radioPrefs: { mode: 'LSB', txDrive: 60 } } });
+    f.state.bandMemory = memory;
+    Object.assign(f.state, { vfoA: 14_200_000, dds: 14_200_000, mode: 'LSB', txDrive: 60 });
+    f.api.scheduleRemoteSettingsSave(); f.tasks.at(-1)!();
+    expect(f.state.bandMemory).toEqual(memory);
+    expect(f.state.bandMemory['20m']).toBeUndefined();
+    f.state.txDrive = 25; f.api.saveRadioPrefs();
+    expect(normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!))['20m']?.radioPrefs.txDrive).toBe(25);
+  });
+
   it('builds shifted filters, attenuation, squelch and gate commands without keying', () => {
     const prefs = normalizeRadioPrefs({ mode: 'USB', filterLow: 100, filterHigh: 3000,
       rxFilterShiftHz: 250, rxAttenuationDb: 12, rxSsqlEnabled: true, rxSsqlThreshold: 42,

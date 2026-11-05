@@ -15615,7 +15615,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       remoteSettingsSaveTimer = window.setTimeout(() => {
         remoteSettingsSaveTimer = null;
-        rememberCurrentBandSettings();
+        // Startup profiles load before the first radio snapshot. Their stored
+        // band map must not be replaced using the page's placeholder VFO.
+        if (state.connected && state.bridgeReady) rememberCurrentBandSettings();
         void saveRemoteSettingsToServer(false);
       }, Math.max(0, Number(delayMs) || 0));
     }
@@ -24062,7 +24064,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.moxRequested || state.txEnabled || state.twoToneEnabled) {
           sendTxShutdownIfPossible(true);
         }
-        rememberCurrentBandSettings();
+        if (state.connected && state.bridgeReady) rememberCurrentBandSettings();
         void saveRemoteSettingsToServer(false);
         void releaseWakeLock();
       });
