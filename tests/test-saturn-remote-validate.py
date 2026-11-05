@@ -75,7 +75,14 @@ def usage_loop():
             with open(os.path.join(d, "stat"), "w") as h:
                 h.write(f"{pid} (chromium) S {PARENTS.get(pid, 1)} 0 0 0 0 0 0 0 {int(age)} 0 {ticks} {ticks // 5} 0 0\n")
             if not SC.get("no_smaps") and not SC.get("no_usage"):
-                with open(os.path.join(d, "smaps_rollup"), "w") as h: h.write(f"00400000-ffffffff ---p 00000000 00:00 0 [rollup]\nRss: 1 kB\nPss: {pss_kb} kB\n")
+                # A real procfs read is not an in-place userspace rewrite.
+                # Publish a complete snapshot so the watchdog never samples
+                # our temporary empty file and conservatively substitutes RSS.
+                temporary = os.path.join(d, "smaps_rollup.next")
+                with open(temporary, "w") as h:
+                    time.sleep(SC.get("pss_write_pause_s", 0))
+                    h.write(f"00400000-ffffffff ---p 00000000 00:00 0 [rollup]\nRss: 1 kB\nPss: {pss_kb} kB\n")
+                os.replace(temporary, os.path.join(d, "smaps_rollup"))
         host = os.path.join(W, "proc")
         with open(os.path.join(host, "stat"), "w") as h:
             h.write(f"cpu  {int(100 * age)} 0 {int(20 * age)} {int(180 * age)} {int(100 * age)} 0 0 0 0 0\n")
@@ -95,6 +102,9 @@ def fake_tree():
         with open(os.path.join(d, "cmdline"), "wb") as h:
             h.write(b"\0".join(a.encode() for a in args) + b"\0" if kind == "browser" else " ".join(args).encode() + b"\0")
         with open(os.path.join(d, "status"), "w") as h: h.write(f"Name:\tchromium\nSeccomp:\t{seccomp}\nNoNewPrivs:\t1\n" + ("" if SC.get("no_usage") else f"VmRSS:\t{SC.get('rss_kb', 50000)} kB\n"))
+        if not SC.get("no_smaps") and not SC.get("no_usage"):
+            with open(os.path.join(d, "smaps_rollup"), "w") as h:
+                h.write(f"00400000-ffffffff ---p 00000000 00:00 0 [rollup]\nRss: 1 kB\nPss: {SC.get('pss_kb', 40000)} kB\n")
         parents[pid] = ppid
     parents = {}
     entry(me, os.getppid(), "browser", 0)
@@ -1302,6 +1312,18 @@ class MemoryWatchdogTests(RigCase):
     def pi(self, **kwargs):
         props = dict(NO_MEMORY_CONTROLLER_PROPERTIES, **kwargs.pop("unit_props", {}))
         return self.rig(isolation="systemd", memory_controller=False, unit_props=props, **kwargs)
+
+    def test_slow_fake_memory_publication_keeps_a_steady_browser_peak(self):
+        rig = self.pi(scenario={"pss_write_pause_s": 0.05})
+        rig.start()
+        self.assertEqual(rig.wait_ready()[0], 0)
+        time.sleep(0.8)  # sample across multiple deliberately slow publications
+        rig.stop()
+        self.assertEqual(rig.finish(), 0)
+        memory = rig.status()["isolation"]["memory"]
+        self.assertEqual(memory["peak_source"], "validator sampling (proportional set size)")
+        self.assertEqual(int(memory["peak_bytes"]), 4 * 40000 * 1024)
+        self.assertCleanedUp(rig)
 
     def test_a_browser_within_the_cap_is_enforced_by_the_watchdog_and_the_evidence_says_so(self):
         rig = self.pi()
