@@ -34,6 +34,8 @@ enum Case {
     ReceiveSpectrum,
     ShutdownActive,
     RearPtt,
+    RearPttBypass,
+    MicrophoneBypass,
     AcquisitionFailure,
     SatpBindFailure,
     AttachmentFailure,
@@ -45,6 +47,12 @@ enum Case {
     StimulusClient,
 }
 impl Case {
+    fn rear_ptt(self) -> bool {
+        matches!(self, Self::RearPtt | Self::RearPttBypass)
+    }
+    fn microphone_bypass(self) -> bool {
+        matches!(self, Self::RearPttBypass | Self::MicrophoneBypass)
+    }
     fn native_two_tone(self) -> bool {
         matches!(
             self,
@@ -360,6 +368,8 @@ impl RuntimeIo for Io {
             let mut gap_tail_packets = None;
             let mut gap_completed = false;
             let mut auto_active_since: Option<Instant> = None;
+            let mut bypass_active_since: Option<Instant> = None;
+            let mut bypass_packets = 0;
             while !joined.load(Ordering::Acquire) {
                 assert!(
                     Instant::now() < end,
@@ -373,7 +383,7 @@ impl RuntimeIo for Io {
                 }
                 if let Some(c) = &mut client {
                     c.drain();
-                    if case == Case::RearPtt {
+                    if case.rear_ptt() {
                         for (down, id) in std::mem::take(&mut c.hardware_ptt) {
                             if down {
                                 c.text(&format!("saturn_ptt:0,{id};"));
@@ -420,6 +430,9 @@ impl RuntimeIo for Io {
                         }
                         return 0;
                     }
+                }
+                if case.microphone_bypass() && status.phase == Phase::Active {
+                    bypass_active_since.get_or_insert_with(Instant::now);
                 }
                 if case == Case::AutoSustained && status.phase == Phase::Active {
                     auto_active_since.get_or_insert_with(Instant::now);
@@ -552,7 +565,14 @@ impl RuntimeIo for Io {
                             stage = 11;
                             continue;
                         }
-                        if matches!(case, Case::AutoCorrection | Case::AutoSustained) {
+                        if case.microphone_bypass() {
+                            // Exactly the normal voice profile that exposed the
+                            // accidental MeasurementOnly unity-gain requirement.
+                            client
+                                .as_mut()
+                                .unwrap()
+                                .text("tx_mic_gain:0,-12;tx_puresignal:0,false;");
+                        } else if matches!(case, Case::AutoCorrection | Case::AutoSustained) {
                             assert!(ingress.auto_mode_caps().is_some());
                             client.as_mut().unwrap().text("tx_puresignal_mode:0,auto;");
                         } else {
@@ -572,7 +592,7 @@ impl RuntimeIo for Io {
                             }
                         }) =>
                     {
-                        if case == Case::RearPtt {
+                        if case.rear_ptt() {
                             hardware_down.store(true, Ordering::Release);
                         } else {
                             client.as_mut().unwrap().text("trx:0,true;");
@@ -581,7 +601,16 @@ impl RuntimeIo for Io {
                     }
                     3 | 5
                         if status.phase == Phase::Active
-                            && status.correction_applied == Some(true)
+                            && if case.microphone_bypass() {
+                                // Real tagged microphone input and completed backend
+                                // output must continue through this generation.
+                                status.correction_applied != Some(true)
+                                    && output_packets.load(Ordering::Acquire) > bypass_packets + 30
+                                    && bypass_active_since
+                                        .is_some_and(|t| t.elapsed() >= Duration::from_millis(100))
+                            } else {
+                                status.correction_applied == Some(true)
+                            }
                             && (case != Case::AutoSustained
                                 || auto_active_since
                                     .is_some_and(|t| t.elapsed() >= Duration::from_secs(15))) =>
@@ -609,11 +638,13 @@ impl RuntimeIo for Io {
                                 case,
                                 Case::ShutdownActive
                                     | Case::RearPtt
+                                    | Case::RearPttBypass
+                                    | Case::MicrophoneBypass
                                     | Case::AutoCorrection
                                     | Case::AutoSustained
                             )
                         {
-                            if case == Case::RearPtt {
+                            if case.rear_ptt() {
                                 hardware_down.store(false, Ordering::Release);
                             } else {
                                 client.as_mut().unwrap().text("trx:0,false;");
@@ -636,9 +667,11 @@ impl RuntimeIo for Io {
                                 && status.cleanup_completed_ns.is_some()
                         );
                         wave = Wave::new();
+                        bypass_active_since = None;
+                        bypass_packets = output_packets.load(Ordering::Acquire);
                         auto_active_since = None;
                         client.as_mut().unwrap().native_calibrations.clear();
-                        if case == Case::RearPtt {
+                        if case.rear_ptt() {
                             // A delayed old press must not consume or fault the
                             // next physical generation after completed cleanup.
                             client.as_mut().unwrap().text("saturn_ptt:0,1;");
@@ -714,6 +747,8 @@ impl RuntimeIo for Io {
                     case,
                     Case::ShutdownActive
                         | Case::RearPtt
+                        | Case::RearPttBypass
+                        | Case::MicrophoneBypass
                         | Case::AutoCorrection
                         | Case::AutoSustained
                 ) {
@@ -726,7 +761,7 @@ impl RuntimeIo for Io {
         }));
     }
     fn before_receive(&mut self, acquisition: &mut Acquisition) -> Result<bool, Box<dyn Error>> {
-        if self.case == Case::RearPtt && self.hardware_sent.elapsed() >= Duration::from_millis(5) {
+        if self.case.rear_ptt() && self.hardware_sent.elapsed() >= Duration::from_millis(5) {
             let down = self.hardware_down.load(Ordering::Acquire);
             if let Some(files) = &self.files {
                 files.write(0x4000, u32::from(down));
@@ -1070,6 +1105,8 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
             case,
             Case::ShutdownActive
                 | Case::RearPtt
+                | Case::RearPttBypass
+                | Case::MicrophoneBypass
                 | Case::AutoCorrection
                 | Case::AutoSustained
                 | Case::BaselineTwoTone
@@ -1360,6 +1397,15 @@ fn actual_run_inner_receive_release_rearm_active_shutdown_both_backends() {
 fn actual_run_inner_rear_ptt_release_rearm_both_backends() {
     for direct in [false, true] {
         exercise(direct, Case::RearPtt);
+    }
+}
+#[test]
+#[ignore = "serial real-WDSP PS-off microphone and rear PTT; loopback/files only"]
+fn actual_run_inner_ps_off_mic_and_rear_ptt_both_backends() {
+    for direct in [false, true] {
+        for case in [Case::RearPttBypass, Case::MicrophoneBypass] {
+            exercise(direct, case);
+        }
     }
 }
 #[test]

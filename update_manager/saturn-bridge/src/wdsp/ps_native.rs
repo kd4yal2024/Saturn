@@ -244,24 +244,40 @@ impl FullNative {
     }
 }
 impl NativePs for FullNative {
-    fn measurement_only_guard(&mut self) -> Result<(), Fault> {
+    fn bypass_tx_guard(&mut self) -> Result<(), Fault> {
         #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
         {
             self.verify_generator()?;
             unsafe extern "C" {
                 fn saturn_shared_measurement_flags() -> i32;
             }
+            let expected_gain = if self.measurement_gain {
+                1.0
+            } else {
+                panel_gain_for_volume_db(self.model.desired.tx_mic_gain_db)
+            };
             if !self.config.is_some_and(|(c, _)| !c.enabled && !c.automatic)
                 || self.automatic
                 || self.cleanup.is_some()
-                || !self.measurement_gain
-                || self.mic_gain_readback() != 1.0
+                || self.mic_gain_readback() != expected_gain
                 || unsafe { saturn_shared_measurement_flags() } != 0
                 || self.info()[14] != 0
             {
                 return Err(Fault::NativeFailure);
             }
             return Ok(());
+        }
+        #[cfg(any(not(feature = "managed-puresignal"), saturn_bridge_stub_native))]
+        Err(Fault::NativeUnverified)
+    }
+    fn measurement_only_guard(&mut self) -> Result<(), Fault> {
+        self.bypass_tx_guard()?;
+        #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+        {
+            if !self.measurement_gain || self.mic_gain_readback() != 1.0 {
+                return Err(Fault::NativeFailure);
+            }
+            Ok(())
         }
         #[cfg(any(not(feature = "managed-puresignal"), saturn_bridge_stub_native))]
         Err(Fault::NativeUnverified)
@@ -513,6 +529,89 @@ impl Drop for FullNative {
 #[cfg(all(test, feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
 mod stimulus_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "serial real WDSP ordinary microphone bypass; no devices or RF"]
+    fn full_native_bypass_keeps_normal_mic_gain_and_measurement_remains_explicit() {
+        unsafe extern "C" {
+            fn fftw_set_timelimit(seconds: f64);
+        }
+        unsafe {
+            fftw_set_timelimit(0.01);
+        }
+        for gain_db in [-12., 0., 6.] {
+            let mut model = RadioModel::new(6, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+            model.desired.tx_mic_gain_db = gain_db;
+            let mut native = FullNative::matched(&model).unwrap();
+            native.configure(timing_config(0.)).unwrap();
+            assert_eq!(
+                native.mic_gain_readback(),
+                panel_gain_for_volume_db(gain_db)
+            );
+            assert!(!native.measurement_gain);
+            native
+                .bypass_tx_guard()
+                .expect("ordinary PS-off microphone must not require measurement gain");
+            unsafe {
+                SetTXAPanelGain1(WDSP_TX_CHANNEL, 0.0);
+            }
+            assert_eq!(native.bypass_tx_guard(), Err(Fault::NativeFailure));
+            unsafe {
+                SetTXAPanelGain1(WDSP_TX_CHANNEL, panel_gain_for_volume_db(gain_db));
+            }
+            native.bypass_tx_guard().unwrap();
+            assert_eq!(native.measurement_only_guard(), Err(Fault::NativeFailure));
+            assert_eq!(
+                native.mic_gain_readback(),
+                panel_gain_for_volume_db(gain_db)
+            );
+            native.measurement_mic_gain(true).unwrap();
+            native.measurement_only_guard().unwrap();
+            native.measurement_mic_gain(false).unwrap();
+            native.bypass_tx_guard().unwrap();
+            assert_eq!(native.measurement_only_guard(), Err(Fault::NativeFailure));
+            assert_eq!(
+                native.mic_gain_readback(),
+                panel_gain_for_volume_db(gain_db)
+            );
+            let mut peak = 0f32;
+            for block in 0..64 {
+                let input: Vec<f32> = (0..512)
+                    .map(|i| {
+                        (std::f32::consts::TAU * 700. * (block * 512 + i) as f32 / 48000.).sin()
+                            * 0.2
+                    })
+                    .collect();
+                peak = native
+                    .render(&input)
+                    .unwrap()
+                    .iter()
+                    .fold(peak, |a, b| a.max(b.abs()));
+            }
+            assert!(
+                peak > 0.001,
+                "normal PS-off voice must produce nonzero IQ at {gain_db} dB"
+            );
+            assert_eq!(native.information().unwrap()[14], 0);
+            let mut enabled = timing_config(0.);
+            enabled.enabled = true;
+            native.configure(enabled).unwrap();
+            assert_eq!(native.bypass_tx_guard(), Err(Fault::NativeFailure));
+            native.configure(timing_config(0.)).unwrap();
+            native.begin_cleanup().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while native.cleanup_step().unwrap() != CleanupProgress::Complete {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            native.bypass_tx_guard().unwrap();
+            assert_eq!(native.measurement_only_guard(), Err(Fault::NativeFailure));
+            assert_eq!(
+                native.mic_gain_readback(),
+                panel_gain_for_volume_db(gain_db)
+            );
+        }
+    }
 
     fn timing_config(delay: f64) -> Config {
         Config {

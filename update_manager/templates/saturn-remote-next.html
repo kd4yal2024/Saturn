@@ -18300,6 +18300,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txMicLevel = peak; state.txMicLevelAt = performance.now();
       }),
       changed: status => {
+        if (status.selected) {
+          // The managed owner creates its own microphone graph. Reflect that
+          // capture in the existing meters without starting a Legacy graph.
+          state.micCapturing = status.phase === "streaming" && status.source === "tci"
+            && !status.measurementActive && !status.twoToneActive;
+          if (!state.micCapturing) {
+            state.txMicLevel = null; state.txMicLevelVisual = 0; state.txMicLevelAt = 0;
+          }
+        }
         if (status.committedWatts !== undefined && status.pendingSettings === 0 && status.phase === "ready") state.txDrive = status.committedWatts;
         const label = $("managed-pcm-status"), result = $("managed-pcm-transaction");
         if (label) { label.textContent = `${status.phase}: ${status.reason}`; label.dataset.phase = status.phase; }

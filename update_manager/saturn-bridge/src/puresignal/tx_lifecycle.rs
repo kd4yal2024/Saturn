@@ -523,7 +523,7 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
         {
             return Err(Fault::InvalidConfig);
         }
-        self.c_mut().measurement_guard()?;
+        self.c_mut().bypass_guard()?;
         self.begin_fresh_action(action, now, true)
     }
     pub fn fresh_measurement_action(

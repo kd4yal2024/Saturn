@@ -55,6 +55,12 @@ impl Config {
 /// quantized value. reset must quiesce native asynchronous work/old curves before
 /// admitting a new epoch; a mock implementation does NOT prove that contract.
 pub trait NativePs {
+    /// Ordinary uncorrected TX verifies fitting/correction off while retaining
+    /// the operator's microphone profile. Unknown ports retain the stricter
+    /// measurement check until they implement a matching native readback.
+    fn bypass_tx_guard(&mut self) -> Result<(), Fault> {
+        self.measurement_only_guard()
+    }
     /// Explicit readback from the matched native owner. The default refuses:
     /// a disabled configuration alone cannot certify fitting/correction off.
     fn measurement_only_guard(&mut self) -> Result<(), Fault> {
@@ -223,6 +229,10 @@ impl<N: NativePs> Controller<N> {
     #[cfg(feature = "offline-puresignal-tx-lifecycle")]
     pub(super) fn measurement_guard(&mut self) -> Result<(), Fault> {
         self.native.measurement_only_guard()
+    }
+    #[cfg(feature = "offline-puresignal-tx-lifecycle")]
+    pub(super) fn bypass_guard(&mut self) -> Result<(), Fault> {
+        self.native.bypass_tx_guard()
     }
     #[cfg(feature = "offline-puresignal-tx-lifecycle")]
     pub(super) fn lifecycle_native(&mut self) -> &mut N {
