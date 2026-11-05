@@ -156,6 +156,21 @@ describe('automatic band operating settings', () => {
     expect(normalizeRadioPrefs({ pureSignalMode: 'auto', pureSignalEnabled: false }).pureSignalEnabled).toBe(true);
   });
 
+  it('the legacy PS enable checkbox updates the same saved band mode as the PS tab', () => {
+    const f = fixture();
+    f.state.preferredPureSignalMode = 'auto'; f.state.pureSignalEnabled = true;
+    const start = template.indexOf('$("setup-tx-puresignal-enabled").addEventListener("change", () => {')
+      + '$("setup-tx-puresignal-enabled").addEventListener("change", () => {'.length;
+    const end = template.indexOf('\n      });', start);
+    let checked = false;
+    const change = runInNewContext(`() => {${template.slice(start, end)}\n}`, {
+      ...f.context, ...f.api, $: () => ({ checked }), pureSignalPanelView: () => ({ canCalibrate: true }),
+      syncSetupMenuFields: vi.fn(), managedPcm: { preparePureSignal: vi.fn() },
+    });
+    change(); expect(f.api.currentRadioPrefs().pureSignalMode).toBe('off');
+    checked = true; change(); expect(f.api.currentRadioPrefs().pureSignalMode).toBe('single');
+  });
+
   it('builds shifted filters, attenuation, squelch and gate commands without keying', () => {
     const prefs = normalizeRadioPrefs({ mode: 'USB', filterLow: 100, filterHigh: 3000,
       rxFilterShiftHz: 250, rxAttenuationDb: 12, rxSsqlEnabled: true, rxSsqlThreshold: 42,
