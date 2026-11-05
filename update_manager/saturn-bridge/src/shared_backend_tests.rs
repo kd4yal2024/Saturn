@@ -154,7 +154,7 @@ impl RuntimeIo for Io {
         model: &Arc<Mutex<RadioModel>>,
     ) -> Result<(Radio, Acquisition), Box<dyn Error>> {
         self.state_model = Some(model.clone());
-        if self.direct && self.case == Case::MicrophoneBypass {
+        if self.direct && matches!(self.case, Case::MicrophoneBypass | Case::ReceiveMeter) {
             let mut m = model.lock_unpoisoned();
             m.desired.tx_monitor_available = true;
             m.desired.rx_headphones_available = true;
@@ -472,6 +472,9 @@ impl RuntimeIo for Io {
                             c.text("saturn_display:spectrum,1024,50;");
                         }
                         c.text("iq_start:0;audio_start:0;");
+                        if direct && case == Case::ReceiveMeter {
+                            c.text("rx_headphones:0,true;");
+                        }
                         client = Some(c);
                         connected_at = Some(Instant::now());
                         stage = 1;
@@ -1143,6 +1146,18 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
             "actual runtime final P2 command clears RUN and MOX"
         );
     }
+    if direct && case == Case::ReceiveMeter {
+        assert!(
+            io.files
+                .as_ref()
+                .unwrap()
+                .radio
+                .rx_headphone_observation()
+                .0
+                > 0,
+            "actual RX runtime must submit audio to the enabled headphone worker"
+        );
+    }
     if direct && case == Case::MicrophoneBypass {
         let (frames, peak, stops) = io.files.as_ref().unwrap().radio.monitor_observation();
         assert!(
@@ -1554,4 +1569,96 @@ fn actual_run_inner_wan_spectrum_receive_both_backends() {
     for direct in [false, true] {
         exercise(direct, Case::ReceiveSpectrum);
     }
+}
+
+#[test]
+#[ignore = "serial real WDSP RX audio to ordinary-file headphone adapter; no hardware"]
+fn shared_rx_headphones_receive_processed_audio_without_browser_subscription_and_mute_for_tx() {
+    unsafe extern "C" {
+        fn fftw_set_timelimit(seconds: f64);
+    }
+    unsafe {
+        fftw_set_timelimit(0.01);
+    }
+    let mut m = RadioModel::new(6, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+    m.desired.rx_headphones_available = true;
+    m.desired.rx_volume_db = -9.;
+    let config = BridgeConfig {
+        tci_bind_addr: "127.0.0.1:0".parse().unwrap(),
+        ..BridgeConfig::default()
+    };
+    let (front, _) =
+        TciFrontend::reserve_shared_startup(&config, Arc::new(Mutex::new(m.clone())), false)
+            .unwrap();
+    assert!(!front.media_demand().audio_stream_enabled);
+    let radio = DirectFixture::new();
+    let mut dsp = WdspRxEngine::new(&m).unwrap();
+    // A real-sample 1 kHz tone in complex RX IQ: USB must produce nonzero audio.
+    let iq: Vec<f32> = (0..12_288)
+        .flat_map(|n| {
+            [
+                (0.1 * (std::f64::consts::TAU * 1000. * n as f64 / 384000.).cos()) as f32,
+                0.,
+            ]
+        })
+        .collect();
+    let feed = |dsp: &mut WdspRxEngine, m: &RadioModel, transmitting| {
+        for _ in 0..20 {
+            publish_receive(
+                &front,
+                dsp,
+                &iq,
+                384000,
+                m,
+                Some(radio.radio.as_ref()),
+                transmitting,
+                None,
+                None,
+            );
+        }
+    };
+    feed(&mut dsp, &m, false);
+    assert_eq!(
+        radio.radio.rx_headphone_observation().0,
+        0,
+        "default off must stay silent"
+    );
+    m.desired.rx_headphones_enabled = true;
+    feed(&mut dsp, &m, false);
+    let (frames, peak, volume) = radio.radio.rx_headphone_observation();
+    assert!(
+        frames > 0 && peak > 1e-5,
+        "real processed audio reaches worker: frames={frames} peak={peak}"
+    );
+    assert_eq!(
+        volume, -9.,
+        "pass raw samples and one explicit RX volume to the existing worker"
+    );
+    feed(&mut dsp, &m, true);
+    assert_eq!(
+        radio.radio.rx_headphone_observation().0,
+        frames,
+        "RX audio is not submitted during TX"
+    );
+    m.desired.rx_headphones_enabled = false;
+    feed(&mut dsp, &m, false);
+    assert_eq!(
+        radio.radio.rx_headphone_observation().0,
+        frames,
+        "Off stops RX submissions"
+    );
+    m.desired.rx_headphones_enabled = true;
+    feed(&mut dsp, &m, false);
+    assert!(
+        radio.radio.rx_headphone_observation().0 > frames,
+        "On resumes RX after TX/off"
+    );
+    let resumed = radio.radio.rx_headphone_observation().0;
+    m.desired.rx_headphones_available = false;
+    feed(&mut dsp, &m, false);
+    assert_eq!(
+        radio.radio.rx_headphone_observation().0,
+        resumed,
+        "unavailable local playback must not receive audio"
+    );
 }

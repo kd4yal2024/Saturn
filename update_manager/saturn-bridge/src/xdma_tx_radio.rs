@@ -1013,6 +1013,8 @@ pub(crate) struct DirectXdmaTxRadio {
     test_key_clock: Option<Mutex<(Instant, Instant)>>,
     #[cfg(test)]
     monitor_observation: Mutex<(u64, f32, u64)>,
+    #[cfg(test)]
+    rx_headphone_observation: Mutex<(u64, f32, f64)>,
 }
 
 impl DirectXdmaTxRadio {
@@ -1043,6 +1045,8 @@ impl DirectXdmaTxRadio {
             test_key_clock: None,
             #[cfg(test)]
             monitor_observation: Mutex::new((0, 0., 0)),
+            #[cfg(test)]
+            rx_headphone_observation: Mutex::new((0, 0., 0.)),
         })
     }
 
@@ -1065,7 +1069,21 @@ impl DirectXdmaTxRadio {
             .rf_tx_qualified
     }
 
+    #[cfg(test)]
+    pub(crate) fn rx_headphone_observation(&self) -> (u64, f32, f64) {
+        *self.rx_headphone_observation.lock().unwrap()
+    }
+
     pub(crate) fn push_rx_headphone_audio(&self, audio: &[f32], volume_db: f64) {
+        #[cfg(test)]
+        {
+            let mut seen = self.rx_headphone_observation.lock().unwrap();
+            seen.0 += 1;
+            seen.1 = audio
+                .iter()
+                .fold(seen.1, |peak, value| peak.max(value.abs()));
+            seen.2 = volume_db;
+        }
         self.monitor.push_rx(audio, volume_db);
     }
 

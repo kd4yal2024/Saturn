@@ -62,6 +62,11 @@ operator gain commands remain authoritative. Direct XDMA shared-owner MON uses
 the existing G2 headphone codec worker: completed processed TX IQ is copied to
 its bounded queue, and stopping invalidates queued monitor audio. This is local
 headphone monitoring, not browser sidetone or an additional RF output path.
+The shared RX loop also feeds processed 48 kHz stereo audio to that same worker,
+independently of browser audio subscriptions. The Headphones switch controls
+this rear-jack RX feed; RX audio is suppressed during TX and resumes on return
+to RX. Samples reach the worker before volume scaling, with RX volume applied
+once by the existing codec worker.
 
 For PTT startup diagnosis, the operator log records managed microphone device
 acquisition, graph readiness and first-frame times from one browser monotonic

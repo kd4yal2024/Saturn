@@ -393,6 +393,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                                 &frame.iq_samples,
                                 config.ddc0_sample_rate_khz as u32 * 1000,
                                 &snapshot,
+                                None,
                                 transmitting,
                                 display_iq_packetizer.as_mut(),
                                 spectrum_feed_active.then_some(spectrum_ring.as_ref()),
@@ -456,6 +457,10 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                             &iq,
                             384000,
                             &snapshot,
+                            match &radio {
+                                Radio::Direct(r) => Some(r.as_ref()),
+                                _ => None,
+                            },
                             transmitting,
                             display_iq_packetizer.as_mut(),
                             spectrum_feed_active.then_some(spectrum_ring.as_ref()),
@@ -609,6 +614,7 @@ fn publish_receive(
     iq: &[f32],
     rate: u32,
     model: &RadioModel,
+    local_audio: Option<&DirectXdmaTxRadio>,
     transmitting: bool,
     display_packetizer: Option<&mut crate::xdma_backend::DirectIqPacketizer>,
     spectrum_ring: Option<&crate::display_spectrum::LatestIqRing>,
@@ -633,7 +639,17 @@ fn publish_receive(
     if !transmitting {
         let audio_rate = dsp.audio_sample_rate_hz();
         dsp.process_iq(iq, |samples| {
-            front.publish_audio_frame(audio_rate, samples, model.desired.rx_volume_db)
+            // Same best-effort codec worker as Legacy Direct XDMA. Feed the
+            // processed stereo audio independently of browser subscriptions.
+            if audio_rate == 48_000
+                && model.desired.rx_headphones_available
+                && model.desired.rx_headphones_enabled
+            {
+                if let Some(radio) = local_audio {
+                    radio.push_rx_headphone_audio(samples, model.desired.rx_volume_db);
+                }
+            }
+            front.publish_audio_frame(audio_rate, samples, model.desired.rx_volume_db);
         });
     }
 }

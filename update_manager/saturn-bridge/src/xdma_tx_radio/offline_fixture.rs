@@ -106,6 +106,7 @@ impl DirectFixture {
             )),
             test_key_clock: None,
             monitor_observation: Mutex::new((0, 0., 0)),
+            rx_headphone_observation: Mutex::new((0, 0., 0.)),
         });
         Self {
             radio,
