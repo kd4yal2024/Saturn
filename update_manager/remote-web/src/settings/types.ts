@@ -23,6 +23,13 @@ export type PhonePanels = {
 };
 
 export type RadioPrefs = {
+  rxAttenuationDb: number;
+  rxFilterShiftHz: number;
+  rxSsqlEnabled: boolean;
+  rxSsqlThreshold: number;
+  rxHeadphonesEnabled: boolean;
+  txMonitorEnabled: boolean;
+  txMonitorLevelDb: number;
   sampleRate: number;
   rxAdc: number;
   rxAntenna: number;
@@ -64,6 +71,7 @@ export type RadioPrefs = {
   txPhaseRotatorAuto: boolean;
   txPhaseRotatorCornerHz: number;
   pureSignalEnabled: boolean;
+  pureSignalMode: 'off' | 'single' | 'auto';
   pureSignalAutoAttenuate: boolean;
   pureSignalAttenuationDb: number;
   txMeterMode: TxMeterMode;

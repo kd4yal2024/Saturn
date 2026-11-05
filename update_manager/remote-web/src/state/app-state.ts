@@ -109,6 +109,10 @@ export interface AppState {
   txMonitorLevelDb: number;
   rxHeadphonesSupported: boolean;
   rxHeadphonesEnabled: boolean;
+  preferredPureSignalMode?: 'off' | 'single' | 'auto';
+  preferredRxHeadphones?: boolean;
+  preferredTxMonitor?: boolean;
+  preferredTxMonitorLevelDb?: number;
   txMeterMode: string;
   micStream: MediaStream | null;
   micNode: { ctx: AudioContext; source: MediaStreamAudioSourceNode; proc: AudioNode; silentGain: GainNode } | null;

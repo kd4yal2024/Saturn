@@ -1,6 +1,7 @@
 import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 import type { RadioPrefs, DisplayPrefs } from '../settings/types';
 import {
+  normalizeRadioPrefs,
   clampSampleRateHz,
   clampRxAdc,
   clampRxAntenna,
@@ -44,6 +45,17 @@ import {
 import { clampDemodMode } from '../radio/passband';
 
 export interface RadioPrefsSource {
+  rxAttenuationDb?: number;
+  rxFilterShiftHz?: number;
+  rxSsqlEnabled?: boolean;
+  rxSsqlThreshold?: number;
+  rxHeadphonesEnabled?: boolean;
+  txMonitorEnabled?: boolean;
+  txMonitorLevelDb?: number;
+  preferredPureSignalMode?: 'off' | 'single' | 'auto';
+  preferredRxHeadphones?: boolean;
+  preferredTxMonitor?: boolean;
+  preferredTxMonitorLevelDb?: number;
   sampleRate: number;
   rxAdc: number;
   rxAntenna: number;
@@ -133,7 +145,23 @@ export interface DisplayPrefsSource {
 }
 
 export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
+  const additional = normalizeRadioPrefs({
+    rxAttenuationDb: s.rxAttenuationDb ?? 0,
+    rxFilterShiftHz: s.rxFilterShiftHz ?? 0,
+    rxSsqlEnabled: s.rxSsqlEnabled ?? false,
+    rxSsqlThreshold: s.rxSsqlThreshold ?? 0,
+    rxHeadphonesEnabled: s.preferredRxHeadphones ?? s.rxHeadphonesEnabled ?? false,
+    txMonitorEnabled: s.preferredTxMonitor ?? s.txMonitorEnabled ?? false,
+    txMonitorLevelDb: s.preferredTxMonitorLevelDb ?? s.txMonitorLevelDb ?? -30,
+  });
   return {
+    rxAttenuationDb: additional.rxAttenuationDb,
+    rxFilterShiftHz: additional.rxFilterShiftHz,
+    rxSsqlEnabled: additional.rxSsqlEnabled,
+    rxSsqlThreshold: additional.rxSsqlThreshold,
+    rxHeadphonesEnabled: additional.rxHeadphonesEnabled,
+    txMonitorEnabled: additional.txMonitorEnabled,
+    txMonitorLevelDb: additional.txMonitorLevelDb,
     sampleRate: clampSampleRateHz(s.sampleRate),
     rxAdc: clampRxAdc(s.rxAdc),
     rxAntenna: clampRxAntenna(s.rxAntenna),
@@ -174,7 +202,8 @@ export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
     txPhaseRotatorEnabled: Boolean(s.txPhaseRotatorEnabled),
     txPhaseRotatorAuto: Boolean(s.txPhaseRotatorAuto),
     txPhaseRotatorCornerHz: clampTxPhaseRotatorCornerHz(s.txPhaseRotatorCornerHz),
-    pureSignalEnabled: Boolean(s.pureSignalEnabled),
+    pureSignalEnabled: s.preferredPureSignalMode ? s.preferredPureSignalMode !== 'off' : Boolean(s.pureSignalEnabled),
+    pureSignalMode: s.preferredPureSignalMode ?? (s.pureSignalEnabled ? 'single' : 'off'),
     pureSignalAutoAttenuate: Boolean(s.pureSignalAutoAttenuate),
     pureSignalAttenuationDb: clampPureSignalAttenuationDb(s.pureSignalAttenuationDb),
     txMeterMode: normalizeTxMeterMode(s.txMeterMode),
@@ -185,7 +214,7 @@ export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
     txTwoToneInvertLsb: Boolean(s.txTwoToneInvertLsb),
     txTwoToneDelayMs: clampTwoToneDelayMs(s.txTwoToneDelayMs),
     txNoiseGateEnabled: Boolean(s.txNoiseGateEnabled),
-    txNoiseGateThresholdDb: Math.max(-80, Math.min(0, Number(s.txNoiseGateThresholdDb) || -30)),
+    txNoiseGateThresholdDb: Math.max(-80, Math.min(0, Number.isFinite(Number(s.txNoiseGateThresholdDb)) ? Number(s.txNoiseGateThresholdDb) : -30)),
     txDexpEnabled: Boolean(s.txDexpEnabled),
     txDexpThresholdDb: clampTxDexpThresholdDb(s.txDexpThresholdDb),
     txDexpExpansionDb: clampTxDexpExpansionDb(s.txDexpExpansionDb),

@@ -12628,7 +12628,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       rememberCurrentBandSettings();
       setFrequency(targetHz, true, { rememberBand: false });
       if (applyBandMemoryForFrequency(targetHz)) {
-        sendCurrentRadioPrefsToBridge();
+        sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
       }
       resumeRxMediaAfterBandChange("operations memory");
       persistLocalSettingsFallback(currentRemoteSettings());
@@ -12652,7 +12652,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!entries.length) {
         const empty = document.createElement("div");
         empty.className = "operations-empty";
-        empty.textContent = "No band memories saved yet. Save the current band or change bands to create one.";
+        empty.textContent = "Band settings save automatically when you adjust controls or change bands.";
         grid.appendChild(empty);
         return;
       }
@@ -13381,7 +13381,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
       setFrequency(targetHz, true, { rememberBand: false });
       if (applyBandMemoryForFrequency(targetHz) || modeChanged) {
-        sendCurrentRadioPrefsToBridge();
+        sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
       }
       resumeRxMediaAfterBandChange("band recall");
       persistLocalSettingsFallback(currentRemoteSettings());
@@ -13667,9 +13667,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function currentRadioPrefs() {
       const prefs = _next.radioPrefsFromState(state);
       prefs.rxAdc = REMOTE_FIXED_RX_ADC;
-      return state.txOpusOverrideEnabled === true
-        ? txOpusLabCleanRadioPrefs(prefs)
-        : prefs;
+      // Generated tests are actions, never a recalled operating preference.
+      prefs.twoToneEnabled = false;
+      return prefs;
     }
 
     // Appearance only: do not change signal processing, range, zoom or cadence.
@@ -13720,6 +13720,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function applyRadioPrefsObject(prefs) {
       _next.applyRadioPrefsToState(prefs, state);
       state.rxAdc = REMOTE_FIXED_RX_ADC;
+      // An explicit saved audio profile wins over URL lab defaults.
+      if (prefs && Object.prototype.hasOwnProperty.call(prefs, "txEqBands")) state.txOpusProcessingUserEdited = true;
+      if (prefs && Object.prototype.hasOwnProperty.call(prefs, "cfcBands")) state.txOpusCfcUserEdited = true;
     }
 
     function resetPeakHoldBins(length = state.latestBins?.length || 1024) {
@@ -13787,22 +13790,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return TX_OPUS_NOISE_GATE_THRESHOLD_DB;
       }
       return txOpusLabClampNoiseGateThreshold(state.txNoiseGateThresholdDb);
-    }
-
-    function txOpusLabCleanRadioPrefs(prefs) {
-      if (!prefs || typeof prefs !== "object") {
-        return prefs;
-      }
-      return {
-        ...prefs,
-        txEqEnabled: Boolean(prefs.txEqEnabled),
-        txEqBands: sanitizeEqBands(prefs.txEqBands),
-        cfcEnabled: TX_OPUS_CFC,
-        cfcPrecomp: txOpusLabDesiredCfcPrecomp(),
-        cfcBands: txOpusLabDesiredCfcBands(),
-        txNoiseGateEnabled: Boolean(prefs.txNoiseGateEnabled),
-        txNoiseGateThresholdDb: txOpusLabClampNoiseGateThreshold(prefs.txNoiseGateThresholdDb),
-      };
     }
 
     function txOpusLabBandsAreFlat(bands) {
@@ -13989,47 +13976,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
-    function scrubTxOpusLabBandMemory() {
-      if (state.txOpusOverrideEnabled !== true || !state.bandMemory || typeof state.bandMemory !== "object") {
-        return false;
-      }
-      const desiredCfcPrecomp = txOpusLabDesiredCfcPrecomp();
-      const desiredCfcBands = txOpusLabDesiredCfcBands();
-      let changed = false;
-      Object.values(state.bandMemory).forEach((entry) => {
-        if (!entry || typeof entry !== "object") {
-          return;
-        }
-        const prefs = entry.radioPrefs;
-        if (!prefs || typeof prefs !== "object") {
-          return;
-        }
-        const dirty = Boolean(
-          Boolean(prefs.cfcEnabled) !== TX_OPUS_CFC ||
-          Math.abs((Number(prefs.cfcPrecomp) || 0) - desiredCfcPrecomp) > 0.001 ||
-          !txOpusLabBandsMatch(prefs.cfcBands, desiredCfcBands)
-        );
-        if (dirty) {
-          entry.radioPrefs = txOpusLabCleanRadioPrefs(prefs);
-          changed = true;
-        }
-      });
-      return changed;
-    }
-
     function currentBandMemoryEntry() {
       return {
         frequency: activeVfoFrequency() || state.dds,
-        radioPrefs: state.txOpusOverrideEnabled === true
-          ? txOpusLabCleanRadioPrefs(currentRadioPrefs())
-          : currentRadioPrefs(),
+        radioPrefs: currentRadioPrefs(),
         displayPrefs: currentDisplayPrefs(),
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
       };
     }
 
     function rememberCurrentBandSettings() {
-      if (state.applyingBandMemory) return;
+      if (receiveOnlyValidationSession || state.applyingBandMemory) return;
+      if (state.connected && state.remoteClientRole !== "operator") return;
       const key = bandKeyForFrequency(activeVfoFrequency() || state.dds);
       if (!key) return;
       state.bandMemory[key] = currentBandMemoryEntry();
@@ -14044,7 +14002,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.applyingBandMemory = true;
       try {
         applyRadioPrefsObject(memory.radioPrefs);
-        applyTxOpusLabTxProcessingDefaults("band memory");
         applyDisplayPrefsObject(memory.displayPrefs);
         if (Number.isFinite(Number(memory.displayZoom))) {
           state.displayZoom = Math.max(1, Math.min(32, Number(memory.displayZoom)));
@@ -14096,6 +14053,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function saveRadioPrefs() {
+      rememberCurrentBandSettings();
       try {
         localStorage.setItem(RADIO_PREFS_KEY, JSON.stringify(currentRadioPrefs()));
       } catch (error) {
@@ -15657,6 +15615,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       remoteSettingsSaveTimer = window.setTimeout(() => {
         remoteSettingsSaveTimer = null;
+        rememberCurrentBandSettings();
         void saveRemoteSettingsToServer(false);
       }, Math.max(0, Number(delayMs) || 0));
     }
@@ -15870,9 +15829,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const activeIndex = state.activeVfo === "B" ? 1 : 0;
       const shouldRememberBand = options.rememberBand !== false;
       const shouldSend = options.send !== false;
-      if (shouldRememberBand && bandKeyForFrequency(activeFrequency) !== bandKeyForFrequency(nextHz)) {
-        rememberCurrentBandSettings();
-      }
+      const crossedBand = shouldRememberBand && bandKeyForFrequency(activeFrequency) !== bandKeyForFrequency(nextHz);
+      if (crossedBand) rememberCurrentBandSettings();
+      const recalledBand = crossedBand && applyBandMemoryForFrequency(nextHz);
       shiftDisplayForCenterChange(nextHz);
       if (activeIndex === 0) state.vfoA = nextHz;
       else state.vfoB = nextHz;
@@ -15889,6 +15848,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (shouldSend) {
         sendTci(`vfo:0,${activeIndex},${nextHz};dds:0,${nextHz};${syncBoth ? `vfo:0,${activeIndex === 0 ? 1 : 0},${nextHz};` : ""}`);
       }
+      if (shouldSend && recalledBand) sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
+      if (shouldSend && shouldRememberBand) scheduleRemoteSettingsSave();
     }
 
     function tuneBy(stepHz) {
@@ -15899,6 +15860,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.panadapterTunePendingHz = null;
       state.panadapterTuneLastSentAt = performance.now();
       sendTci(`vfo:0,${state.activeVfo === "B" ? 1 : 0},${hz};dds:0,${hz};`);
+      scheduleRemoteSettingsSave();
     }
 
     function schedulePanadapterTuneSend(hz) {
@@ -15920,7 +15882,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function applyPanadapterTune(clientX, element, immediate = false, clientY = null) {
       const nextHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(clientX, element, clientY));
       if (nextHz === activeVfoFrequency() && !immediate) return nextHz;
+      const crossedBand = bandKeyForFrequency(activeVfoFrequency()) !== bandKeyForFrequency(nextHz);
+      if (crossedBand) rememberCurrentBandSettings();
       setFrequency(nextHz, false, { send: false, rememberBand: false, lightweight: true });
+      if (crossedBand && applyBandMemoryForFrequency(nextHz)) {
+        sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
+      }
       if (immediate) {
         if (state.panadapterTuneTimer) { clearTimeout(state.panadapterTuneTimer); state.panadapterTuneTimer = null; }
         sendPanadapterTuneNow(nextHz);
@@ -18681,7 +18648,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       sendTci(_next.buildTwoToneCommands(state).join(""));
     }
 
-    function sendCurrentRadioPrefsToBridge(prefs = currentRadioPrefs()) {
+    function restoreLocalAudioPreferences(prefs = currentRadioPrefs()) {
+      if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator") return;
+      if (state.rxHeadphonesSupported) sendTci(`rx_headphones:0,${Boolean(prefs.rxHeadphonesEnabled)};`);
+      if (state.txMonitorSupported) {
+        sendTci(`tx_monitor_level:0,${prefs.txMonitorLevelDb};`);
+        sendTci(`tx_monitor:0,${Boolean(prefs.txMonitorEnabled)};`);
+      }
+    }
+
+    function sendCurrentRadioPrefsToBridge(prefs = currentRadioPrefs(), { restoreTx = false } = {}) {
       if (!state.connected || !state.bridgeReady) {
         return;
       }
@@ -18689,10 +18665,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (generatedTxSourceActive() && !managedPcmSelected()) {
         sendTci("tx_two_tone:0,false;");
       }
-      const commands = _next.buildAllRadioPrefsCommands(prefs);
+      const commands = _next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false }).map(command =>
+        managedPcmSelected() && prefs.pureSignalMode === "auto" && command.startsWith("tx_puresignal:")
+          ? "tx_puresignal_mode:0,auto;" : command);
       // Managed TX reads committed host settings; reconnect must not replay
       // stale TX preferences or an unreviewed generated-source configuration.
-      sendTci((managedPcmSelected() ? commands.filter(c => !_next.managedSettingsMessage(c)) : commands).join(""));
+      sendTci((managedPcmSelected() && !restoreTx ? commands.filter(c => !_next.managedSettingsMessage(c)) : commands).join(""));
+      restoreLocalAudioPreferences(prefs);
     }
 
     function rxAudioStartCommand() {
@@ -22508,16 +22487,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("setup-ps-off").addEventListener("click", () => {
         if (managedPcm.status().measurementActive) { managedPcm.release(); return; }
-        if (pureSignalPanelView().canConfigure && managedPcm.preparePureSignal(false)) state.pureSignalEnabled = false;
+        if (pureSignalPanelView().canConfigure && managedPcm.preparePureSignal(false)) {
+          state.pureSignalEnabled = false; state.preferredPureSignalMode = "off"; saveRadioPrefs();
+        }
       });
       $("setup-ps-calibrate").addEventListener("click", () => {
-        if (pureSignalPanelView().canCalibrate && managedPcm.preparePureSignal(true)) state.pureSignalEnabled = true;
+        if (pureSignalPanelView().canCalibrate && managedPcm.preparePureSignal(true)) {
+          state.pureSignalEnabled = true; state.preferredPureSignalMode = "single"; saveRadioPrefs();
+        }
       });
       $("setup-ps-adaptation").addEventListener("change", () => {
         const mode = $("setup-ps-adaptation").value;
         if (!pureSignalPanelView().canConfigure || !["off", "single", "auto"].includes(mode)
           || (mode === "auto" && !pureSignalPanelView().canAutoAdaptation)) { syncPureSignalPanel(); return; }
-        if (managedPcm.preparePureSignalMode(mode)) state.pureSignalEnabled = mode !== "off";
+        if (managedPcm.preparePureSignalMode(mode)) {
+          state.pureSignalEnabled = mode !== "off"; state.preferredPureSignalMode = mode; saveRadioPrefs();
+        }
       });
       $("setup-ps-attended").addEventListener("change", updateUi);
       $("setup-ps-measurement-kind").addEventListener("change", () => {
@@ -22730,6 +22715,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("rx-ssql-btn").addEventListener("click", () => {
         state.rxSsqlEnabled = !state.rxSsqlEnabled;
         updateUi();
+        saveRadioPrefs();
         sendTci(`rx_ssql:0,${state.rxSsqlEnabled};`);
       });
       $("rx-ssql-threshold").addEventListener("input", () => {
@@ -22737,6 +22723,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("rx-ssql-readout").textContent = `SQL ${Math.round(state.rxSsqlThreshold)}`;
       });
       $("rx-ssql-threshold").addEventListener("change", () => {
+        saveRadioPrefs();
         sendTci(`rx_ssql_threshold:0,${Math.round(state.rxSsqlThreshold)};`);
       });
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
@@ -23044,7 +23031,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
           setFrequency(targetHz, true, { rememberBand: false });
           if (applyBandMemoryForFrequency(targetHz) || modeChanged) {
-            sendCurrentRadioPrefsToBridge();
+            sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
           }
           resumeRxMediaAfterBandChange("band button");
           persistLocalSettingsFallback(currentRemoteSettings());
@@ -23264,13 +23251,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("satp-hide-key").addEventListener("click", clearSatpKey);
       $("tx-mon-btn").addEventListener("click", () => {
         if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator" || !state.txMonitorSupported) return;
-        // Wait for bridge acknowledgement; never persist/re-arm MON on reconnect.
-        sendTci(`tx_monitor:0,${!state.txMonitorEnabled};`);
+        state.preferredTxMonitor = !state.txMonitorEnabled;
+        saveRadioPrefs();
+        sendTci(`tx_monitor:0,${state.preferredTxMonitor};`);
       });
       $("rx-headphones-btn").addEventListener("click", () => {
         if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator" || !state.rxHeadphonesSupported) return;
-        // Do not persist or optimistically arm local hardware output.
-        sendTci(`rx_headphones:0,${!state.rxHeadphonesEnabled};`);
+        state.preferredRxHeadphones = !state.rxHeadphonesEnabled;
+        saveRadioPrefs();
+        sendTci(`rx_headphones:0,${state.preferredRxHeadphones};`);
       });
       $("tx-mon-level").addEventListener("input", () => {
         $("tx-mon-level-readout").textContent = `${$("tx-mon-level").value} dB`;
@@ -23278,6 +23267,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-mon-level").addEventListener("change", () => {
         if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator" || !state.txMonitorSupported) return;
         const level = Math.max(-60, Math.min(-6, Number($("tx-mon-level").value)));
+        state.txMonitorLevelDb = level;
+        state.preferredTxMonitorLevelDb = level;
+        saveRadioPrefs();
         sendTci(`tx_monitor_level:0,${level};`);
       });
       $("tx-drive").addEventListener("input", () => {
@@ -23973,10 +23965,6 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         const savedBandMemory = localStorage.getItem(BAND_MEMORY_KEY);
         if (savedBandMemory) {
           state.bandMemory = sanitizeBandMemory(JSON.parse(savedBandMemory));
-          if (scrubTxOpusLabBandMemory()) {
-            localStorage.setItem(BAND_MEMORY_KEY, JSON.stringify(state.bandMemory));
-            logEvent("TX audio scrubbed stale local band-memory CFC processing");
-          }
         }
       } catch (e) { console.warn("band memory load failed", e); }
       if (!state.wsUrl) {
@@ -24073,6 +24061,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.moxRequested || state.txEnabled || state.twoToneEnabled) {
           sendTxShutdownIfPossible(true);
         }
+        rememberCurrentBandSettings();
         void saveRemoteSettingsToServer(false);
         void releaseWakeLock();
       });

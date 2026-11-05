@@ -7,6 +7,7 @@ import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
  */
 
 import {
+  normalizeRadioPrefs,
   clampSampleRateHz,
   clampRxAdc,
   clampRxAntenna,
@@ -50,6 +51,16 @@ import { clampDemodMode, clampFilterLowHz, clampFilterHighHz } from '../radio/pa
 
 /** Minimal state shape for radio prefs application. */
 export interface RadioPrefsTarget {
+  rxAttenuationDb?: number;
+  rxSsqlEnabled?: boolean;
+  rxSsqlThreshold?: number;
+  rxHeadphonesEnabled?: boolean;
+  txMonitorEnabled?: boolean;
+  txMonitorLevelDb?: number;
+  preferredPureSignalMode?: 'off' | 'single' | 'auto';
+  preferredRxHeadphones?: boolean;
+  preferredTxMonitor?: boolean;
+  preferredTxMonitorLevelDb?: number;
   sampleRate: number;
   rxAdc: number;
   rxAntenna: number;
@@ -194,6 +205,24 @@ export function applyRadioPrefsToState(
 ): void {
   if (!prefs || typeof prefs !== 'object') return;
 
+  const additional = normalizeRadioPrefs({
+    rxAttenuationDb: Number(prefs.rxAttenuationDb ?? state.rxAttenuationDb ?? 0),
+    rxFilterShiftHz: Number(prefs.rxFilterShiftHz ?? 0),
+    rxSsqlEnabled: Boolean(prefs.rxSsqlEnabled ?? state.rxSsqlEnabled),
+    rxSsqlThreshold: Number(prefs.rxSsqlThreshold ?? state.rxSsqlThreshold ?? 0),
+    rxHeadphonesEnabled: Boolean(prefs.rxHeadphonesEnabled ?? state.preferredRxHeadphones ?? state.rxHeadphonesEnabled),
+    txMonitorEnabled: Boolean(prefs.txMonitorEnabled ?? state.preferredTxMonitor ?? state.txMonitorEnabled),
+    txMonitorLevelDb: Number(prefs.txMonitorLevelDb ?? state.txMonitorLevelDb ?? -30),
+  });
+  state.rxAttenuationDb = additional.rxAttenuationDb;
+  state.rxSsqlEnabled = additional.rxSsqlEnabled;
+  state.rxSsqlThreshold = additional.rxSsqlThreshold;
+  // Preferences are distinct from host acknowledgements/capability. Reconnect
+  // clears actual output state without erasing the operator's saved choice.
+  state.preferredRxHeadphones = additional.rxHeadphonesEnabled;
+  state.preferredTxMonitor = additional.txMonitorEnabled;
+  state.txMonitorLevelDb = additional.txMonitorLevelDb;
+  state.preferredTxMonitorLevelDb = additional.txMonitorLevelDb;
   state.sampleRate = clampSampleRateHz(prefs.sampleRate ?? state.sampleRate);
   state.rxAdc = clampRxAdc(prefs.rxAdc ?? state.rxAdc);
   state.rxAntenna = clampRxAntenna(prefs.rxAntenna ?? state.rxAntenna);
@@ -220,7 +249,7 @@ export function applyRadioPrefsToState(
   state.agcGain = clampAgcGain(prefs.agcGain ?? state.agcGain);
   state.filterLow = clampFilterLowHz(scalarPref(prefs.filterLow, state.filterLow));
   state.filterHigh = clampFilterHighHz(scalarPref(prefs.filterHigh, state.filterHigh));
-  if ('rxFilterShiftHz' in state) state.rxFilterShiftHz = 0;
+  state.rxFilterShiftHz = additional.rxFilterShiftHz;
   state.txDrive = clampTxDriveWatts(prefs.txDrive ?? state.txDrive);
   state.txMicGainDb = clampTxMicGainDb(prefs.txMicGainDb ?? state.txMicGainDb);
   state.txFilterLow = clampFilterLowHz(scalarPref(prefs.txFilterLow, state.txFilterLow));
@@ -237,7 +266,13 @@ export function applyRadioPrefsToState(
   state.txPhaseRotatorCornerHz = clampTxPhaseRotatorCornerHz(
     prefs.txPhaseRotatorCornerHz ?? state.txPhaseRotatorCornerHz,
   );
-  state.pureSignalEnabled = Boolean(prefs.pureSignalEnabled ?? state.pureSignalEnabled);
+  const ps = normalizeRadioPrefs({
+    pureSignalEnabled: Boolean(prefs.pureSignalEnabled ?? state.pureSignalEnabled),
+    ...(prefs.pureSignalMode === 'auto' || prefs.pureSignalMode === 'single' || prefs.pureSignalMode === 'off'
+      ? { pureSignalMode: prefs.pureSignalMode } : {}),
+  });
+  state.pureSignalEnabled = ps.pureSignalEnabled;
+  state.preferredPureSignalMode = ps.pureSignalMode;
   state.pureSignalAutoAttenuate = Boolean(
     prefs.pureSignalAutoAttenuate ?? state.pureSignalAutoAttenuate,
   );
@@ -253,7 +288,7 @@ export function applyRadioPrefsToState(
   state.txTwoToneDelayMs = clampTwoToneDelayMs(prefs.txTwoToneDelayMs ?? state.txTwoToneDelayMs);
   state.txNoiseGateEnabled = Boolean(prefs.txNoiseGateEnabled ?? state.txNoiseGateEnabled);
   state.txNoiseGateThresholdDb = Math.max(-80, Math.min(0,
-    Number(prefs.txNoiseGateThresholdDb ?? state.txNoiseGateThresholdDb) || -30));
+    safeFiniteNumber(prefs.txNoiseGateThresholdDb ?? state.txNoiseGateThresholdDb, -30)));
   state.txDexpEnabled = Boolean(prefs.txDexpEnabled ?? state.txDexpEnabled);
   state.txDexpThresholdDb = clampTxDexpThresholdDb(prefs.txDexpThresholdDb ?? state.txDexpThresholdDb);
   state.txDexpExpansionDb = clampTxDexpExpansionDb(prefs.txDexpExpansionDb ?? state.txDexpExpansionDb);

@@ -40,7 +40,7 @@ MON is a local, processed transmit-audio monitor, not an off-air/RF monitor.
 It is supported by the primary PCB2 direct-XDMA backend (AIC23B codec), not P2
 or PCB3/AIC3204. Unsupported bridges leave the browser control disabled.
 
-- `tx_monitor:0,true|false;` selects MON; default off, not persisted by browser.
+- `tx_monitor:0,true|false;` selects MON; host default off. Saturn Remote saves the operator choice per band and restores it after operator/capability discovery.
 - `tx_monitor_level:0,<dB>;` controls digital level, -60 to -6 dB, default -30.
 - `tx_monitor_supported:0,true|false;` advertises capability/fault availability.
 - All commands require the existing operator role. Neither command arms or keys RF.

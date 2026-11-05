@@ -1,5 +1,6 @@
 import type { RadioPrefs } from '../settings/types';
 import {
+  normalizeRadioPrefs,
   clampSampleRateHz,
   clampRxAdc,
   clampRxAntenna,
@@ -102,10 +103,14 @@ function sanitizeCfcBand(bands: number[] | undefined, index: number): string {
 }
 
 export function buildAllRadioPrefsCommands(prefs: RadioPrefs): string[] {
+  prefs = normalizeRadioPrefs(prefs);
   const cmds: string[] = [
     `iq_samplerate:${clampSampleRateHz(prefs.sampleRate)};`,
     `rx_adc:0,${clampRxAdc(prefs.rxAdc)};`,
     `rx_antenna:0,${clampRxAntenna(prefs.rxAntenna)};`,
+    `rx_attenuation:0,${prefs.rxAttenuationDb};`,
+    `rx_ssql:0,${prefs.rxSsqlEnabled};`,
+    `rx_ssql_threshold:0,${prefs.rxSsqlThreshold};`,
     `modulation:0,${clampDemodMode(prefs.mode)};`,
     `rx_volume:0,0,${clampRxVolumeDb(prefs.rxVolumeDb).toFixed(1)};`,
     `rx_nr_mode:0,${normalizeNrMode(prefs.rxNoiseReductionMode)};`,
@@ -120,7 +125,7 @@ export function buildAllRadioPrefsCommands(prefs: RadioPrefs): string[] {
     ...buildAnfCommands(prefs),
     `rx_agc:0,${normalizeAgcMode(prefs.agcMode)};`,
     `rx_agc_gain:0,${clampAgcGain(prefs.agcGain)};`,
-    buildRxFilterBandCommand(prefs.filterLow, prefs.filterHigh, prefs.mode),
+    buildRxFilterBandCommand(prefs.filterLow, prefs.filterHigh, prefs.mode, prefs.rxFilterShiftHz),
     `tx_drive:0,${clampTxDriveWatts(prefs.txDrive)};`,
     `tx_mic_gain:0,${clampTxMicGainDb(prefs.txMicGainDb).toFixed(1)};`,
     buildTxFilterBandCommand(prefs.txFilterLow, prefs.txFilterHigh, prefs.mode),
@@ -144,6 +149,8 @@ export function buildAllRadioPrefsCommands(prefs: RadioPrefs): string[] {
   cmds.push(`tx_puresignal_attenuation:0,${clampPureSignalAttenuationDb(prefs.pureSignalAttenuationDb)};`);
   cmds.push(...buildTwoToneCommands(prefs));
   cmds.push(`tx_two_tone:0,${Boolean(prefs.twoToneEnabled)};`);
+  cmds.push(`tx_noise_gate:0,${Boolean(prefs.txNoiseGateEnabled)};`);
+  cmds.push(`tx_noise_gate_threshold:0,${prefs.txNoiseGateThresholdDb.toFixed(1)};`);
   cmds.push(`tx_dexp:0,${Boolean(prefs.txDexpEnabled)};`);
   cmds.push(`tx_dexp_threshold:0,${clampTxDexpThresholdDb(prefs.txDexpThresholdDb).toFixed(1)};`);
   cmds.push(`tx_dexp_expansion:0,${clampTxDexpExpansionDb(prefs.txDexpExpansionDb).toFixed(1)};`);

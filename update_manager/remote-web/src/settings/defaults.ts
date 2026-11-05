@@ -11,6 +11,13 @@ export const DEFAULT_PHONE_PANELS: PhonePanels = {
 };
 
 export const DEFAULT_RADIO_PREFS: RadioPrefs = {
+  rxAttenuationDb: 0,
+  rxFilterShiftHz: 0,
+  rxSsqlEnabled: false,
+  rxSsqlThreshold: 0,
+  rxHeadphonesEnabled: false,
+  txMonitorEnabled: false,
+  txMonitorLevelDb: -30,
   sampleRate: 192000,
   rxAdc: 0,
   rxAntenna: 1,
@@ -52,6 +59,7 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
   txPhaseRotatorAuto: false,
   txPhaseRotatorCornerHz: 338,
   pureSignalEnabled: false,
+  pureSignalMode: 'off',
   pureSignalAutoAttenuate: true,
   pureSignalAttenuationDb: 0,
   txMeterMode: 'peak',

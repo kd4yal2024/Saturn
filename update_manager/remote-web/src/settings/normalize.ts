@@ -284,7 +284,17 @@ export function normalizeWsUrlPreference(raw: unknown, env: WsUrlEnvironment): s
 
 export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | undefined): RadioPrefs {
   const source = input || {};
+  const pureSignalMode = source.pureSignalMode === 'auto' ? 'auto'
+    : source.pureSignalMode === 'single' ? 'single' : source.pureSignalMode === 'off' ? 'off'
+    : source.pureSignalEnabled ? 'single' : 'off';
   return {
+    rxAttenuationDb: Math.max(0, Math.min(31, Math.round(safeFiniteNumber(source.rxAttenuationDb, 0)))),
+    rxFilterShiftHz: Math.max(-12000, Math.min(12000, Math.round(safeFiniteNumber(source.rxFilterShiftHz, 0)))),
+    rxSsqlEnabled: Boolean(source.rxSsqlEnabled),
+    rxSsqlThreshold: Math.max(0, Math.min(100, safeFiniteNumber(source.rxSsqlThreshold, 0))),
+    rxHeadphonesEnabled: Boolean(source.rxHeadphonesEnabled),
+    txMonitorEnabled: Boolean(source.txMonitorEnabled),
+    txMonitorLevelDb: Math.max(-60, Math.min(-6, safeFiniteNumber(source.txMonitorLevelDb, -30))),
     sampleRate: clampSampleRateHz(source.sampleRate),
     rxAdc: clampRxAdc(source.rxAdc),
     rxAntenna: clampRxAntenna(source.rxAntenna),
@@ -325,7 +335,8 @@ export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | unde
     txPhaseRotatorEnabled: Boolean(source.txPhaseRotatorEnabled),
     txPhaseRotatorAuto: Boolean(source.txPhaseRotatorAuto),
     txPhaseRotatorCornerHz: clampTxPhaseRotatorCornerHz(source.txPhaseRotatorCornerHz),
-    pureSignalEnabled: Boolean(source.pureSignalEnabled),
+    pureSignalEnabled: pureSignalMode !== 'off',
+    pureSignalMode,
     pureSignalAutoAttenuate: source.pureSignalAutoAttenuate ?? DEFAULT_RADIO_PREFS.pureSignalAutoAttenuate,
     pureSignalAttenuationDb: clampPureSignalAttenuationDb(source.pureSignalAttenuationDb),
     txMeterMode: normalizeTxMeterMode(source.txMeterMode),
@@ -337,7 +348,7 @@ export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | unde
     txTwoToneDelayMs: clampTwoToneDelayMs(source.txTwoToneDelayMs),
     txNoiseGateEnabled: source.txNoiseGateEnabled ?? DEFAULT_RADIO_PREFS.txNoiseGateEnabled,
     txNoiseGateThresholdDb: Math.max(-80, Math.min(0,
-      Number(source.txNoiseGateThresholdDb) || DEFAULT_RADIO_PREFS.txNoiseGateThresholdDb)),
+      safeFiniteNumber(source.txNoiseGateThresholdDb, DEFAULT_RADIO_PREFS.txNoiseGateThresholdDb))),
     txDexpEnabled: Boolean(source.txDexpEnabled),
     txDexpThresholdDb: clampTxDexpThresholdDb(source.txDexpThresholdDb),
     txDexpExpansionDb: clampTxDexpExpansionDb(source.txDexpExpansionDb),
