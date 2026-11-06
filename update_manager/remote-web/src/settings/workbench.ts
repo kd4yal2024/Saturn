@@ -12,7 +12,7 @@ export interface SettingsWorkbenchHost {
 
 const layoutKey = 'saturn.settings.window.v1';
 const sectionKey = 'saturn.settings.workbench.page.v1';
-const noClickProxy = new Set(['transmit.arm', 'transmit.ptt', 'transmit.mox', 'shell.settings']);
+const noClickProxy = new Set(['transmit.arm', 'transmit.ptt', 'transmit.mox']);
 const isField = (node: HTMLElement): node is HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement =>
   /^(INPUT|SELECT|TEXTAREA)$/.test(node.tagName);
 const text = (node: Element | null | undefined) => node?.textContent?.trim() || '';

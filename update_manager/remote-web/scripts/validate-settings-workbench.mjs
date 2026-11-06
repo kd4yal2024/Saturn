@@ -114,6 +114,8 @@ try {
     await child(`d.querySelector('[data-page="${page}"]').click()`);
     check(`${page} page fits horizontally`,await child(`return d.documentElement.scrollWidth<=d.defaultView.innerWidth && Array.from(d.querySelectorAll('.sw-card')).every(card=>card.scrollWidth<=card.clientWidth+1)`));
   }
+  await child(`d.querySelector('[data-page="interface"]').click()`);
+  check('Settings navigation links use their own labels rather than TX labels',await child(`return !d.querySelector('[data-setting="shell.settings"]').textContent.includes('On main TX panel')`));
   await child(`d.querySelector('[data-page="transmit"]').click()`);
   const screenshot=await command('Page.captureScreenshot',{format:'png'},childSession);writeFileSync(join(output,'transmitter-dark.png'),Buffer.from(screenshot.data,'base64'));
   await evaluate(`document.documentElement.dataset.theme='light'`);await pause(350);
