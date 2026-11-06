@@ -12,3 +12,8 @@ declare module '*.txt?raw' {
   const text: string;
   export default text;
 }
+
+declare module '*?worker&inline' {
+  const InlineWorker: { new(options?: WorkerOptions): Worker };
+  export default InlineWorker;
+}

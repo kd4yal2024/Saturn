@@ -135,6 +135,7 @@ function makeHarness(options: {
   const opusFrames: number[] = [];
   const iqFrames: number[] = [];
   const sandbox: Record<string, unknown> = {
+    displayFftProducer: { invalidate: () => {} },
     _next: { ...spectrumRow, ...txDisplay },
     state: {
       connected: true,
@@ -303,6 +304,7 @@ function makeHarness(options: {
     Object.assign(sandbox, {
       displaySampleRateHz: () => s.sampleRate,
       resetDisplayHistory: () => { s.iqPackets = []; s.displayIqSource = 'rx'; },
+      offerDisplayFft: () => {},
       appendIqPacket: (iq: Float32Array) => { s.iqPackets.push(iq); },
       displayIqForSource: (iq: Float32Array) => iq,
       TX_DISPLAY_SETTLE_SKIP_FRAMES: 0,

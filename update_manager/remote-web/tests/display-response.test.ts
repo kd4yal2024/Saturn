@@ -64,6 +64,7 @@ describe('IQ reception and status refresh', () => {
       displaySampleRateHz: () => state.sampleRate,
       resetDisplayHistory: () => {},
       displayIqForSource: (iq: Float32Array) => iq,
+      offerDisplayFft: () => {},
       appendIqPacket: () => { accepted++; },
       logEvent: () => {},
       scheduleUiRefresh: () => { refreshes++; },

@@ -159,6 +159,10 @@ jobs:
         run: npm run validate:settings -- --output=/tmp/saturn-settings-workbench
         working-directory: update_manager/remote-web
 
+      - name: Check bounded display FFT worker in Chrome
+        run: npm run validate:display-worker -- --output=/tmp/saturn-display-worker
+        working-directory: update_manager/remote-web
+
   native:
     name: Native apps and XDMA
     runs-on: ubuntu-latest

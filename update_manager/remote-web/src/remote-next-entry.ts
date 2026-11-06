@@ -1,3 +1,5 @@
+import { DisplayFftProducer } from './display/fft-producer';
+import { planDisplayIqWindow } from './display/iq-window';
 import { SettingsWorkbench } from './settings/workbench';
 import tokenCss from '../styles/tokens.css?inline';
 import primitiveCss from '../styles/primitives.css?inline';
@@ -292,6 +294,8 @@ import { preferredResponsiveLayout } from './ui/responsive-layout';
 
 const api = {
   SettingsWorkbench,
+  DisplayFftProducer,
+  planDisplayIqWindow,
   mountSignalMonitor,
   PureSignalReports,
   pureSignalTestView,

@@ -9857,7 +9857,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       txDroppedFrames: 0,
     };
     let browserTimingProbeStarted = false;
-    const displayTimingBuckets = { fft: [], drawCpu: [], arrivalToDraw: [] };
+    const displayTimingBuckets = { fft: [], drawCpu: [], arrivalToDraw: [], terrainCpu: [], metersCpu: [] };
     const displaySlowFrames = [];
     let displayFirstIqAt = null;
     let displayFirstIqToDrawMs = null;
@@ -10777,7 +10777,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const traditionalGeometry = (spectrumRenderer.fillVertices?.byteLength || 0) * 2 + spectrumHistory.width * 8;
       return { ...detail, displayProfile: displayProfileDiagnostics(),
         visibleBinsPerBackingPixel: backingWidth ? visibleBins / backingWidth : null,
-        fftWindowMs: fftProcessor.size / Math.max(1, displaySampleRateHz()) * 1000,
+        fftWindowMs: (state.displayLocalFftSize || fftProcessor.size) / Math.max(1, displaySampleRateHz()) * 1000,
         traditionalEstimatedBytes: traditionalHistory + traditionalTargets + traditionalGeometry,
         combinedDisplayEstimatedBytes: (detail.bytes || spectrumHistory.bytes) + traditionalHistory + traditionalTargets + traditionalGeometry,
         allocationNote: "Includes retained Traditional CPU/GPU image, geometry and estimated double color/depth targets. Driver overhead is not measurable here." };
@@ -10817,6 +10817,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("terrain-settings-open").addEventListener("click", () => { syncTerrainControls(); $("terrain-settings").showModal(); });
       $("display-pause").addEventListener("click", () => {
         state.displayPaused = !state.displayPaused;
+        displayFftProducer.invalidate();
         $("display-pause").textContent = state.displayPaused ? "Resume" : "Pause";
         $("display-pause").setAttribute("aria-pressed", `${state.displayPaused}`);
       });
@@ -10945,6 +10946,38 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
     let fftProcessor = new FftProcessor(1024);
+    // The FFT worker is display-only. RX Measure keeps its canonical raw-IQ
+    // path below; RF/IMD and exported raw captures are independent of this pool.
+    const displayFftProducer = new _next.DisplayFftProducer({
+      // Staged rollout: local software-GPU replay has not established a 3D
+      // latency improvement. Keep the daily path until target-browser A/B.
+      enabled: PAGE_QUERY.get("display_fft") === "worker",
+      onFailure: reason => logEvent(reason),
+    });
+    const displayIqArrival = new WeakMap();
+    let lastWorkerSpectrumId = 0;
+    function displayWorkerKey() {
+      return [state.connected, state.iqStreaming, state.displayPaused, document.hidden,
+        state.displaySessionGeneration, state.displayRenderSource, state.displayIqSource, state.dds,
+        displaySampleRateHz(), displayFftTargetSize(), txReceiveSuppressionActive(), Boolean(rxSpectrumAccumulator)].join(":");
+    }
+    function offerDisplayFft() {
+      if (!displayFftProducer.available || rxSpectrumAccumulator || !state.connected ||
+        !state.iqStreaming || state.displayPaused || document.hidden ||
+        state.displayRenderSource !== "iq" ||
+        (txReceiveSuppressionActive() && state.displayIqSource !== "tx")) return;
+      const plan = _next.planDisplayIqWindow(state.iqPackets, displayFftTargetSize(),
+        state.displayIqSource === "tx", packet => displayIqArrival.get(packet));
+      if (!plan || plan.floatCount < 64) return;
+      const fftSize = fftSizeForSamples(plan.floatCount / 2, displayFftTargetSize());
+      // Keep existing settings/diagnostic FFT metadata exact. Scratch allocation
+      // happens only on size changes; normal transforms run in the worker.
+      if (fftProcessor.size !== fftSize) fftProcessor = new FftProcessor(fftSize);
+      displayFftProducer.request({key:displayWorkerKey(), sequence:state.iqFrameVersion,
+        fftSize, ...plan, intervalMs:displayRenderIntervalMs()});
+    }
+    document.addEventListener("visibilitychange", () => displayFftProducer.invalidate());
+    window.addEventListener("pagehide", () => displayFftProducer.dispose());
     let rxSpectrumAccumulator = null;
     let rxSpectrumCapture = null;
     let rxSpectrumTimer = null;
@@ -11178,6 +11211,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function resetDisplayHistory() {
+      displayFftProducer.invalidate();
       spectrumHistory.clear("Display source / span reset");
       displaySlowFrames.length = 0;
       displayFirstIqAt = null;
@@ -11193,6 +11227,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.fftWidth = state.latestBins.length;
       state.lastSpectrumRenderAt = 0;
       state.lastRenderedIqFrameVersion = -1;
+      state.displayLocalFftSize = 0;
       state.lastRenderedServerRowVersion = -1;
       state.spectrumShiftCarryBins = 0;
       state.waterfallShiftCarryPixels = 0;
@@ -11808,15 +11843,23 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function displayPipelineSnapshot(now = performance.now()) {
       return {
-        samples: displayTimingBuckets.fft.length,
-        fftMs: timingStats(displayTimingBuckets.fft),
+        samples: displayFftProducer.available && !rxSpectrumAccumulator && state.displayRenderSource === "iq"
+          ? displayFftProducer.diagnostics().completed : displayTimingBuckets.fft.length,
+        fftMs: displayFftProducer.available && !rxSpectrumAccumulator && state.displayRenderSource === "iq"
+          ? displayFftProducer.diagnostics().fftMs : timingStats(displayTimingBuckets.fft),
         drawCpuMs: timingStats(displayTimingBuckets.drawCpu),
+        terrainCallCpuMs: timingStats(displayTimingBuckets.terrainCpu),
+        meterCallCpuMs: timingStats(displayTimingBuckets.metersCpu),
         newestIqArrivalToDrawMs: timingStats(displayTimingBuckets.arrivalToDraw),
         firstIqToDrawMs: displayFirstIqToDrawMs,
         // Browser-local draw submission timing; excludes FPGA/network age
         // and GPU presentation time. No cross-clock latency claim.
         timingScope: "browser-arrival-to-draw-submission",
-        fftSize: fftProcessor.size,
+        fftSize: state.displayLocalFftSize || fftProcessor.size,
+        processing: state.displayRenderSource === "server" ? "server-spectrum" :
+          rxSpectrumAccumulator ? "main-raw-measurement" :
+          displayFftProducer.available ? "worker" : "main",
+        worker: displayFftProducer.diagnostics(),
         // WAN spectrum-row source: bytes/s, rows/s, sequence gaps and the
         // ack lag. True in-flight/credit accounting lives bridge-side
         // (`display_spectrum_*`); acks here are synchronous, so ackLag stays 0-1.
@@ -15815,6 +15858,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function shiftDisplayForCenterChange(nextCenterHz) {
+      if (nextCenterHz !== state.dds) {
+        displayFftProducer.invalidate();
+        // Retain/recenter display history, but never combine IQ from two tunes.
+        state.iqPackets = [];
+      }
       if (nextCenterHz !== state.dds && !spectrumHistory.recenter(nextCenterHz)) {
         spectrumHistory.clear("Center frequency changed — new history segment");
       }
@@ -16394,7 +16442,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       // fft_size (no local FftProcessor ran), so bin spacing follows it.
       const activeFftSize = state.displayRenderSource === "server" && state.displayServerFftSize > 0
         ? state.displayServerFftSize
-        : fftProcessor.size;
+        : state.displayLocalFftSize || fftProcessor.size;
       const reasons = [];
       const freshRtt = state.bridgeRttMs != null && now - state.bridgeRttAt <= BRIDGE_RTT_STALE_MS;
       if (state.streamMode === "wan") reasons.push("RX Transport is set to WAN");
@@ -16581,6 +16629,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function resetDisplayTransport(reason = "disconnect") {
+      displayFftProducer.invalidate();
+      state.iqPackets = [];
       clearDisplayEchoFallback();
       state.displayCapsSpectrum = false;
       state.displayRequested = "";
@@ -21619,8 +21669,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return Math.max(32, size);
     }
 
-    function appendIqPacket(iq) {
-      state.iqPackets.push(new Float32Array(iq));
+    function appendIqPacket(iq, ingressMs = performance.now()) {
+      const retained = new Float32Array(iq);
+      displayIqArrival.set(retained, ingressMs);
+      state.iqPackets.push(retained);
       const limit = displayPacketHistoryLimit();
       while (state.iqPackets.length > limit) {
         state.iqPackets.shift();
@@ -21667,6 +21719,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     let lastIqUiRefreshAt = -Infinity;
     function handleIqFrame(buffer, sourceKind = "rx") {
+      const ingressMs = performance.now();
       if (buffer.byteLength < 64) {
         return;
       }
@@ -21700,7 +21753,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.txDisplaySettleFrames -= 1;
       } else {
         if (sourceKind === "tx") state.iqPackets = [];
-        appendIqPacket(displayIqForSource(iq, sourceKind));
+        appendIqPacket(displayIqForSource(iq, sourceKind), ingressMs);
       }
       if (performance.now() - state.lastFrameAt > 2500) {
         logEvent(`Received ${sourceKind.toUpperCase()} IQ frame: ${samplePairs} complex samples @ ${Math.round(sampleRate / 1000)} kHz`);
@@ -21714,6 +21767,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.lastRxIqFrameAt = state.lastFrameAt;
       }
       state.frameCounter += 1;
+      offerDisplayFft();
       state.displayCaption = sourceKind === "tx"
         ? `Live TX baseband (WDSP): ${samplePairs} samples at ${Math.round(sampleRate / 1000)} kHz — not RF feedback`
         : `Live RX IQ frame: ${samplePairs} complex samples at ${Math.round(sampleRate / 1000)} kHz`;
@@ -21782,6 +21836,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       // frame whose sequence does not advance, and per-source counters can go
       // backwards when the render source switches over an identical mapping.
       state.displaySequence += 1;
+      if (state.displayRenderSource === "iq") state.displayLocalFftSize = bins.length;
       if (!state.displayPaused) acceptSpectrumFrame(visibleBins, now, state.displaySequence, bins.length);
       const processedBins = processedDisplayBins(visibleBins);
       updateDisplayRange(processedBins);
@@ -21836,6 +21891,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.displayIqSource = "rx";
         state.lastTxDisplayFrameAt = null;
       }
+      displayFftProducer.context(displayWorkerKey());
       const canRenderIq =
         !state.displayPaused &&
         state.connected &&
@@ -21872,9 +21928,29 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             displayFirstIqToDrawMs = roundedTimingMs(drawEndedAt - displayFirstIqAt);
           }
         }
+      } else if (canRenderIq && displayFftProducer.available && !rxSpectrumAccumulator) {
+        const result = displayFftProducer.latest();
+        // Production already has its own cadence. Throttling completion again
+        // here adds an avoidable RAF/cadence phase delay.
+        if (result && result.id !== lastWorkerSpectrumId) {
+          const drawStartedAt = drawDisplayBins(result.bins, now, waterfallEnabled, phoneWanLite);
+          lastWorkerSpectrumId = result.id;
+          state.lastRenderedIqFrameVersion = result.sequence;
+          const drawEndedAt = performance.now();
+          displayFftProducer.drawn(result, drawEndedAt);
+          recordBrowserTimingSample(displayTimingBuckets.drawCpu, drawEndedAt - drawStartedAt);
+          recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - result.newestIngressMs);
+          recordDisplaySlowFrame(rafGapMs, 0, drawEndedAt - drawStartedAt, drawEndedAt - result.newestIngressMs);
+          if (displayFirstIqToDrawMs === null && displayFirstIqAt !== null) {
+            displayFirstIqToDrawMs = roundedTimingMs(drawEndedAt - displayFirstIqAt);
+          }
+        }
       } else if (canRenderIq) {
+        // Explicit fallback / raw RX Measure: original full precision FFT,
+        // independent of display coalescing and server-row quantization.
         const hasNewIq = state.iqFrameVersion !== state.lastRenderedIqFrameVersion;
         if (hasNewIq && now - state.lastSpectrumRenderAt >= displayRenderIntervalMs(now) - (state.terrainActive ? 1 : 0)) {
+          const newestIqIngressMs = displayIqArrival.get(state.iqPackets.at(-1)) ?? state.lastFrameAt;
           const iqWindow = buildRenderIqWindow();
           if (iqWindow && iqWindow.length >= 64) {
             const samplePairs = Math.floor(iqWindow.length / 2);
@@ -21891,8 +21967,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             state.lastRenderedIqFrameVersion = state.iqFrameVersion;
             const drawEndedAt = performance.now();
             recordBrowserTimingSample(displayTimingBuckets.drawCpu, drawEndedAt - drawStartedAt);
-            recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - state.lastFrameAt);
-            recordDisplaySlowFrame(rafGapMs, drawStartedAt - fftStartedAt, drawEndedAt - drawStartedAt, drawEndedAt - state.lastFrameAt);
+            recordBrowserTimingSample(displayTimingBuckets.arrivalToDraw, drawEndedAt - newestIqIngressMs);
+            recordDisplaySlowFrame(rafGapMs, drawStartedAt - fftStartedAt, drawEndedAt - drawStartedAt, drawEndedAt - newestIqIngressMs);
             if (displayFirstIqToDrawMs === null && displayFirstIqAt !== null) {
               displayFirstIqToDrawMs = roundedTimingMs(drawEndedAt - displayFirstIqAt);
             }
@@ -21910,12 +21986,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       } else if (waterfallEnabled && !phoneWanLite) {
         waterfallRenderer.render();
       }
+      const terrainStartedAt = performance.now();
       renderTerrain(now);
+      const metersStartedAt = performance.now();
+      recordBrowserTimingSample(displayTimingBuckets.terrainCpu, metersStartedAt - terrainStartedAt);
       const txMeterValue = state.txMeterMode === "avg" ? state.txPowerAvg : state.txPowerPeak;
       $("tx-power-readout").textContent = txMeterValue == null ? "-- W" : `${txMeterValue.toFixed(1)} W`;
       $("swr-readout").textContent = state.swrVisual == null ? "-- : 1" : `${state.swrVisual.toFixed(2)} : 1`;
       updateInstrumentMultimeter();
       updateTxMiniMeters();
+      recordBrowserTimingSample(displayTimingBuckets.metersCpu, performance.now() - metersStartedAt);
       requestAnimationFrame(animationLoop);
     }
 

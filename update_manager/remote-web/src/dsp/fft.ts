@@ -32,9 +32,17 @@ export class FftProcessor {
   }
 
   transform(iqInterleaved: Float32Array): Float32Array {
+    return this.transformInto(iqInterleaved, new Float32Array(this.size));
+  }
+
+  /** Caller owns output. The input is read-only; no retained views or averaging. */
+  transformInto(iqInterleaved: Float32Array, shifted: Float32Array): Float32Array {
+    if (shifted.length !== this.size) throw new RangeError('FFT output length must match its size');
+    if (shifted.buffer === iqInterleaved.buffer) throw new RangeError('FFT input/output must not alias');
     const samplePairs = Math.floor(iqInterleaved.length / 2);
     if (samplePairs < 1) {
-      return new Float32Array(this.size);
+      shifted.fill(0);
+      return shifted;
     }
     const stride = Math.max(1, Math.floor(samplePairs / this.size));
 
@@ -71,7 +79,6 @@ export class FftProcessor {
       }
     }
 
-    const shifted = new Float32Array(this.size);
     const half = this.size / 2;
     for (let i = 0; i < this.size; i += 1) {
       const shiftedIndex = (i + half) % this.size;

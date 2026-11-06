@@ -1,0 +1,130 @@
+# Saturn Remote display performance
+
+The first performance slice adds a bounded display FFT worker, a transfer pool,
+and an actual-page replay profiler. WebGPU, audio buffering and Bridge scheduling
+are unchanged. The ordinary display remains the default while target-browser
+latency is evaluated. A passing numerical test is not a performance qualification.
+
+## Select the display path
+
+Append these parameters to the existing Remote URL, retaining its other options:
+
+| Parameter | Behavior |
+| --- | --- |
+| no `display_fft` parameter, or `display_fft=main` | Existing main-thread FFT; daily default |
+| `display_fft=worker` | Experimental bounded display worker; explicit fallback if unavailable |
+| `display_transport=iq` | Existing raw-IQ display transport override |
+| `display_transport=spectrum` | Existing server spectrum override, if the Bridge advertises it |
+| `display_transport=auto` | Existing selection; server rows for WAN, IQ for LAN |
+
+The transport override changes only display selection. Changing the **RX Transport**
+LAN/WAN setting also changes audio/rate policy and is unsuitable for isolating this
+A/B. Do not change those settings during a display-only comparison.
+
+Location of FFT computation does not determine frequency resolution. At 384 kS/s,
+4096 points give 93.75 Hz bin spacing on either host. Eight-bit rows quantize level.
+The current server cap is 4096 points; the browser terrain path can request more.
+Consequently, compare the **reported effective FFT size** and bin spacing, not just
+requested settings. Raw complex-float32 payload at 384 kS/s is 24.576 Mbit/s;
+4096 eight-bit bins at 30 rows/s are 0.98304 Mbit/s before framing.
+
+## Scheduling and ownership
+
+`DisplayFftProducer` has one in-flight job, one replaceable pending request, and
+one latest completed result. New requests replace the pending request, rather
+than extending a FIFO. The source window and browser-ingress timestamps are
+snapshotted together. Rate limiting is anchored to ingress, so late dispatch does
+not permanently move production behind live input. RAF draws the latest completed
+result; it neither triggers an FFT nor applies a second cadence throttle.
+
+Two slots circulate main → worker → main. Each slot has a 131072-byte input store
+and a 65536-byte output store: four stores, 393216 bytes total. Both stores are
+transferred back in every valid reply, including an FFT error reply. Sender views
+are detached while the other owner holds them. Only producer-owned copies transfer.
+The transport packet and canonical retained IQ remain attached on the main thread.
+This removes the combined-window/output backing allocations for worker jobs; it
+is **not zero-copy**. One retained ingress copy, one pool input copy, renderer and
+history copies, view objects, and worker FFT scratch storage still exist.
+
+Results are borrowed until the next completion/reset. Render averaging and the
+numerical history retain their own data before a slot can be recycled. A tuning,
+connection, source, pause/visibility, rate, FFT-target or measurement boundary
+invalidates obsolete results. Tuning also drops old IQ windows while retaining the
+existing recentered visual history. TX snapshots are never spliced together.
+Timeout, construction, transfer or protocol failure terminates the worker and
+reports an explicit main-thread fallback; audio and TX authority do not depend on
+successful display analysis. The worker is inlined into the existing single IIFE;
+there is no additional public worker asset URL.
+
+## Capture and measurement boundary
+
+RX Measure explicitly uses the original synchronous, full-precision raw-IQ FFT
+path while capturing. Its accumulation interval, orientation, settings checks,
+source lease and file contract remain intact. It does not consume coalesced worker
+results or eight-bit server rows. Diagnostics label this `main-raw-measurement`.
+Bridge-side RF feedback/IMD captures, WDSP, PTT, firmware, driver and RXC1 polling
+are unchanged. No display reduction is a substitute for raw measurement data.
+
+## Reproduce checks and the baseline
+
+From `update_manager/remote-web`, with the existing dependencies installed:
+
+```sh
+npm run typecheck
+npm run check:seam
+npm test
+npm run build
+npm run validate:display-worker
+npm run validate:settings
+npm run profile:display -- --seconds=12 --engines=main,worker --quality=performance --output=/tmp/saturn-display-ab
+```
+
+The profiler serves the actual template and compiled bundle on localhost. An
+independent fixture worker supplies 30 IQ frames/s (12800 complex pairs at
+384 kS/s) and 50 stereo PCM packets/s (960 samples at 48 kHz) through the actual
+page ingress. Its eight IQ and sixteen PCM transport buffers have an explicit
+return path and drop counters. No radio is contacted. The AudioWorklet actually
+runs; audio buffering is not reduced. Do not run build/test/browser jobs alongside
+a timing run. Repeat in reversed engine order and on the operating Windows browser
+before promoting a default.
+
+Workloads are 2D, 3D, and 3D with tuning, resizing and the real Settings pop-out.
+Terrain quality is fixed for comparability; `auto` is available for a separately
+labelled adaptive experiment. `--workloads=2d,3d` selects a subset; `--seconds`
+supports 6–60 seconds. The report includes template/bundle hashes, browser and
+renderer identities, workload settings, events, heap delta, long tasks, heartbeat
+delay, full-window CPU/age percentiles, source delivery delays, audio progress and
+underruns. Fixture timing arrays span tuning resets; application counters retain
+their documented bounded recent history.
+
+Allocation rates count main-realm Float32Array backing stores only. They exclude
+JS objects, native allocations, other typed arrays and worker allocations. Pool
+allocation/copy bytes and cumulative worker scratch allocations are separately
+reported. Heap delta is not allocation rate. FFT duration is measured on the worker;
+round trip, input copy, queue age, latest-held age and draw age use the main clock.
+Both newest and oldest included packet ingress ages are retained. These are
+browser-ingress-to-draw-submission timings, not FPGA acquisition age or GPU
+presentation latency. Renderer/meter call durations are CPU submission timings.
+
+## Initial observations and rollout decision
+
+The November 6 local Chrome replay used **SwiftShader software rendering**.
+Repeated exploratory runs reduced the instrumented backing allocation rate by
+roughly 20–35%, but worker handoff under the 3D workload increased display-age tails;
+results varied with software-renderer load. Some runs also recorded audio underruns.
+The earlier adaptive-quality runs are exploratory, not a controlled comparison of
+fixed geometry. Keep their reports, including regressions. Do not generalize them
+to the operating Windows GPU or claim an across-the-board latency improvement.
+
+A separate read-only, approximately ten-second G2 receive observation on release
+`a1b9f39b` showed about 51% of one CPU core, stable RSS around 106 MiB and continuing
+384 kS/s acquisition. It measured neither DMA/queue tails nor G2 rendering and does
+not establish that Bridge scheduling is or is not a bottleneck. No service or
+radio setting was changed.
+
+The next promotion criterion is lower or acceptable p95/p99 display age and main
+thread stalls under equal workload, with bounded queues, continued audio and no
+measurement changes on the operating browser. Profile rendering/layout and the
+existing acquisition owner alongside that comparison. Change scheduling only if
+its own measurements justify it. Evaluate WebGPU after this CPU/ownership baseline;
+retain FreeDV and audio-buffer tuning as separate work.

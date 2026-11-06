@@ -52,3 +52,21 @@ describe('FftProcessor', () => {
     }
   });
 });
+
+describe('FFT borrowed output',()=>{
+  it('matches owned output with no input mutation, including long windows and silence',()=>{
+    for(const size of [32,1024,16384]){
+      const fft=new FftProcessor(size),input=Float32Array.from({length:size*3},(_,i)=>Math.sin(i*.137));
+      const copy=input.slice(),expected=fft.transform(input),output=new Float32Array(size);
+      expect(fft.transformInto(input,output)).toBe(output);expect(output).toEqual(expected);expect(input).toEqual(copy);
+      fft.transformInto(new Float32Array(size*2),output);expect(Math.max(...output)).toBeCloseTo(-160,3);
+      expect(fft.transform(input)).not.toBe(expected);expect(expected).not.toEqual(output);
+    }
+  });
+  it('rejects aliasing and mismatched output before altering input',()=>{
+    const fft=new FftProcessor(32),input=new Float32Array(64).fill(1);
+    expect(()=>fft.transformInto(input,input.subarray(0,32))).toThrow(/alias/);
+    expect(()=>fft.transformInto(input,new Float32Array(64))).toThrow(/length/);
+    expect([...input]).toEqual(Array(64).fill(1));
+  });
+});
