@@ -82,7 +82,7 @@ function fullRuntimePageFor(scenario) {
   const bundleTag = /<script\s+src="\/remote-assets\/remote-next\.js[^"]*"[\s\S]*?<\/script>/;
   if (!bundleTag.test(withState)) throw new Error('Served bundle script tag missing');
   const withBundle = withState.replace(bundleTag,
-    `<script>${bundle.replaceAll('</script', '<\\/script')}\nwindow.saturnRemoteBundleLoaded=true;</script>`);
+    `<script>${bundle.replaceAll('</script', '<\\/script')}\nwindow.saturnRemoteBundleLoaded=true; /* This suite audits the retained drawer/layout editor. The default popout is exercised by validate-settings-workbench.mjs. */ window.SaturnRemoteNext.SettingsWorkbench=undefined;</script>`);
   // The real app persists frequency lock; give this isolated runtime probe a
   // known starting state before its boot script reads browser storage.
   return withBundle.replace(marker,

@@ -20,7 +20,8 @@
     "validate:rx-audio-ab": "node scripts/validate-rx-audio-ab.mjs",
     "probe:rx-opus-live": "node scripts/live-rx-opus-probe.mjs",
     "generate:migration": "vite-node scripts/generate-migration-doc.mts",
-    "check:migration": "vite-node scripts/generate-migration-doc.mts --check"
+    "check:migration": "vite-node scripts/generate-migration-doc.mts --check",
+    "validate:settings": "node scripts/validate-settings-workbench.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

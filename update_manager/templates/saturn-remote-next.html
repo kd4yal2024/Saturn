@@ -15408,6 +15408,32 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
     }
 
+    // Settings is a view of this session, not a second Remote client.
+    // Canonical controls retain all validation, host negotiation and band saves.
+    let settingsWorkbench = null;
+    function openSettingsWorkbench() {
+      if (typeof _next.SettingsWorkbench !== "function") {
+        setSetupMenuOpen(true);
+        return;
+      }
+      setSetupMenuOpen(false);
+      syncSetupMenuFields();
+      if (!settingsWorkbench) settingsWorkbench = new _next.SettingsWorkbench({
+        document,
+        status: () => ({
+          connected: state.connected && state.bridgeReady,
+          band: bandKeyForFrequency(activeVfoFrequency()) || "",
+          frequency: activeVfoFrequency() || state.dds,
+          mode: state.mode,
+          profile: state.activeProfile || "",
+          tx: $("tx-zone-state")?.textContent?.trim() || "RX",
+        }),
+        reveal: (entry) => revealSettingsEntry(entry),
+        layout: () => { setSetupMenuOpen(true); setSettingsSection("interface"); },
+      });
+      settingsWorkbench.open();
+    }
+
     let setupMenuTrigger = null;
 
     function setSetupMenuOpen(open) {
@@ -22234,17 +22260,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("setup-menu-btn").addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        toggleSetupMenu();
+        openSettingsWorkbench();
       });
-      $("header-setup-btn")?.addEventListener("click", () => setSetupMenuOpen(true));
+      $("header-setup-btn")?.addEventListener("click", openSettingsWorkbench);
       $("settings-search")?.addEventListener("input", updateSetupSearch);
       document.addEventListener("keydown", (event) => {
         if (event.key !== "," || event.altKey || event.ctrlKey || event.metaKey) return;
         const focused = document.activeElement;
         if (focused?.matches("input, select, textarea, [contenteditable='true']")) return;
         event.preventDefault();
-        setSetupMenuOpen(true);
-        $("settings-search")?.focus({ preventScroll: true });
+        openSettingsWorkbench();
       });
       $("setup-close-btn").addEventListener("click", () => {
         setSetupMenuOpen(false);

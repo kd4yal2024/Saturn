@@ -30,7 +30,7 @@ describe('responsive setup drawer template', () => {
     expect(template.match(/id="header-setup-btn"/g)).toHaveLength(1);
     expect(template).toContain('aria-label="Open Saturn Remote settings"');
     expect(template).toContain('aria-controls="setup-menu" aria-expanded="false"');
-    expect(template).toContain('$("header-setup-btn")?.addEventListener("click", () => setSetupMenuOpen(true));');
+    expect(template).toContain('$("header-setup-btn")?.addEventListener("click", openSettingsWorkbench);');
   });
 
   it('keeps the drawer mounted when the legacy launch-grid button is hidden', () => {

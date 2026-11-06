@@ -1,3 +1,4 @@
+import { SettingsWorkbench } from './settings/workbench';
 import tokenCss from '../styles/tokens.css?inline';
 import primitiveCss from '../styles/primitives.css?inline';
 import layoutCss from '../styles/layout.css?inline';
@@ -290,6 +291,7 @@ import {
 import { preferredResponsiveLayout } from './ui/responsive-layout';
 
 const api = {
+  SettingsWorkbench,
   mountSignalMonitor,
   PureSignalReports,
   pureSignalTestView,
