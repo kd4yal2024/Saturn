@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 import { createAppState } from '../src/state/app-state';
@@ -44,6 +44,7 @@ function fixture() {
     resumeRxMediaAfterBandChange: vi.fn(), closeFrequencyEntry: vi.fn(),
     sendTci: (s: string) => sent.push(s), managedPcmSelected: () => true,
     applyTxSourceOverrides: vi.fn(), generatedTxSourceActive: () => false,
+    managedPcm: { status: () => ({ manualAttenuationSupported: true, autoAdaptationSupported: true }) },
   };
   const api = runInNewContext(`${names.map(source).join('\n')}\n({${names.join(',')}})`, context);
   return { state, storage, sent, logs, tasks, context, api };
@@ -182,6 +183,53 @@ describe('automatic band operating settings', () => {
     expect(f.state.bandMemory['20m']).toBeUndefined();
     f.state.txDrive = 25; f.api.saveRadioPrefs();
     expect(normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!))['20m']?.radioPrefs.txDrive).toBe(25);
+  });
+
+  it('exports the actual 80m → 40m → 80m recall messages for the native runtime contract test', () => {
+    const result: Record<string, Array<{band: string; frequency: number; watts: number; mic: number; messages: string[]}>> = {};
+    for (const backend of ['direct', 'p2']) {
+      const f = fixture(), rate = backend === 'direct' ? 384000 : 192000;
+      Object.assign(f.state, { vfoA: 3_899_000, vfoB: 3_899_000, dds: 3_899_000,
+        sampleRate: rate, mode: 'LSB', txDrive: 4, txMicGainDb: 0,
+        rxHeadphonesSupported: false, txMonitorSupported: false });
+      f.api.saveRadioPrefs();
+      f.state.bandMemory['40m'] = { frequency: 7_218_000,
+        radioPrefs: normalizeRadioPrefs({ ...radioPrefsFromState(f.state), rxAntenna: 2, rxAttenuationDb: 10, sampleRate: rate, mode: 'LSB', txDrive: 5,
+          txMicGainDb: 3, pureSignalAutoAttenuate: true }), displayPrefs: {}, displayZoom: 3 };
+      result[backend] = [];
+      for (const [band, button, frequency, watts, mic] of [
+        ['40m', '7200000', 7_218_000, 5, 3], ['80m', '3750000', 3_899_000, 4, 0],
+        ['40m', '7200000', 7_218_000, 5, 3], ['80m', '3750000', 3_899_000, 4, 0],
+      ] as const) {
+        f.sent.length = 0;
+        f.api.recallFrequencyEntryBand({ dataset: { freqBand: button, freqMode: 'LSB' } });
+        const wire = f.sent.join('');
+        expect(wire).not.toContain('NaN');
+        expect(wire).not.toContain('tx_puresignal_auto_attenuate:');
+        expect(wire).not.toMatch(/tx_two_tone(?:_|:)/);
+        expect(wire).toContain(`vfo:0,0,${frequency};`);
+        expect(wire).toContain(`tx_drive:0,${watts};`);
+        expect(wire).not.toContain('trx:0,true');
+        result[backend]!.push({ band, frequency, watts, mic, messages: [...f.sent] });
+      }
+    }
+    const wireFixture = '# backend\tband\tfrequency\twatts\tmicDb\tmessage1\tmessage2\n' + Object.entries(result).flatMap(([backend, steps]) =>
+      steps.map(step => [backend, step.band, step.frequency, step.watts, step.mic, ...step.messages].join('\t'))).join('\n') + '\n';
+    const path = new URL('./fixtures/managed-band-recall.tsv', import.meta.url);
+    if (process.env.SATURN_UPDATE_BAND_FIXTURE === '1') writeFileSync(path, wireFixture);
+    expect(wireFixture).toBe(readFileSync(path, 'utf8'));
+  });
+
+  it('keeps Legacy setters and omits unadvertised shared attenuation without dropping ordinary TX settings', () => {
+    const f = fixture();
+    f.context.managedPcm.status = () => ({ manualAttenuationSupported: false, autoAdaptationSupported: true });
+    f.api.sendCurrentRadioPrefsToBridge(undefined, { restoreTx: true });
+    expect(f.sent.join('')).not.toContain('tx_puresignal_attenuation:');
+    expect(f.sent.join('')).toContain('tx_drive:0,10;');
+    f.context.managedPcmSelected = () => false;
+    f.sent.length = 0; f.api.sendCurrentRadioPrefsToBridge(undefined, { restoreTx: true });
+    expect(f.sent.join('')).toContain('tx_puresignal_auto_attenuate:0,true;');
+    expect(f.sent.join('')).toContain('tx_two_tone_freq1:0,700;');
   });
 
   it('builds shifted filters, attenuation, squelch and gate commands without keying', () => {

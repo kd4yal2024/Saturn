@@ -18667,7 +18667,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (generatedTxSourceActive() && !managedPcmSelected()) {
         sendTci("tx_two_tone:0,false;");
       }
-      const commands = _next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false }).map(command =>
+      const managed = managedPcmSelected();
+      const capabilities = managed ? managedPcm.status() : null;
+      const commands = _next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false }).filter(command => {
+        if (!managed) return true;
+        // Shared acquisition has no Auto ATT setter, and its native two-tone
+        // is a separately authorized action, not a replayable configuration.
+        if (/^tx_(?:puresignal_auto_attenuate|two_tone(?:_[a-z0-9_]+)?):/.test(command)) return false;
+        if (command.startsWith("tx_puresignal_attenuation:") && !capabilities.manualAttenuationSupported) return false;
+        return true;
+      }).map(command =>
         managedPcmSelected() && prefs.pureSignalMode === "auto" && command.startsWith("tx_puresignal:")
           ? "tx_puresignal_mode:0,auto;" : command);
       // Managed TX reads committed host settings; reconnect must not replay

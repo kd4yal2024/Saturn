@@ -28,8 +28,10 @@ restores the saved choice only after the host advertises support. An unsupported
 backend does not erase that choice. These audio commands do not key RF.
 
 Band recall never restores an active PTT/MOX, two-tone run, or measurement run.
-Two-tone frequencies and levels remain settings, but starting the test remains
-an operator action. A regular reconnect keeps the existing policy of using the
+Two-tone frequencies and levels remain saved preferences; shared-owner recall
+does not send unsupported legacy generator setters or Auto ATT commands. The
+native generator remains the separately authorized test action. Manual feedback
+attenuation is replayed only when the shared host advertises that capability. A regular reconnect keeps the existing policy of using the
 committed host TX setup; an explicit band recall submits that band's TX setup.
 
 Connection URL, browser audio device selection, SATP pairing/source routing,

@@ -31,6 +31,7 @@ enum Case {
     AutoCorrection,
     AutoSustained,
     ReceiveMeter,
+    BandRecall,
     ReceiveSpectrum,
     ShutdownActive,
     RearPtt,
@@ -559,6 +560,83 @@ impl RuntimeIo for Io {
                                 thread::sleep(Duration::from_millis(1));
                             }
                             return 0; // no arm or key; actual row worker and TCI output
+                        }
+                        if case == Case::BandRecall {
+                            let fixture = include_str!(
+                                "../../remote-web/tests/fixtures/managed-band-recall.tsv"
+                            );
+                            let backend = if direct { "direct" } else { "p2" };
+                            for row in fixture
+                                .lines()
+                                .skip(1)
+                                .filter(|row| row.starts_with(backend))
+                            {
+                                let step: Vec<_> = row.split('\t').collect();
+                                let frequency = step[2].parse::<u32>().unwrap();
+                                let watts = step[3].parse::<u64>().unwrap();
+                                let mic = step[4].parse::<f64>().unwrap();
+                                let c = client.as_mut().unwrap();
+                                let applied_before = c
+                                    .transactions
+                                    .iter()
+                                    .filter(|s| s.contains(",applied,"))
+                                    .count();
+                                let messages = &step[5..];
+                                for wire in messages {
+                                    c.text(wire);
+                                }
+                                let expected = applied_before + messages.len();
+                                let deadline = Instant::now() + Duration::from_secs(5);
+                                loop {
+                                    c.drain();
+                                    assert!(
+                                        !c.transactions.iter().any(|s| s.contains(",rejected,")),
+                                        "band recall rejected: {:?}",
+                                        c.transactions
+                                    );
+                                    let applied = c
+                                        .transactions
+                                        .iter()
+                                        .filter(|s| s.contains(",applied,"))
+                                        .count();
+                                    if applied >= expected
+                                        && ingress.lifecycle_status().unwrap().phase
+                                            == Phase::ReadyOff
+                                    {
+                                        break;
+                                    }
+                                    assert!(
+                                        Instant::now() < deadline,
+                                        "band recall did not complete: {:?} {:?}",
+                                        c.transactions,
+                                        ingress.lifecycle_status()
+                                    );
+                                    thread::sleep(Duration::from_millis(2));
+                                }
+                                let m = state_model.lock_unpoisoned();
+                                assert_eq!(m.desired.vfo_a_hz, frequency);
+                                assert_eq!(m.desired.vfo_b_hz, frequency);
+                                assert_eq!(m.desired.iq_center_hz, frequency);
+                                assert_eq!(u64::from(m.desired.tx_drive), watts);
+                                assert_eq!(f64::from(m.desired.tx_mic_gain_db), mic);
+                                assert_eq!(
+                                    m.desired.rx_antenna,
+                                    if step[1] == "40m" { 2 } else { 1 }
+                                );
+                                assert_eq!(
+                                    m.desired.rx_attenuation_db,
+                                    if step[1] == "40m" { 10 } else { 0 }
+                                );
+                                assert!(!m.desired.tx_enabled);
+                                println!("band_recall backend={} band={} frequency={} applied={} keyed=false", if direct {"DirectXdma"} else {"P2"}, step[1], m.desired.vfo_a_hz, applied_before + messages.len());
+                            }
+                            assert_eq!(status.phase, Phase::ReadyOff);
+                            stop.store(true, Ordering::Release);
+                            while !joined.load(Ordering::Acquire) {
+                                assert!(Instant::now() < end);
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                            return 0;
                         }
                         if case == Case::ReceiveMeter {
                             if direct {
@@ -1180,6 +1258,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::BaselineTwoTone
                 | Case::NativeKeepaliveGap
                 | Case::ReceiveMeter
+                | Case::BandRecall
                 | Case::ReceiveSpectrum
                 | Case::MeasurementClient
                 | Case::BrowserMeasurementClient
@@ -1217,6 +1296,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::NativeKeepaliveGap
                 | Case::NativeKeepaliveMissing
                 | Case::ReceiveMeter
+                | Case::BandRecall
                 | Case::ReceiveSpectrum
                 | Case::AttachmentFailure
                 | Case::MeasurementClient
@@ -1661,4 +1741,12 @@ fn shared_rx_headphones_receive_processed_audio_without_browser_subscription_and
         resumed,
         "unavailable local playback must not receive audio"
     );
+}
+
+#[test]
+#[ignore = "serial actual runtime band-recall wire contract, matched WDSP, file/loopback owners; no RF"]
+fn actual_run_inner_band_recall_80m_40m_roundtrip_both_backends() {
+    for direct in [true, false] {
+        exercise(direct, Case::BandRecall);
+    }
 }
