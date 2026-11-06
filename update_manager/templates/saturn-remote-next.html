@@ -7976,7 +7976,7 @@
                   <button class="band-btn" data-band="7150000" type="button" role="radio" aria-checked="false">40m</button>
                   <button class="band-btn" data-band="10125000" type="button" role="radio" aria-checked="false">30m</button>
                   <button class="band-btn" data-band="14200000" type="button" role="radio" aria-checked="true">20m</button>
-                  <button class="band-btn" data-band="17100000" type="button" role="radio" aria-checked="false">17m</button>
+                  <button class="band-btn" data-band="18120000" type="button" role="radio" aria-checked="false">17m</button>
                   <button class="band-btn" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
                   <button class="band-btn" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
                   <button class="band-btn" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
@@ -18118,6 +18118,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       syncActiveButtons();
     }
 
+    function syncActiveBandButtons() {
+      const currentBand = bandKeyForFrequency(activeVfoFrequency());
+      document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
+        const buttonBand = bandKeyForFrequency(Number(button.dataset.band));
+        button.classList.toggle("active", Boolean(currentBand) && buttonBand === currentBand);
+        if (button.dataset.mode === "WFM") button.disabled = !state.rxWbfmSupported;
+      });
+    }
+
     function syncActiveButtons() {
       document.querySelectorAll("#mode-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", button.dataset.mode === state.mode);
@@ -18126,11 +18135,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           button.title = state.rxWbfmSupported ? "FM broadcast stereo" : "Requires WDSP 2.00 WFM support";
         }
       });
-      document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
-        const target = Number(button.dataset.band);
-        button.classList.toggle("active", Math.abs(target - activeVfoFrequency()) < 20000);
-        if (button.dataset.mode === "WFM") button.disabled = !state.rxWbfmSupported;
-      });
+      syncActiveBandButtons();
       const sampleRate = `${state.sampleRate}`;
       if ($("sample-rate").value !== sampleRate) {
         const option = Array.from($("sample-rate").options).find((item) => item.value === sampleRate);

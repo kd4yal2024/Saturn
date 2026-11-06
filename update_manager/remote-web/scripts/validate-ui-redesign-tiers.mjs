@@ -52,6 +52,10 @@ const interactionStart = source.indexOf('      document.querySelectorAll("#mode-
 const interactionEnd = source.indexOf('      $("vfo-step-down-btn")', interactionStart);
 if (interactionStart < 0 || interactionEnd < 0) throw new Error('Template mode/band handlers missing');
 const modeBandInteractionSource = source.slice(interactionStart, interactionEnd);
+const bandSyncStart = source.indexOf('    function syncActiveBandButtons() {');
+const bandSyncEnd = source.indexOf('    function syncActiveButtons() {', bandSyncStart);
+if (bandSyncStart < 0 || bandSyncEnd < 0) throw new Error('Actual band-selection helper missing');
+const bandSyncSource = source.slice(bandSyncStart, bandSyncEnd);
 const phonePanelStart = source.indexOf('    function loadPhonePanelState() {');
 const phonePanelEnd = source.indexOf('    function revealShellPanel(', phonePanelStart);
 if (phonePanelStart < 0 || phonePanelEnd < 0) throw new Error('Template phone disclosure handlers missing');
@@ -341,7 +345,9 @@ const installPresentationFixtureExpression = `(() => {
   const sendTci = command => commands.push(command);
   const sendRxFilterBand = () => {};
   const sendTxFilterBand = () => {};
-  const bandKeyForFrequency = hz => String(hz);
+  const bandKeyForFrequency = window.SaturnRemoteNext.bandKeyForFrequency;
+  const activeVfoFrequency = () => state.frequency;
+  ${bandSyncSource}
   const rememberCurrentBandSettings = () => {};
   const setFrequency = hz => { state.frequency = hz; };
   const applyBandMemoryForFrequency = () => false;
@@ -353,11 +359,10 @@ const installPresentationFixtureExpression = `(() => {
   const updateUi = () => {
     document.querySelectorAll('#mode-grid .mode-btn').forEach(button =>
       button.classList.toggle('active', button.dataset.mode === state.mode));
-    document.querySelectorAll('#band-grid .band-btn').forEach(button =>
-      button.classList.toggle('active', Number(button.dataset.band) === state.frequency));
+    syncActiveBandButtons();
   };
   ${modeBandInteractionSource}
-  window.__presentationFixture = { state, commands, errors };
+  window.__presentationFixture = { state, commands, errors, updateUi };
   return true;
 })()`;
 
@@ -816,13 +821,13 @@ try {
         const modeGrid = document.getElementById('mode-grid');
         const bandGrid = document.getElementById('band-grid');
         const extraMode = modeGrid.querySelector('.mode-btn[data-mode="CWL"]');
-        const extraBand = bandGrid.querySelector('.band-btn[data-band="17100000"]');
+        const extraBand = bandGrid.querySelector('.band-btn[data-band="18120000"]');
         const before = { modeHidden: !visible(extraMode), bandHidden: !visible(extraBand) };
         document.getElementById('mode-more-btn').click();
         document.getElementById('band-more-btn').click();
         const expanded = { modeVisible: visible(extraMode), bandVisible: visible(extraBand),
           sameModeNode: modeGrid.querySelector('.mode-btn[data-mode="CWL"]') === extraMode,
-          sameBandNode: bandGrid.querySelector('.band-btn[data-band="17100000"]') === extraBand };
+          sameBandNode: bandGrid.querySelector('.band-btn[data-band="18120000"]') === extraBand };
         modeGrid.querySelector('.mode-btn[data-mode="USB"]').focus();
         modeGrid.querySelector('.mode-btn[data-mode="USB"]').dispatchEvent(new KeyboardEvent('keydown',
           { key: 'ArrowRight', bubbles: true, cancelable: true }));
@@ -854,7 +859,34 @@ try {
         mode: document.querySelector('#mode-grid .mode-btn.active')?.getAttribute('aria-checked'),
         band: document.querySelector('#band-grid .band-btn.active')?.getAttribute('aria-checked') }))()`);
     }
+    const bandSelection = await evaluate(`(async () => {
+      const fixture = window.__presentationFixture;
+      const grid = document.getElementById('band-grid');
+      fixture.state.bandMemory = { '80m': {frequency: 3899000}, '40m': {frequency: 7220000} };
+      const observations = [];
+      for (const [preset, frequency] of [[3800000,3899000],[7150000,7220000],[3800000,3899000]]) {
+        grid.querySelector('[data-band="'+preset+'"]').click();
+        for (let i = 0; i < 5; i++) fixture.updateUi();
+        await new Promise(r => requestAnimationFrame(r));
+        observations.push({frequency: fixture.state.frequency, expectedFrequency: frequency,
+          active: grid.querySelector('.active')?.dataset.band,
+          expectedButton: String(preset), checked: grid.querySelector('.active')?.getAttribute('aria-checked')});
+      }
+      for (const [frequency, preset] of [[14253000,14200000],[18085000,18120000],[52000000,50150000],[102500000,99500000]]) {
+        fixture.state.frequency = frequency;
+        fixture.updateUi();
+        await new Promise(r => requestAnimationFrame(r));
+        observations.push({frequency: fixture.state.frequency, expectedFrequency: frequency,
+          active: grid.querySelector('.active')?.dataset.band,
+          expectedButton: String(preset), checked: grid.querySelector('.active')?.getAttribute('aria-checked')});
+      }
+      fixture.state.frequency = 5000000; fixture.updateUi();
+      return {observations, outsideBandHasSelection: !!grid.querySelector('.active')};
+    })()`);
     const failures = [];
+    if (bandSelection.outsideBandHasSelection || bandSelection.observations.some(row =>
+      row.frequency !== row.expectedFrequency || row.active !== row.expectedButton || row.checked !== 'true'))
+      failures.push('band-highlight-does-not-follow-recalled-or-tuned-frequency');
     if (scenario.width === 390) {
       if (!interactions.before.modeHidden || !interactions.before.bandHidden ||
         !interactions.expanded.modeVisible || !interactions.expanded.bandVisible ||
@@ -880,7 +912,7 @@ try {
       }
       if (geometry.pageWidth > scenario.width + 1) failures.push('desktop-horizontal-scroll');
     }
-    const report = { scenario: scenario.name, geometry, interactions, failures, ok: failures.length === 0 };
+    const report = { scenario: scenario.name, geometry, interactions, bandSelection, failures, ok: failures.length === 0 };
     presentationReports.push(report);
     console.log(`${report.ok ? 'PASS' : 'FAIL'} ${scenario.name}: ${failures.join(', ') || 'tuning/meter/target checks'}`);
   }
