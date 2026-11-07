@@ -5881,5 +5881,15 @@ fn late_client_receives_committed_pa_profile_without_a_radio_change() {
         m.desired.tx_pa_calibration.wire()
     )));
     assert!(texts.contains("tx_pa_drive:0,27426000,40,68,11m,46.5;"));
+    let initial = initial_snapshot_messages(&m, true, 7, TciClientRole::Operator, (false, 50100));
+    let ready = initial.iter().position(|m| m == "ready;").unwrap();
+    let capability = initial
+        .iter()
+        .position(|m| m.contains("tx_pa_calibration_supported:0,true;"))
+        .unwrap();
+    assert!(capability < ready);
+    assert!(initial[..ready]
+        .iter()
+        .any(|m| m.contains("tx_pa_drive:0,27426000,40,68,11m,46.5;")));
     assert!(!m.desired.tx_enabled);
 }

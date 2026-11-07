@@ -1018,6 +1018,9 @@ pub(crate) fn initial_snapshot_messages(
         format!("tx_eq_enable:0,{};", model.desired.tx_eq_enabled),
     ]
     .into_iter()
+    // Operator restore needs the committed equipment profile before ready,
+    // even if no tuning/state change follows this new connection.
+    .chain(TciFrontend::pa_calibration_messages(model))
     .chain((1..=10).flat_map(|i| {
         vec![
             format!("rx_eq_band:0,{},{};", i, model.desired.rx_eq_bands[i]),
