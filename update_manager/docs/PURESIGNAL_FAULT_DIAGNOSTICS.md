@@ -176,3 +176,19 @@ Manufacturer reference: https://www.coaxial.com/products/7998_7999.htm
 The sampler's actual coupling setting, amplifier output and input return level
 must be accounted for before a high-power correction claim. No live keying or
 RF level-setting was performed during this source repair.
+
+### Per-band PureSignal preferences
+
+Band memory retains `pureSignalMode` (Off/Single/Auto adaptation),
+`pureSignalAutoAttenuate` (Auto ATT preference) and
+`pureSignalAttenuationDb` (requested manual feedback attenuation). The manual
+slider saves its validated request immediately to the current band, browser
+fallback and the normal server-settings save path, before waiting for an echo.
+A saved request is not proof of host acceptance or an automatic level result.
+
+Round-trip tests exercise distinct 40 m / 20 m choices, reload the saved memories
+into a fresh page, and verify repeated recall including false and 0 dB values.
+The actual slider handler is tested without a host echo and rejects invalid or
+unavailable edits without rewriting memory. Recall does not key RF or enable
+two-tone. Unsupported shared Auto ATT commands remain omitted; storing the
+preference does not implement or advertise the automatic feedback-level loop.

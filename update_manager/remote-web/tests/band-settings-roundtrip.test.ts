@@ -157,6 +157,69 @@ describe('automatic band operating settings', () => {
     expect(normalizeRadioPrefs({ pureSignalMode: 'auto', pureSignalEnabled: false }).pureSignalEnabled).toBe(true);
   });
 
+  it('persists distinct PS mode, Auto ATT preference and manual attenuation per band across a fresh page', () => {
+    const f = fixture();
+    Object.assign(f.state, { pureSignalEnabled: true, preferredPureSignalMode: 'auto',
+      pureSignalAutoAttenuate: true, pureSignalAttenuationDb: 17 });
+    f.api.saveRadioPrefs();
+    f.api.setFrequency(14_200_000);
+    Object.assign(f.state, { pureSignalEnabled: false, preferredPureSignalMode: 'off',
+      pureSignalAutoAttenuate: false, pureSignalAttenuationDb: 0 });
+    f.api.saveRadioPrefs();
+
+    const next = fixture();
+    next.state.bandMemory = normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!));
+    Object.assign(next.state, { vfoA: 3_899_000, dds: 3_899_000 });
+    for (const [frequency, mode, autoAtt, attenuation] of [
+      [7_200_000, 'auto', true, 17], [14_200_000, 'off', false, 0],
+      [7_210_000, 'auto', true, 17],
+    ] as const) {
+      next.api.setFrequency(frequency);
+      expect(next.state.preferredPureSignalMode).toBe(mode);
+      expect(next.state.pureSignalEnabled).toBe(mode !== 'off');
+      expect(next.state.pureSignalAutoAttenuate).toBe(autoAtt);
+      expect(next.state.pureSignalAttenuationDb).toBe(attenuation);
+      expect(next.sent.join('')).toContain(`tx_puresignal_attenuation:0,${attenuation};`);
+    }
+    // A saved preference is not a fabricated shared-host Auto ATT capability,
+    // and recalling settings must not start two-tone or key the radio.
+    expect(next.sent.join('')).not.toContain('tx_puresignal_auto_attenuate:');
+    expect(next.sent.join('')).not.toMatch(/(?:trx|tx_two_tone):0,true/);
+  });
+
+  it('saves the actual PS attenuation slider choice before any host echo or band change', () => {
+    const f = fixture();
+    const marker = '$("setup-tx-puresignal-attenuation").addEventListener("change", () => {';
+    const start = template.indexOf(marker) + marker.length;
+    const end = template.indexOf('\n      });', start);
+    let value = '23', allowed = true;
+    const sync = vi.fn();
+    const change = runInNewContext(`() => {${template.slice(start, end)}\n}`, {
+      ...f.context, ...f.api, $: () => ({ value }),
+      pureSignalPanelView: () => ({ canSetFeedbackAttenuation: allowed }),
+      syncSetupMenuFields: sync,
+    });
+    change();
+    expect(f.sent).toEqual(['tx_puresignal_attenuation:0,23;']);
+    expect(normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!))['40m']?.radioPrefs.pureSignalAttenuationDb).toBe(23);
+    expect(f.state.pureSignalAttenuationDb).toBe(23);
+    f.api.setFrequency(14_200_000);
+    value = '0'; change();
+    f.api.setFrequency(7_200_000);
+    expect(f.state.pureSignalAttenuationDb).toBe(23);
+    f.api.setFrequency(14_200_000);
+    expect(f.state.pureSignalAttenuationDb).toBe(0);
+
+    const saved = f.storage.get('bandMemory');
+    for (const invalid of ['32', '-1', '1.5', 'NaN']) {
+      value = invalid; change();
+    }
+    allowed = false; value = '31'; change();
+    expect(f.storage.get('bandMemory')).toBe(saved);
+    expect(f.state.pureSignalAttenuationDb).toBe(0);
+    expect(sync).toHaveBeenCalledTimes(5);
+  });
+
   it('the legacy PS enable checkbox updates the same saved band mode as the PS tab', () => {
     const f = fixture();
     f.state.preferredPureSignalMode = 'auto'; f.state.pureSignalEnabled = true;

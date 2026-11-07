@@ -22606,6 +22606,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (!pureSignalPanelView().canSetFeedbackAttenuation) { syncSetupMenuFields(); return; }
         const attenuation = Number($("setup-tx-puresignal-attenuation").value);
         if (!Number.isInteger(attenuation) || attenuation < 0 || attenuation > 31) { syncSetupMenuFields(); return; }
+        // Persist the operator's requested preset in this band's memory now;
+        // a delayed host echo must not be required to save the slider change.
+        // Host transaction results still determine whether it was applied.
+        state.pureSignalAttenuationDb = attenuation;
+        saveRadioPrefs();
         sendTci(`tx_puresignal_attenuation:0,${attenuation};`);
       });
       $("setup-tx-puresignal-reset").addEventListener("click", () => {
