@@ -2503,6 +2503,217 @@ fn controller<N: ScheduledNative>(
 }
 
 #[test]
+fn faulted_rx_tuning_actual_dispatch_both_backends_preserves_fault_and_output_fence() {
+    use crate::tci::TciCommand;
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for case in ["tune", "release", "disconnect", "mixed-tx"] {
+            let p2 = (backend == Backend::P2).then(super::tests::p2_separate_lanes);
+            let direct = (backend == Backend::DirectXdma).then(DirectFixture::new);
+            if let Some(d) = &direct {
+                d.fifo_ready();
+            }
+            let (mut iq, mut mic) = queues();
+            let mut m = model();
+            m.desired.tx_drive = 5;
+            let mut output = if let Some((session, _, _)) = &p2 {
+                OwnerStopAdapter::p2(session.clone(), &m, &mut iq, &mut mic).unwrap()
+            } else {
+                OwnerStopAdapter::direct(direct.as_ref().unwrap().radio.clone(), &mut iq, &mut mic)
+                    .unwrap()
+            };
+            output.enable_offline_handoff(&m, 5).unwrap();
+            let trace = Rc::new(RefCell::new(Trace::default()));
+            let life = controller(
+                Fake {
+                    trace: trace.clone(),
+                },
+                output,
+                backend,
+            );
+            let issuer = OperatorIngress::fixture();
+            let (clients, operator) = issuer.fixture_registry();
+            let outbound = clients.lock().unwrap().get(&7).unwrap().outbound.clone();
+            let shared_model = Arc::new(Mutex::new(m.clone()));
+            let origin = Instant::now();
+            let (mut r, ingress) = OwnerLoop::with_shared_ingress(
+                life,
+                issuer,
+                shared_model.clone(),
+                origin,
+                Timing {
+                    mic_age_ns: 150_000_000,
+                    source_stall_ns: 500_000_000,
+                    tx_duration_ns: 2_000_000_000,
+                },
+            )
+            .unwrap();
+            let mut now = 0;
+            for _ in 0..200 {
+                std::thread::sleep(Duration::from_millis(2));
+                now += 2_000_000;
+                r.turn(now);
+                if r.life.status().phase == Phase::ReadyOff {
+                    break;
+                }
+            }
+            ingress
+                .bootstrap(m.clone(), cfg(11), TxAudioSource::Tci)
+                .unwrap();
+            for _ in 0..200 {
+                std::thread::sleep(Duration::from_millis(2));
+                now += 2_000_000;
+                r.turn(now);
+                if r.counters.configurations == 1 && r.life.status().phase == Phase::ReadyOff {
+                    break;
+                }
+            }
+            ingress.stop(Fault::SevereOverdrive);
+            for _ in 0..200 {
+                std::thread::sleep(Duration::from_millis(2));
+                now += 2_000_000;
+                r.turn(now);
+                if r.life.status().phase == Phase::ReadyOff {
+                    break;
+                }
+            }
+            assert_eq!(r.life.status().primary_fault, Some(Fault::SevereOverdrive));
+            let stop = r.life.status().stop_id;
+            let before = r.snapshot();
+            let old_capture = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+            let native_before = (
+                trace.borrow().exchanges,
+                trace.borrow().models.len(),
+                trace.borrow().cleanup,
+            );
+            let (legacy, legacy_rx) = mpsc::channel();
+            let control = Arc::new(Mutex::new(None));
+            let dispatch = |text: &str| {
+                crate::tci::handle_incoming_message_shared(
+                    tungstenite::Message::Text(text.into()),
+                    &legacy,
+                    &clients,
+                    &operator,
+                    &control,
+                    7,
+                    Some(&ingress),
+                )
+            };
+            if case == "mixed-tx" {
+                dispatch("vfo:0,0,7100000;dds:0,7100000;tx_drive:0,4;");
+            } else {
+                // Separate wire messages preserve projected state and real receipts.
+                dispatch("vfo:0,0,7100000;dds:0,7100000;");
+                dispatch("vfo:0,0,7150000;dds:0,7150000;");
+            }
+            if case == "release" {
+                ingress.release();
+            }
+            if case == "disconnect" {
+                clients
+                    .lock()
+                    .unwrap()
+                    .get(&7)
+                    .unwrap()
+                    .state
+                    .authorization_live
+                    .store(false, Ordering::SeqCst);
+                ingress.release();
+            }
+            for _ in 0..100 {
+                std::thread::sleep(Duration::from_millis(1));
+                now += 1_000_000;
+                r.turn(now);
+            }
+            assert_eq!(r.life.status().phase, Phase::ReadyOff);
+            assert_eq!(r.life.status().primary_fault, Some(Fault::SevereOverdrive));
+            assert_eq!(r.life.feedback_status().fault, Some(Fault::SevereOverdrive));
+            assert!(r.life.offline_owner().queues_empty());
+            assert!(r.snapshot().output().is_none());
+            assert_eq!(r.counters.iq_packets, 0);
+            assert_eq!(trace.borrow().renders, 0);
+            let mut replies = String::new();
+            while let Some(item) = outbound.next_message(false) {
+                if let crate::tci::OutboundMessage::TransactionText(text) = item.message {
+                    replies.push_str(&text);
+                }
+            }
+            if case == "tune" {
+                assert_eq!(shared_model.lock().unwrap().desired.iq_center_hz, 7_150_000);
+                assert_eq!(shared_model.lock().unwrap().desired.vfo_a_hz, 7_150_000);
+                assert_eq!(r.life.fence().config, 13);
+                assert_eq!(r.life.status().stop_id, stop);
+                assert_ne!(r.snapshot(), before);
+                assert_eq!((trace.borrow().exchanges,trace.borrow().models.len(),trace.borrow().cleanup),native_before,
+                    "receive tuning must not invoke native configuration, render, fitting or cleanup");
+                assert!(replies.contains("tx_config:0,1,applied,12;"), "{replies}");
+                assert!(replies.contains("tx_config:0,2,applied,13;"), "{replies}");
+                // Even a new operator PTT action cannot clear the retained fault.
+                let c = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+                ingress
+                    .tci(7, Some(&c), &TciCommand::SetTxEnabled(true))
+                    .unwrap();
+                now += 1_000_000;
+                r.turn(now);
+                assert_eq!(r.life.status().phase, Phase::ReadyOff);
+                assert_eq!(r.life.status().primary_fault, Some(Fault::SevereOverdrive));
+                assert!(r.snapshot().output().is_none());
+                // Acknowledgment is separate, and the old pre-tuning action
+                // remains stale even after it. A genuinely fresh action works.
+                let fresh = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+                assert!(ingress.fault_ack_message(
+                    7,
+                    &format!("saturn_tx_fault_ack:0,1,{stop};"),
+                    Some(&fresh)
+                ));
+                for _ in 0..20 {
+                    now += 1_000_000;
+                    r.turn(now);
+                }
+                assert_eq!(r.life.status().primary_fault, None);
+                assert!(r.snapshot().output().is_none());
+                ingress
+                    .tci(7, Some(&old_capture), &TciCommand::SetTxEnabled(true))
+                    .unwrap();
+                now += 1_000_000;
+                r.turn(now);
+                assert_eq!(r.life.status().phase, Phase::ReadyOff);
+                let fresh = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+                ingress
+                    .tci(7, Some(&fresh), &TciCommand::SetTxEnabled(true))
+                    .unwrap();
+                now += 1_000_000;
+                r.turn(now);
+                assert_eq!(r.life.status().phase, Phase::AwaitingKey);
+                ingress.release();
+                for _ in 0..200 {
+                    std::thread::sleep(Duration::from_millis(2));
+                    now += 2_000_000;
+                    r.turn(now);
+                    if r.life.status().phase == Phase::ReadyOff {
+                        break;
+                    }
+                }
+                assert_eq!(r.life.status().phase, Phase::ReadyOff);
+                assert_eq!(r.life.status().primary_fault, None);
+                assert_eq!(shared_model.lock().unwrap().desired.iq_center_hz, 7_150_000);
+            } else {
+                assert_eq!(
+                    shared_model.lock().unwrap().desired.iq_center_hz,
+                    m.desired.iq_center_hz
+                );
+                assert_eq!(shared_model.lock().unwrap().desired.tx_drive, 5);
+                assert!(replies.contains(",rejected,"), "{case}: {replies}");
+                assert!(!replies.contains(",applied,"), "{case}: {replies}");
+            }
+            assert!(legacy_rx.try_recv().is_err());
+            if let Some(d) = &direct {
+                d.assert_off();
+            }
+        }
+    }
+}
+
+#[test]
 fn explicit_fault_ack_actual_owner_both_backends_never_arms_and_rejects_cancelled_requests() {
     for backend in [Backend::P2, Backend::DirectXdma] {
         for case in ["fresh", "release", "disconnect", "wrong-stop", "stale"] {

@@ -89,3 +89,34 @@ original logs, the before/after queue reproducer, raw paired window and hashes,
 replay source/results and test logs. An initial native-test link omitted the test
 observer, and an initial parallel native run was stopped; both logs are retained.
 The corrected native run linked the explicit test observer and ran serially.
+
+## Receive tuning after a completed TX fault
+
+A TX fault remains latched on the Bridge across browser disconnect/reconnect.
+Previously, managed browser routing silently discarded VFO/DDS setters in the
+fault phase, and the owner rejected every configuration while faulted. RX kept
+streaming at its old frequency even though the browser optimistically moved its
+VFO. Reconnecting could not repair this host condition.
+
+A matched host now advertises `saturn_rx_tuning_caps:0,fault-latched-v1`.
+Following completed stop/native cleanup (the matching
+`saturn_tx_fault_ack_state:0,<stop>,true`), the operator can send pure absolute
+`vfo`/`dds` transactions while the TX fault remains latched. Normal ordered
+queued/applied/rejected receipts and unsent-target coalescing still apply. Mixed
+batches containing drive, PS, source or other settings do not receive this
+exception. Older hosts retain their existing contract.
+
+The sole owner changes the receive model and configuration identity, updates
+its stopped backend model, then publishes committed state before replying
+applied. This operation neither configures nor renders native DSP. It preserves
+the controller fault, frozen overdrive evidence, stop receipt, output fence and
+fault acknowledgment requirement. A new PTT action still cannot key until the
+operator separately acknowledges the completed fault. Tuning is not an implicit
+acknowledgment. Release/disconnect revoke pending transactions as before.
+
+Regression coverage uses the actual TCI dispatch and both P2/Direct XDMA output
+adapters with offline devices. It checks ordered tuning, mixed TX rejection,
+release/disconnect, retained fault, zero output and zero native configuration
+or processing. Browser tests cover reconnect, 1,000 tuning edits, old hosts,
+incomplete cleanup, lost operator authority and TX commands. The frozen native
+fault-evidence test also retunes without losing the original observation.

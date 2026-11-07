@@ -142,6 +142,7 @@ pub struct Configuration {
     model: RadioModel,
     config: Config,
     source: TxAudioSource,
+    pub(super) receive_tuning_only: bool,
     pub(super) transaction: Option<super::ps_ingress::SettingsTransaction>,
 }
 impl Drop for Configuration {
@@ -170,6 +171,7 @@ impl Configuration {
             model,
             config,
             source,
+            receive_tuning_only: false,
             transaction: None,
         }
     }
@@ -932,6 +934,36 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         t.reject(fault);
                     }
                     return Err(fault);
+                }
+                if self.life.status().primary_fault.is_some() && config.receive_tuning_only {
+                    if self.shutdown
+                        || self.pending_config.is_some()
+                        || config.source != self.selected
+                    {
+                        return Err(Fault::GenerationMismatch);
+                    }
+                    // The ingress sealed a pure absolute VFO/DDS batch. Do not
+                    // run native configuration or acknowledge the TX fault.
+                    let result = self
+                        .life
+                        .offline_faulted_tuning(current.fence, config.config.id, now)
+                        .and_then(|_| self.life.offline_owner().install_clean_model(&config.model));
+                    if let Err(fault) = result {
+                        if !matches!(fault, Fault::CleanupPending | Fault::GenerationMismatch) {
+                            self.fault(fault, now);
+                        }
+                        return Err(fault);
+                    }
+                    if config.transaction.as_ref().is_some_and(|t| !t.live()) {
+                        return Err(Fault::GenerationMismatch);
+                    }
+                    self.installed = Some((config.model.clone(), config.config));
+                    self.counters.configurations += 1;
+                    self.publish_ingress();
+                    if let Some(t) = &config.transaction {
+                        t.applied(self.snapshot());
+                    }
+                    return Ok(());
                 }
                 if self.shutdown
                     || self.pending_config.is_some()

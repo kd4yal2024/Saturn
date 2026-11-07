@@ -2018,7 +2018,7 @@ impl SharedIngress {
             "single"
         };
         let status = view.as_ref()?.status;
-        Some(format!("saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};",
+        Some(format!("saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};",
             config.id, mode, status.stop_id, ack_eligible(status), config.id, model.desired.tx_drive, model.desired.pure_signal_attenuation_db))
     }
     pub(crate) fn ps_control_caps(&self) -> String {
@@ -2495,6 +2495,12 @@ impl SharedIngress {
                 cancel: self.cancel.clone(),
             });
             let mut envelope = Configuration::at_ingress(c.stamp, model.clone(), config, source);
+            envelope.receive_tuning_only = commands.iter().all(|command| {
+                matches!(
+                    command,
+                    TciCommand::SetVfoA(_) | TciCommand::SetVfoB(_) | TciCommand::SetIqCenter(_)
+                )
+            });
             envelope.transaction = Some(SettingsTransaction {
                 receipt: receipt.clone(),
                 predecessor,

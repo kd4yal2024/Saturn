@@ -23,6 +23,51 @@ function setup(capture?: ManagedCaptureFactory) {
 }
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
+  it('tunes through the ordered host path while retaining a completed TX fault across reconnect', () => {
+    const h = setup(); h.ready();
+    function fault(serial: number, config: number, epoch=h.epoch) {
+      h.session.text(`saturn_rx_tuning_caps:0,fault-latched-v1;saturn_tx_owner:shared,${serial},ReadyOff,3,${config},tci,false,SevereOverdrive;saturn_tx_fault_ack_state:0,3,true;`,epoch);
+    }
+    fault(2,11);
+    const start=h.control.length;
+    h.session.sendControl('vfo:0,0,7100000;dds:0,7100000;');
+    for(let n=1;n<=1000;n++) h.session.sendControl(`vfo:0,0,${7100000+n};dds:0,${7100000+n};`);
+    expect(h.control.slice(start)).toEqual(['vfo:0,0,7100000;dds:0,7100000;']);
+    expect(h.session.status().pendingSettings).toBe(2);
+    h.session.text('tx_config:0,1,queued,12;',h.epoch);
+    fault(3,12); // commit publication retains the fault; keep the latest unsent tuning target
+    h.session.text('tx_config:0,1,applied,12;',h.epoch);h.advance(1);
+    expect(h.control.at(-1)).toBe('vfo:0,0,7101000;dds:0,7101000;');
+    h.session.text('tx_config:0,2,queued,13;',h.epoch);fault(4,13);
+    h.session.text('tx_config:0,2,applied,13;',h.epoch);
+    expect(h.session.status().pendingSettings).toBe(0);
+    expect(h.session.status().phase).toBe('fault');expect(h.session.arm('tci')).toBe(false);
+    expect(h.media).toHaveLength(0);expect(h.control.some(c=>c.includes('fault_ack:'))).toBe(false);
+    const epoch=h.session.connect(s=>h.control.push(s),f=>h.media.push(f));h.session.setOperator(true);
+    h.session.text('saturn_tx_media_caps:psg1,pcm,owner1,transactions1;tx_codec_accept:0,pcm;ready;',epoch);
+    fault(5,13,epoch);
+    h.session.sendControl('vfo:0,0,7200000;dds:0,7200000;');
+    expect(h.control.at(-1)).toBe('vfo:0,0,7200000;dds:0,7200000;');
+    expect(h.session.status().phase).toBe('fault');
+  });
+  it.each(['old-host','incomplete-stop','authority-lost'])('never bypasses the faulted tuning contract for %s', how=>{
+    const h=setup();h.ready();
+    h.session.text(`${how==='old-host'?'':'saturn_rx_tuning_caps:0,fault-latched-v1;'}saturn_tx_owner:shared,2,ReadyOff,3,11,tci,false,SevereOverdrive;saturn_tx_fault_ack_state:0,3,${how!=='incomplete-stop'};`,h.epoch);
+    if(how==='authority-lost')h.session.setOperator(false);
+    const count=h.control.length;
+    h.session.sendControl('vfo:0,0,7100000;dds:0,7100000;');
+    h.session.sendControl('vfo:0,0,7100000;tx_drive:0,80;');
+    h.advance(1);expect(h.control).toHaveLength(count);expect(h.media).toHaveLength(0);
+  });
+  it('does not allow power, source, PS or arm controls through the faulted tuning exception',()=>{
+    const h=setup();h.ready();
+    h.session.text('saturn_rx_tuning_caps:0,fault-latched-v1;saturn_tx_owner:shared,2,ReadyOff,3,11,tci,false,SevereOverdrive;saturn_tx_fault_ack_state:0,3,true;',h.epoch);
+    const count=h.control.length;
+    for(const c of ['tx_drive:0,40;','tx_puresignal:0,true;','saturn_satp_control:satp;','vfo:0,0,7100000;tx_drive:0,40;'])h.session.sendControl(c);
+    expect(h.session.arm('tci')).toBe(false);expect(h.control).toHaveLength(count);
+    h.session.sendControl('vfo:0,0,7100000;dds:0,7100000;');
+    h.session.release();h.advance(1);expect(h.control.at(-1)).toBe('trx:0,false;');
+  });
   it('prepares only the selected operator microphone without granting TX, and keeps it prepared across release', async () => {
     const close = vi.fn(), prepare = vi.fn(async () => {}), dispose = vi.fn(), cancel = vi.fn();
     const factory: ManagedCaptureFactory = Object.assign(async (token: string) => ({token, historyResetAtMs: 100, close}), {prepare, dispose, cancel});

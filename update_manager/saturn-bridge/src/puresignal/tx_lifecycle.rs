@@ -443,6 +443,44 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
         self.service_release()?;
         self.stop(StopCause::Fault(fault))
     }
+    /// Receive tuning while a TX fault remains latched. No native reconfigure,
+    /// acknowledgment, output reopen or key operation is permitted here.
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub fn offline_faulted_tuning(
+        &mut self,
+        expected: Fence,
+        id: u128,
+        now: u64,
+    ) -> Result<(), Fault> {
+        self.clock(now)?;
+        self.service_release()?;
+        if expected != self.fence()
+            || self.status.phase != Phase::ReadyOff
+            || self.status.cleanup_completed_ns.is_none()
+            || self.status.primary_fault.is_none()
+            || self.status.authority_fault.is_some()
+            || self.status.cleanup_fault.is_some()
+            || self.pending_config.is_some()
+            || self.pending_action.is_some()
+            || self.shutdown_requested
+            || self.current_config.is_none()
+        {
+            return Err(Fault::CleanupPending);
+        }
+        self.c_mut().lifecycle_faulted_tuning(expected, id)?;
+        self.current_config.as_mut().ok_or(Fault::InvalidConfig)?.id = id;
+        let fence = self.fence();
+        if let Err(fault) = self.authority.cleanup_complete(self.status.stop_id, fence) {
+            self.status.authority_fault = Some(fault);
+            self.status.phase = Phase::Blocked;
+            return Err(fault);
+        }
+        self.service_release()?;
+        if self.status.phase != Phase::ReadyOff {
+            return Err(Fault::GenerationMismatch);
+        }
+        Ok(())
+    }
     pub fn reconfigure(&mut self, expected: Fence, config: Config, now: u64) -> Result<(), Fault> {
         self.clock(now)?;
         self.service_release()?;

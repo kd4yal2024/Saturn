@@ -411,6 +411,27 @@ impl<N: NativePs> Controller<N> {
         // Config/calibrate/open/reconnect never synthesize an authorized key edge.
         Ok(self.fence)
     }
+    /// Retag an RX tuning commit after completed fault cleanup. This changes
+    /// only the configuration identity; native settings, fault and evidence stay
+    /// intact. The lifecycle separately proves stop/cleanup and keeps TX denied.
+    #[cfg(feature = "offline-puresignal-tx-lifecycle")]
+    pub(super) fn lifecycle_faulted_tuning(
+        &mut self,
+        expected: Fence,
+        id: u128,
+    ) -> Result<(), Fault> {
+        self.authorized()?;
+        if expected != self.fence || self.keyed || self.fault.is_none() || !self.native_clean {
+            return Err(Fault::CleanupPending);
+        }
+        if id <= self.fence.config {
+            return Err(Fault::InvalidConfig);
+        }
+        self.retire()?;
+        self.config.as_mut().ok_or(Fault::InvalidConfig)?.id = id;
+        self.fence.config = id;
+        Ok(())
+    }
     /// Only the existing TX authority calls this. Every transition advances its
     /// epoch; old acquisition/queue fences are rejected after unkey/rekey.
     pub fn on_tx_state(&mut self, epoch: u64, keyed: bool, now_ns: u64) -> Result<Fence, Fault> {

@@ -777,6 +777,40 @@ fn overdrive_evidence_survives_completed_authority_and_native_cleanup() {
         assert_eq!(evidence.native_info[6], 2);
         assert_eq!(evidence.interval, original);
         assert_eq!(l.feedback_status().info_raw, [0; 16]);
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        {
+            let events = n.borrow().events.clone();
+            let old = l.fence();
+            l.offline_faulted_tuning(old, old.config + 1, end).unwrap();
+            assert_eq!(
+                l.feedback_status().overdrive_evidence.unwrap().interval,
+                original
+            );
+            assert_eq!(
+                l.feedback_status().overdrive_evidence.unwrap().native_info[6],
+                2
+            );
+            assert_eq!(l.feedback_status().fault, Some(Fault::SevereOverdrive));
+            assert_eq!(l.status().primary_fault, Some(Fault::SevereOverdrive));
+            assert_eq!(l.status().phase, Phase::ReadyOff);
+            assert_eq!(
+                n.borrow().events,
+                events,
+                "no native configuration or processing"
+            );
+            assert!(a.borrow().output_inhibited);
+            assert_eq!(
+                l.offline_faulted_tuning(old, old.config + 2, end),
+                Err(Fault::CleanupPending)
+            );
+            l.release_handle().release();
+            assert_eq!(
+                l.offline_faulted_tuning(l.fence(), old.config + 2, end),
+                Err(Fault::CleanupPending)
+            );
+            off(&mut l, end);
+        }
+        let end = l.now;
         l.shutdown(end + 1).unwrap();
         off(&mut l, end + 1);
     }

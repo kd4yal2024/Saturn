@@ -124,6 +124,7 @@ export class ManagedPcmSession {
   private tuningEchoTargets = new Map<string, string>();
   private faultReleaseSent = false;
   private ackSupported = false;
+  private faultedTuningSupported = false;
   private ackStop: bigint | null = null;
   private nextAck = 0n;
   private ackPending: {id: string; stop: bigint; serial: bigint; at: number} | null = null;
@@ -234,6 +235,7 @@ export class ManagedPcmSession {
     this.appliedConfig = null;
     this.cleanupAfterStop = null;
     this.settingsQueue = []; this.tuningEchoTargets.clear(); this.faultReleaseSent = false;
+    this.faultedTuningSupported = false;
     this.ackSupported = false; this.ackStop = null; this.ackPending = null; this.driveLimit = undefined;
     this.ackResult = 'No fault acknowledgment requested';
     this.committedDrive = undefined;
@@ -285,7 +287,8 @@ export class ManagedPcmSession {
     const tune = tuningKey(text);
     const key = tune ?? powerKey(text);
     if (this.selected && managedSettingsMessage(text)) {
-      if (['fault', 'unsupported', 'unavailable'].includes(this.phase)) return;
+      if (['fault', 'unsupported', 'unavailable'].includes(this.phase)
+        && !(tune && this.faultedTuningReady())) return;
       if (tune) {
       for (const c of text.split(';').map(c => c.trim()).filter(Boolean)) {
         this.tuningEchoTargets.set(c.slice(0, c.lastIndexOf(',')), c);
@@ -318,9 +321,16 @@ export class ManagedPcmSession {
       return true;
     }).join(';');
   }
+  private faultedTuningReady(): boolean {
+    return this.faultedTuningSupported && this.selected && this.operator && this.bridgeReady
+      && this.supported && this.accepted && this.phase === 'fault' && this.ackPending === null
+      && this.owner?.phase === 'ReadyOff' && this.owner.fault !== 'none' && this.ackStop === this.owner.stop;
+  }
   private flushTune(): void {
-    if (!this.settingsQueue.length || !this.control || ['fault', 'unsupported', 'unavailable'].includes(this.phase)) return;
-    if (this.awaitingQueue.length || this.transactions.size || (this.owner && !this.owner.clean)
+    const faultedTune = this.faultedTuningReady() && !!tuningKey(this.settingsQueue[0]?.text ?? '');
+    if (!this.settingsQueue.length || !this.control
+      || (['fault', 'unsupported', 'unavailable'].includes(this.phase) && !faultedTune)) return;
+    if (this.awaitingQueue.length || this.transactions.size || (this.owner && !this.owner.clean && !faultedTune)
       || (this.appliedConfig !== null && this.owner?.config !== this.appliedConfig)) return;
     const next = this.settingsQueue.shift()!;
     this.sendControlNow(next.text);
@@ -333,7 +343,8 @@ export class ManagedPcmSession {
       // Release before tracking the request: cancellation discards only unsent
       // work; the transmitted request still requires its terminal receipt.
       if (this.requested) this.release();
-      this.phase = 'releasing'; this.reason = 'Settings sent; awaiting queued/applied result'; this.publish();
+      if (this.phase !== 'fault') { this.phase = 'releasing'; this.reason = 'Settings sent; awaiting queued/applied result'; }
+      this.publish();
     }
     try { this.control(text); } catch { this.fail('Control transport unavailable'); }
   }
@@ -482,6 +493,7 @@ export class ManagedPcmSession {
         const m = /^saturn_tx_drive_limit:0,([1-9][0-9]*)$/.exec(c);
         this.driveLimit = m && Number(m[1]) <= 100 ? Number(m[1]) : undefined;
       }
+      if (c.startsWith('saturn_rx_tuning_caps:')) this.faultedTuningSupported = c === 'saturn_rx_tuning_caps:0,fault-latched-v1';
       if (c.startsWith('saturn_tx_fault_ack_caps:')) this.ackSupported = c === 'saturn_tx_fault_ack_caps:0,stop-fence-v1';
       const ackState = /^saturn_tx_fault_ack_state:0,([0-9]+),(true|false)$/.exec(c);
       if (ackState) this.ackStop = ackState[2] === 'true' ? BigInt(ackState[1]!) : null;
@@ -571,9 +583,14 @@ export class ManagedPcmSession {
         this.lastTransaction = `Host control unavailable: ${c.slice('saturn_shared_control_reject:'.length)}`;
       const owner = /^saturn_tx_owner:shared,([1-9][0-9]*),([A-Za-z]+),([0-9]+),([0-9]+),(tci|satp),(true|false),([A-Za-z]+)$/.exec(c);
       if (owner && (!this.owner || BigInt(owner[1]!) > this.owner.serial)) {
+        const previousFault = this.owner?.fault;
         this.owner = {serial: BigInt(owner[1]!), stop: BigInt(owner[3]!), phase: owner[2]!, config: owner[4]!, source: owner[5]! as Source,
           clean: owner[6] === 'true', fault: owner[7]!};
-        if (this.owner.fault !== 'none') this.fail(`Owner fault latched: ${this.owner.fault}`);
+        if (this.owner.fault !== 'none') {
+          // A tuning commit republishes the SAME latched fault. It must not
+          // discard newer RX targets or turn faulted tuning into TX readiness.
+          if (this.phase !== 'fault' || previousFault !== this.owner.fault) this.fail(`Owner fault latched: ${this.owner.fault}`);
+        }
         else if (this.requested && ['AwaitingAuthority', 'CleaningNative', 'ReadyOff', 'Blocked', 'Closed'].includes(this.owner.phase)) {
           this.invalidate(); this.requested = null; this.phase = 'releasing';
         }
