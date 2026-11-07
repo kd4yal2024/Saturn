@@ -94,6 +94,27 @@ int saturn_shared_measurement_flags(void) {
     return flags;
 }
 
+/* Startup leveling runs before native fitting. Never wait behind the fitting
+ * thread: release must remain serviceable by the sole TX owner. Return zero
+ * for contention, -1 for an absent channel, or one for a coherent readback. */
+int saturn_try_shared_leveling_flags(int* flags) {
+    if (pthread_mutex_trylock(&txa[1].calcc.cs_update)) return 0;
+    CALCC a = txa[1].calcc.p;
+    IQC iq = txa[1].iqc.p;
+    if (!a || !iq) {
+        LeaveCriticalSection(&txa[1].calcc.cs_update);
+        return -1;
+    }
+    *flags = !!a->ctrl.mancal | (!!a->ctrl.automode << 1) |
+        (!!a->ctrl.turnon << 2) | (!!a->ctrl.calcinprogress << 3) |
+        (!!__atomic_load_n(&a->mox, __ATOMIC_SEQ_CST) << 4) |
+        (!!__atomic_load_n(&iq->run, __ATOMIC_SEQ_CST) << 5) |
+        (!!__atomic_load_n(&iq->busy, __ATOMIC_SEQ_CST) << 6) |
+        (!!a->info[14] << 7);
+    LeaveCriticalSection(&txa[1].calcc.cs_update);
+    return 1;
+}
+
 _Static_assert(sizeof(txa[1].iqc.p->run) == sizeof(long), "ported IQC run width");
 _Static_assert(sizeof(txa[1].iqc.p->busy) == sizeof(long), "ported IQC busy width");
 

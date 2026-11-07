@@ -79,7 +79,7 @@ describe('createAppState', () => {
     const s = createAppState();
     expect(s.pureSignalEnabled).toBe(false);
     expect(s.pureSignalAutoAttenuate).toBe(true);
-    expect(s.pureSignalAttenuationDb).toBe(0);
+    expect(s.pureSignalAttenuationDb).toBe(31);
     expect(s.pureSignalState).toBe('off');
     expect(s.pureSignalCorrecting).toBe(false);
   });

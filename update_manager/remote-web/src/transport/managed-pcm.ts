@@ -36,6 +36,10 @@ export interface ManagedPcmStatus {
   canAdjustFaultedFeedback?: boolean;
   receiveTuningReady?: boolean;
   autoAdaptationSupported?: boolean;
+  autoAttenuationSupported?: boolean;
+  autoAttenuationEnabled?: boolean | undefined;
+  canAdjustFaultedAutoAtt?: boolean;
+  autoAttStatus?: { phase: string; db: number; appliedDb: number | null; info: number | null; frequencyHz: number; keyed: boolean } | undefined;
   twoToneOperatorControlled?: boolean;
   twoToneMaxWatts?: number | undefined;
   twoToneLimitMs?: number | undefined;
@@ -90,6 +94,9 @@ function feedbackAttenuationKey(text: string): string | null {
   const m=/^tx_puresignal_attenuation:0,([0-9]+)$/.exec(commands[0]!);
   const db=Number(m?.[1]);
   return m && Number.isInteger(db) && db>=0 && db<=31 ? 'feedback-attenuation:0' : null;
+}
+function autoAttenuationKey(text: string): string | null {
+  return /^tx_puresignal_auto_attenuate:0,(?:true|false);?$/.test(text.trim()) ? 'auto-attenuation:0' : null;
 }
 function tag(frame: ArrayBuffer, token: string): ArrayBuffer {
   const view = new DataView(frame);
@@ -155,6 +162,9 @@ export class ManagedPcmSession {
   private nativeTwoToneSupported = false;
   private manualAttenuationSupported = false;
   private autoAdaptationSupported = false;
+  private autoAttenuationSupported = false;
+  private autoAttenuationEnabled: boolean | undefined;
+  private autoAtt: {stop:bigint; config:string; phase:string;db:number;appliedDb:number|null;info:number|null;frequencyHz:number;keyed:boolean}|null=null;
   private twoToneLimits: { maxMs: number; frequencyHz: number; maxWatts: number; operatorControlled: boolean } | null = null;
   private twoTone: { id: string; stopAt: number; stop: bigint; queued: boolean; accepted: boolean; stopping: boolean; complete: boolean; native: boolean } | null = null;
   private nextTwoTone = 0n;
@@ -179,6 +189,12 @@ export class ManagedPcmSession {
         && this.faultedTuningReady() && this.statusPendingWire()===0 && this.settingsQueue.length===0,
       receiveTuningReady: this.faultedTuningReady(),
       autoAdaptationSupported: this.autoAdaptationSupported,
+      autoAttenuationSupported: this.autoAttenuationSupported,
+      autoAttenuationEnabled: this.autoAttenuationEnabled,
+      canAdjustFaultedAutoAtt: this.autoAttenuationSupported && this.faultedTuningReady()
+        && this.statusPendingWire()===0 && this.settingsQueue.length===0,
+      autoAttStatus: this.autoAtt && this.owner?.stop===this.autoAtt.stop && this.owner.config===this.autoAtt.config
+        ? {phase:this.autoAtt.phase,db:this.autoAtt.db,appliedDb:this.autoAtt.appliedDb,info:this.autoAtt.info,frequencyHz:this.autoAtt.frequencyHz,keyed:this.autoAtt.keyed} : undefined,
       twoToneOperatorControlled: this.twoToneLimits?.operatorControlled ?? false, twoToneMaxWatts: this.twoToneLimits?.maxWatts,
       twoToneLimitMs: this.twoToneLimits?.maxMs, twoToneFrequencyHz: this.twoToneLimits?.frequencyHz,
       twoToneActive: this.twoTone !== null, twoToneResult: this.twoToneResult,
@@ -249,6 +265,7 @@ export class ManagedPcmSession {
     this.cleanupAfterStop = null;
     this.settingsQueue = []; this.tuningEchoTargets.clear(); this.faultReleaseSent = false;
     this.faultedTuningSupported = false; this.faultedAttenuationSupported = false;
+    this.autoAttenuationSupported=false;this.autoAttenuationEnabled=undefined;this.autoAtt=null;
     this.ackSupported = false; this.ackStop = null; this.ackPending = null; this.driveLimit = undefined;
     this.ackResult = 'No fault acknowledgment requested';
     this.committedDrive = undefined;
@@ -299,10 +316,12 @@ export class ManagedPcmSession {
     }
     const tune = tuningKey(text);
     const attenuation = feedbackAttenuationKey(text);
-    const key = tune ?? attenuation ?? powerKey(text);
+    const autoAtt = autoAttenuationKey(text);
+    const key = tune ?? attenuation ?? autoAtt ?? powerKey(text);
     if (this.selected && managedSettingsMessage(text)) {
       if (['fault', 'unsupported', 'unavailable'].includes(this.phase)
-        && !((tune || (attenuation && this.faultedAttenuationSupported && this.manualAttenuationSupported)) && this.faultedTuningReady())) return;
+        && !((tune || (attenuation && this.faultedAttenuationSupported && this.manualAttenuationSupported)
+          || (autoAtt && this.autoAttenuationSupported)) && this.faultedTuningReady())) return;
       if (tune) {
       for (const c of text.split(';').map(c => c.trim()).filter(Boolean)) {
         this.tuningEchoTargets.set(c.slice(0, c.lastIndexOf(',')), c);
@@ -343,7 +362,8 @@ export class ManagedPcmSession {
   private flushTune(): void {
     const nextText=this.settingsQueue[0]?.text ?? '';
     const faultedTune = this.faultedTuningReady() && (!!tuningKey(nextText)
-      || (this.faultedAttenuationSupported && this.manualAttenuationSupported && !!feedbackAttenuationKey(nextText)));
+      || (this.faultedAttenuationSupported && this.manualAttenuationSupported && !!feedbackAttenuationKey(nextText))
+      || (this.autoAttenuationSupported && !!autoAttenuationKey(nextText)));
     if (!this.settingsQueue.length || !this.control
       || (['fault', 'unsupported', 'unavailable'].includes(this.phase) && !faultedTune)) return;
     if (this.awaitingQueue.length || this.transactions.size || (this.owner && !this.owner.clean && !faultedTune)
@@ -499,6 +519,16 @@ export class ManagedPcmSession {
     if (!this.selected || epoch !== this.epoch || !this.control) return;
     for (const raw of text.split(';')) {
       const c = raw.trim();
+      if (c.startsWith('saturn_ps_auto_att_caps:')) this.autoAttenuationSupported=c==='saturn_ps_auto_att_caps:0,start31-owner-v1';
+      const autoEnabled=/^tx_puresignal_auto_attenuate:0,(true|false)$/.exec(c);
+      if (autoEnabled && this.autoAttenuationSupported) this.autoAttenuationEnabled=autoEnabled[1]==='true';
+      const att=/^saturn_ps_auto_att:0,([0-9]+),([0-9]+),([0-9]+),(true|false),(off|applying|settling|leveling|stable|fault),([0-9]+),(-1|[0-9]+),(-1|[0-9]+),([0-9]+),(true|false)$/.exec(c);
+      if (att && this.autoAttenuationSupported && this.owner?.stop===BigInt(att[1]!) && this.owner.config===att[2]
+        && Number.isSafeInteger(Number(att[3])) && Number(att[3])>0 && Number(att[6])<=31 && Number(att[7])<=31 && Number(att[8])<=65535) {
+        this.autoAtt={stop:BigInt(att[1]!),config:att[2]!,frequencyHz:Number(att[3]),phase:att[5]!,db:Number(att[6]),
+          appliedDb:att[7]==='-1'?null:Number(att[7]),info:att[8]==='-1'?null:Number(att[8]),keyed:att[10]==='true'};
+        if (this.requested && this.owner.phase==='AwaitingKey' && this.autoAtt.keyed) this.deadline=0;
+      }
       if (c.startsWith('saturn_tx_arm_policy:')) {
         const generated = c === 'saturn_tx_arm_policy:0,native-two-tone-only';
         if (!generated && c !== 'saturn_tx_arm_policy:0,standard') this.fail('Unsupported host arm policy');

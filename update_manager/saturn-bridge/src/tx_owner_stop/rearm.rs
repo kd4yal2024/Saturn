@@ -32,6 +32,10 @@ pub(super) struct Rearm {
     max_watts: u8,
     production_rf_permission: Option<bool>,
     stimulus: crate::tx_thread::feedback_owner::Stimulus,
+    auto_limits: Option<(f64, f64, u64)>,
+    auto_selected: bool,
+    pub(super) auto_att: Option<super::auto_attenuation::Servo>,
+    pub(super) held_key: Option<KeyReceipt>,
 }
 impl Rearm {
     pub(super) fn installed_model(&self) -> Option<&RadioModel> {
@@ -52,6 +56,9 @@ impl Rearm {
         self.manual_ptt = None;
         self.stimulus = Default::default();
         self.direct_stage = Default::default();
+        self.auto_att = None;
+        self.auto_selected = false;
+        self.held_key = None;
     }
     fn consume_iq(&mut self, mut count: usize) {
         while count > 0 {
@@ -70,6 +77,117 @@ impl Rearm {
     }
 }
 impl OwnerStopAdapter<'_> {
+    pub(crate) fn enable_auto_attenuation(
+        &mut self,
+        peak: f64,
+        rail: f64,
+        stale: u64,
+    ) -> Result<(), Fault> {
+        if self.feedback.is_none() || self.rearm.active.is_some() {
+            return Err(Fault::InvalidConfig);
+        }
+        super::auto_attenuation::Servo::new(1, peak, rail, stale)?;
+        self.rearm.auto_limits = Some((peak, rail, stale));
+        Ok(())
+    }
+    pub(crate) fn auto_attenuation_for_arm(&mut self, selected: bool) -> Result<(), Fault> {
+        if selected && self.rearm.auto_limits.is_none() {
+            return Err(Fault::InvalidConfig);
+        }
+        self.rearm.auto_selected = selected;
+        Ok(())
+    }
+    pub(crate) fn auto_attenuation_status(&self, faulted: bool) -> super::AutoAttStatus {
+        if faulted {
+            if let Some((_, snapshot, _, _)) = self.last_auto_att_fault {
+                return snapshot;
+            }
+        }
+        if let Some(a) = &self.rearm.auto_att {
+            super::AutoAttStatus {
+                phase: a.phase.label(),
+                db: a.db,
+                applied_db: a.applied_db,
+                info: a.info,
+                revision: a.revision,
+                keyed: self.rearm.keyed,
+            }
+        } else {
+            super::AutoAttStatus {
+                phase: "off",
+                db: 31,
+                applied_db: None,
+                info: None,
+                revision: 0,
+                keyed: false,
+            }
+        }
+    }
+    pub(crate) fn startup_leveling_active(&self) -> bool {
+        self.rearm.held_key.is_some()
+    }
+    pub(crate) fn auto_attenuation_fault(&self) -> Option<(Fault, super::AutoAttStatus, f64, f64)> {
+        self.last_auto_att_fault
+    }
+    /// Sole-owner startup feedback consumer. Returning true means intentionally
+    /// consumed for leveling with native fitting/correction still disabled.
+    pub(crate) fn level_feedback(
+        &mut self,
+        b: &saturn_bridge::puresignal::PairBlock,
+        now: u64,
+    ) -> Result<bool, Fault> {
+        if self.rearm.held_key.is_none() {
+            return Ok(false);
+        }
+        let scope = self.rearm.capture_scope.ok_or(Fault::InvalidConfig)?;
+        self.validate_stamp(scope.output)?;
+        if b.meta.fence != scope.fence {
+            return Ok(true);
+        }
+        if b.meta.backend != self.backend() {
+            return Err(Fault::WrongBackend);
+        }
+        if b.meta.route != scope.route {
+            return Err(Fault::WrongRoute);
+        }
+        if b.meta.rate_hz != saturn_bridge::puresignal::RATE_HZ {
+            return Err(Fault::WrongRate);
+        }
+        let level = self
+            .rearm
+            .auto_att
+            .as_mut()
+            .ok_or(Fault::InvalidConfig)?
+            .observe(b, now)?;
+        if let Some(db) = level {
+            let scope = crate::tx_thread::feedback_owner::Scope {
+                attenuation_db: db,
+                ..scope
+            };
+            let serial = self
+                .feedback
+                .as_ref()
+                .ok_or(Fault::InvalidConfig)?
+                .0
+                .request(Some(scope))?
+                .serial;
+            self.rearm
+                .auto_att
+                .as_mut()
+                .unwrap()
+                .requested(db, serial, now);
+            self.rearm.capture_scope = Some(scope);
+            // Private TX-owner snapshot drives P2 keepalive too. The saved
+            // manual preference in installed/global configuration is untouched.
+            self.rearm
+                .model
+                .as_mut()
+                .ok_or(Fault::InvalidConfig)?
+                .desired
+                .pure_signal_attenuation_db = db;
+        }
+        Ok(true)
+    }
     /// Only the existing owner sets this before arm_generation creates the
     /// acquisition scope. Cancellation clears it along with queued output.
     pub(crate) fn measurement_stimulus(
@@ -229,6 +347,7 @@ impl OwnerStopAdapter<'_> {
             return Err(Fault::TxAuthority);
         }
         self.fence.reopen(revision, generation)?;
+        self.last_auto_att_fault = None;
         let required = match &self.owner {
             OutputOwner::P2 { session, .. } => session.key_qualification_packets(),
             OutputOwner::Direct(r) => r.key_qualification_packets(),
@@ -254,7 +373,7 @@ impl OwnerStopAdapter<'_> {
                 .tx_epoch
                 .checked_add(1)
                 .ok_or(Fault::GenerationMismatch)?;
-            let scope = crate::tx_thread::feedback_owner::Scope {
+            let mut scope = crate::tx_thread::feedback_owner::Scope {
                 stimulus: self.rearm.stimulus,
                 fence: keyed_fence,
                 route: self.feedback.as_ref().map_or(1, |(_, route)| *route),
@@ -278,9 +397,27 @@ impl OwnerStopAdapter<'_> {
                     revision,
                 },
             };
+            if self.rearm.auto_selected {
+                scope.attenuation_db = super::auto_attenuation::START_DB;
+                self.rearm
+                    .model
+                    .as_mut()
+                    .ok_or(Fault::InvalidConfig)?
+                    .desired
+                    .pure_signal_attenuation_db = scope.attenuation_db;
+            }
             self.rearm.capture_scope = Some(scope);
             if let Some((link, _)) = &self.feedback {
-                link.request(Some(scope))?;
+                let request = link.request(Some(scope))?;
+                if self.rearm.auto_selected {
+                    let (peak, rail, stale) = self.rearm.auto_limits.ok_or(Fault::InvalidConfig)?;
+                    self.rearm.auto_att = Some(super::auto_attenuation::Servo::new(
+                        request.serial,
+                        peak,
+                        rail,
+                        stale,
+                    )?);
+                }
             }
         }
         self.complete = None; // stale stop receipts cannot appear after reopening
@@ -418,6 +555,23 @@ impl OwnerStopAdapter<'_> {
             return Err(Fault::TxAuthority);
         }
         if self.rearm.keyed {
+            if let Some(receipt) = self.rearm.held_key {
+                let prepared = self
+                    .feedback
+                    .as_ref()
+                    .ok_or(Fault::InvalidConfig)?
+                    .0
+                    .prepared(stamp)?;
+                let servo = self.rearm.auto_att.as_mut().ok_or(Fault::InvalidConfig)?;
+                servo.tick(now)?;
+                if prepared {
+                    servo.applied(now)
+                }
+                if servo.ready_ns.is_some() {
+                    self.rearm.held_key = None;
+                    return Ok(Some(receipt));
+                }
+            }
             return Ok(None);
         }
         if let Some((link, _)) = &self.feedback {
@@ -534,11 +688,18 @@ impl OwnerStopAdapter<'_> {
         self.rearm.consume_iq(480);
         self.rearm.keyed = true;
         let action = self.rearm.active.as_ref().unwrap().0;
-        Ok(Some(KeyReceipt {
+        let receipt = KeyReceipt {
             action_sequence: action.sequence,
             output_generation: stamp.generation,
             keyed_ns: now,
-        }))
+        };
+        if let Some(servo) = self.rearm.auto_att.as_mut() {
+            servo.keyed(now);
+            self.rearm.held_key = Some(receipt);
+            Ok(None)
+        } else {
+            Ok(Some(receipt))
+        }
     }
     pub(crate) fn flush_iq(&mut self, stamp: OutputStamp, now: u64) -> Result<bool, Fault> {
         self.validate_stamp(stamp)?;

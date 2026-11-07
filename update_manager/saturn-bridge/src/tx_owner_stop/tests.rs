@@ -484,6 +484,7 @@ pub(crate) fn model() -> RadioModel {
     m.desired.tx_enabled = true;
     m.desired.running = true;
     m.desired.tx_drive = 23;
+    m.desired.pure_signal_auto_attenuate = false; // fixture's manual-gain contract
     m
 }
 pub(super) fn queues() -> (VecDeque<f32>, VecDeque<f32>) {

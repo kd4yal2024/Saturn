@@ -55,6 +55,7 @@ struct Header {
     first_pair: Option<u64>,
     arrivals_recorded: bool,
     feedback_meta: Option<BlockMeta>,
+    acquisition_revision: Option<u64>,
 }
 struct Record {
     header: Option<Header>,
@@ -198,6 +199,7 @@ impl Producer {
             first_pair: Some(block.meta.interval.first),
             arrivals_recorded: block.arrival_times_recorded,
             feedback_meta: Some(block.meta),
+            acquisition_revision: Some(block.acquisition_revision),
         };
         self.capture(
             h,
@@ -235,6 +237,7 @@ impl Submission {
             first_pair: None,
             arrivals_recorded: false,
             feedback_meta: None,
+            acquisition_revision: None,
         }
     }
     pub(crate) fn pcm(&self, samples: &[f32]) {
@@ -351,12 +354,12 @@ fn export(directory: &Path, id: u64, r: &Record) -> io::Result<()> {
         "\"commandedWatts\":{},\"mode\":\"{:?}\",\"stimulus\":\"{}\",\"sourceOldestNs\":{},\"submittedNs\":{},\"completedNs\":{},\"recordedNs\":{},",
         "\"keyedSnapshot\":{},\"requestedBytes\":{},\"completedBytes\":{},\"values\":{},\"packedBytes\":{},",
         "\"firstReturnedPair\":{},\"arrivalTimesRecorded\":{},\"arrivalCount\":{},\"overload\":\"unknown\",\"overloadEvidence\":[{},{},{}],",
-        "\"returnedIntervalEnd\":{},\"sequence\":{},\"valuesSha256\":\"{}\",\"packedSha256\":\"{}\",\"arrivalSha256\":\"{}\",\"rfQualified\":false}}\n"),
+        "\"returnedIntervalEnd\":{},\"sequence\":{},\"acquisitionRevision\":{},\"valuesSha256\":\"{}\",\"packedSha256\":\"{}\",\"arrivalSha256\":\"{}\",\"rfQualified\":false}}\n"),
         h.kind,h.backend,f.boot,f.generation,f.config,f.tx_epoch,o.generation,o.revision,h.scope.route,h.scope.frequency_hz,h.scope.attenuation_db,
         if matches!(h.kind,Kind::Pairs) {"null".into()} else {h.watts.to_string()},h.mode,h.scope.stimulus.label(),optional(h.source_oldest),optional(h.submitted),optional(h.completed),h.recorded,
         optional(h.keyed),optional(h.requested),optional(h.written),r.values.len(),r.raw.len(),optional(h.first_pair),h.arrivals_recorded,r.arrivals.len(),
         bracket(h.feedback_meta.and_then(|m|m.overload[0])),bracket(h.feedback_meta.and_then(|m|m.overload[1])),bracket(h.feedback_meta.and_then(|m|m.overload[2])),
-        optional(h.feedback_meta.map(|m|m.interval.end)),optional(h.feedback_meta.and_then(|m|m.sequence)),values_hash,packed_hash,arrival_hash);
+        optional(h.feedback_meta.map(|m|m.interval.end)),optional(h.feedback_meta.and_then(|m|m.sequence)),optional(h.acquisition_revision),values_hash,packed_hash,arrival_hash);
     let mut out = OpenOptions::new()
         .create_new(true)
         .write(true)

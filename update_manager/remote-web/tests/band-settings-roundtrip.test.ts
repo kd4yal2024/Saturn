@@ -8,6 +8,9 @@ import { normalizeBandMemory, normalizeRadioPrefs } from '../src/settings/normal
 import { buildAllRadioPrefsCommands } from '../src/tci/commands';
 import { managedSettingsMessage } from '../src/transport/managed-pcm';
 import { bandKeyForFrequency } from '../src/radio/band';
+import { PureSignalReports, pureSignalTestView } from '../src/puresignal/test-view';
+import type { ManagedPcmStatus } from '../src/transport/managed-pcm';
+import { clampPureSignalAttenuationDb } from '../src/settings/normalize';
 
 const template = readFileSync(new URL('../../templates/saturn-remote-next.html', import.meta.url), 'utf8');
 function source(name: string) {
@@ -51,6 +54,45 @@ function fixture() {
 }
 
 describe('automatic band operating settings', () => {
+  it('renders actual Auto ATT state, restores the manual preset and preserves an active slider edit',()=>{
+    const f=fixture();f.state.pureSignalAttenuationDb=18;
+    const m:ManagedPcmStatus={selected:true,phase:'ready',reason:'ready',pendingSettings:0,lastTransaction:'applied',
+      source:'tci',sentFrames:0,ownerPhase:'ReadyOff',microphonePreparation:'ready',psCapability:'single',manualAttenuationSupported:true};
+    const slider={value:'18',disabled:false},checkbox={checked:true,disabled:false},readout={textContent:''},label={textContent:''},status={textContent:''};
+    const nodes:Record<string,unknown>={'setup-tx-puresignal-attenuation':slider,'setup-tx-puresignal-auto-attenuate':checkbox,
+      'setup-tx-puresignal-attenuation-readout':readout,'setup-tx-puresignal-auto-attenuate-label':label,
+      'setup-ps-auto-att-status':status,'setup-ps-attended':{closest:()=>({hidden:false})}};
+    const doc:{activeElement:unknown}={activeElement:null};
+    const sync=runInNewContext(`${source('syncPureSignalPanel')}\nsyncPureSignalPanel`,{state:f.state,document:doc,$:(id:string)=>nodes[id]??null,
+      pureSignalPanelView:()=>pureSignalTestView(f.state,m,new PureSignalReports(),0),managedPcm:{status:()=>m},managedPcmSelected:()=>true,
+      renderPsHealthMonitor:vi.fn(),performance:{now:()=>0},clampPureSignalAttenuationDb});
+    sync();expect(checkbox.checked).toBe(false);expect(checkbox.disabled).toBe(true);expect(label.textContent).toContain('unavailable');
+    m.autoAttenuationSupported=true;m.autoAttenuationEnabled=true;
+    m.autoAttStatus={phase:'stable',db:12,appliedDb:12,info:152,frequencyHz:7_200_000,keyed:true};
+    sync();expect(checkbox.checked).toBe(true);expect(checkbox.disabled).toBe(false);
+    f.state.txPhase='keyed';m.phase='streaming';m.ownerPhase='Active';sync();expect(checkbox.disabled).toBe(true);
+    expect(slider.value).toBe('12');expect(slider.disabled).toBe(true);expect(f.state.pureSignalAttenuationDb).toBe(18);
+    f.state.txPhase='rx';m.phase='ready';m.ownerPhase='ReadyOff';m.autoAttenuationEnabled=false;sync();expect(slider.value).toBe('18');expect(slider.disabled).toBe(false);
+    doc.activeElement=slider;slider.value='23';readout.textContent='23 dB requested';sync();
+    expect(slider.value).toBe('23');expect(readout.textContent).toBe('23 dB requested');
+  });
+  it('saves the actual Auto ATT checkbox per band and sends it only to a capable shared host',()=>{
+    const f=fixture();
+    f.context.managedPcm.status=()=>({manualAttenuationSupported:true,autoAdaptationSupported:true,autoAttenuationSupported:true});
+    const marker='$("setup-tx-puresignal-auto-attenuate").addEventListener("change", () => {';
+    const start=template.indexOf(marker)+marker.length,end=template.indexOf('\n      });',start);
+    let checked=true,allowed=true;
+    const change=runInNewContext(`() => {${template.slice(start,end)}\n}`,{...f.context,...f.api,$:()=>({checked}),pureSignalPanelView:()=>({canSetAutoAttenuation:allowed}),syncSetupMenuFields:vi.fn()});
+    f.state.pureSignalAttenuationDb=18;change();
+    expect(f.sent.at(-1)).toBe('tx_puresignal_auto_attenuate:0,true;');
+    f.api.setFrequency(14_200_000);checked=false;f.state.pureSignalAttenuationDb=7;change();
+    f.sent.length=0;f.api.setFrequency(7_200_000);
+    expect(f.state.pureSignalAutoAttenuate).toBe(true);expect(f.state.pureSignalAttenuationDb).toBe(18);
+    expect(f.sent.join('')).toContain('tx_puresignal_auto_attenuate:0,true;');
+    f.api.setFrequency(14_200_000);expect(f.state.pureSignalAutoAttenuate).toBe(false);expect(f.state.pureSignalAttenuationDb).toBe(7);
+    const saved=f.storage.get('bandMemory');allowed=false;checked=true;change();
+    expect(f.storage.get('bandMemory')).toBe(saved);expect(f.state.pureSignalAutoAttenuate).toBe(false);
+  });
   it('saves changes immediately and restores distinct 40m / 20m setups through actual tuning functions', () => {
     const f = fixture();
     Object.assign(f.state, { mode: 'LSB', txDrive: 60, txMicGainDb: 0, rxAntenna: 2,

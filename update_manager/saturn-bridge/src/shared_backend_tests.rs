@@ -29,6 +29,12 @@ enum Case {
     NativeKeepaliveGap,
     NativeKeepaliveMissing,
     AutoCorrection,
+    AutoAttSingle,
+    AutoAttRelease,
+    AutoAttMissing,
+    AutoAttReconfigure,
+    AutoAttDisconnect,
+    AutoAttRange,
     AutoSustained,
     ReceiveMeter,
     BandRecall,
@@ -49,6 +55,18 @@ enum Case {
     StimulusClient,
 }
 impl Case {
+    fn auto_attenuation(self) -> bool {
+        matches!(
+            self,
+            Self::AutoCorrection
+                | Self::AutoAttSingle
+                | Self::AutoAttRelease
+                | Self::AutoAttMissing
+                | Self::AutoAttReconfigure
+                | Self::AutoAttDisconnect
+                | Self::AutoAttRange
+        )
+    }
     fn rear_ptt(self) -> bool {
         matches!(self, Self::RearPtt | Self::RearPttBypass)
     }
@@ -109,6 +127,7 @@ struct Io {
     output_packets: Arc<AtomicU64>,
     hardware_down: Arc<AtomicBool>,
     hardware_sent: Instant,
+    auto_drop_feedback: Arc<AtomicBool>,
 }
 fn options() -> Options {
     Options {
@@ -156,6 +175,7 @@ impl RuntimeIo for Io {
         model: &Arc<Mutex<RadioModel>>,
     ) -> Result<(Radio, Acquisition), Box<dyn Error>> {
         self.state_model = Some(model.clone());
+        model.lock_unpoisoned().desired.pure_signal_auto_attenuate = false; // each servo case enables it through actual TCI
         if self.direct && matches!(self.case, Case::MicrophoneBypass | Case::ReceiveMeter) {
             let mut m = model.lock_unpoisoned();
             m.desired.tx_monitor_available = true;
@@ -237,6 +257,7 @@ impl RuntimeIo for Io {
             self.address,
             self.case,
         );
+        let drop_feedback = self.auto_drop_feedback.clone();
         self.driver = Some(thread::spawn(move || {
             struct StopOnExit(Arc<AtomicBool>);
             impl Drop for StopOnExit {
@@ -382,6 +403,9 @@ impl RuntimeIo for Io {
             let mut bypass_active_since: Option<Instant> = None;
             let mut silent_ptt_started: Option<Instant> = None;
             let mut bypass_packets = 0;
+            let mut auto_generations = std::collections::BTreeSet::new();
+            let mut leveling_since = None;
+            let mut negative_started = false;
             while !joined.load(Ordering::Acquire) {
                 assert!(
                     Instant::now() < end,
@@ -404,6 +428,102 @@ impl RuntimeIo for Io {
                     }
                 }
                 let status = ingress.lifecycle_status().unwrap();
+                if case.auto_attenuation() {
+                    if let Some(scope) = link.desired().scope {
+                        if auto_generations.insert(scope.output.generation) {
+                            assert_eq!(
+                                scope.attenuation_db, 31,
+                                "each fresh PS TX starts at maximum feedback attenuation"
+                            );
+                        }
+                        if status.phase == Phase::Active {
+                            assert!(ingress.leveling_verified.load(Ordering::Acquire) > 0);
+                            assert!(
+                                scope.attenuation_db < 31,
+                                "servo must actually adjust, not pass vacuously at its start value"
+                            );
+                            assert!(link.prepared(scope.output).unwrap());
+                        }
+                    }
+                }
+                if case.auto_attenuation() && status.phase == Phase::AwaitingKey {
+                    assert_ne!(
+                        status.correction_applied,
+                        Some(true),
+                        "startup leveling must keep correction off"
+                    );
+                }
+                if matches!(
+                    case,
+                    Case::AutoAttRelease
+                        | Case::AutoAttMissing
+                        | Case::AutoAttReconfigure
+                        | Case::AutoAttDisconnect
+                        | Case::AutoAttRange
+                ) {
+                    if ingress.auto_leveling_snapshot().is_some_and(|s| s.keyed) {
+                        let at = leveling_since.get_or_insert_with(Instant::now);
+                        if !negative_started
+                            && (case == Case::AutoAttRange
+                                || at.elapsed() >= Duration::from_millis(60))
+                        {
+                            assert_eq!(status.phase, Phase::AwaitingKey);
+                            if case != Case::AutoAttRange {
+                                assert!(
+                                    ingress.leveling_verified.load(Ordering::Acquire) > 0,
+                                    "real native disabled-state checks required"
+                                );
+                            }
+                            if case == Case::AutoAttRange {
+                                // Actual acquisition supplies saturated feedback at maximum ATT.
+                            } else if case == Case::AutoAttDisconnect {
+                                drop(client.take());
+                            } else if case == Case::AutoAttMissing {
+                                drop_feedback.store(true, Ordering::Release);
+                            } else if case == Case::AutoAttReconfigure {
+                                client.as_mut().unwrap().text("tx_mic_gain:0,1;");
+                            } else {
+                                client.as_mut().unwrap().text("trx:0,false;");
+                            }
+                            negative_started = true;
+                            if case != Case::AutoAttRange {
+                                stage = 12;
+                            }
+                        }
+                    }
+                    if (negative_started
+                        || (case == Case::AutoAttRange && status.primary_fault.is_some()))
+                        && status.phase == Phase::ReadyOff
+                    {
+                        assert!(
+                            status.authority_completed_ns.is_some()
+                                && status.cleanup_completed_ns.is_some()
+                        );
+                        assert_eq!(
+                            status.primary_fault,
+                            if case == Case::AutoAttRange {
+                                Some(Fault::SevereOverdrive)
+                            } else if case == Case::AutoAttMissing {
+                                Some(Fault::Stale)
+                            } else {
+                                None
+                            }
+                        );
+                        assert!(ingress.leveling_verified.load(Ordering::Acquire) > 0);
+                        if case == Case::AutoAttReconfigure
+                            && (!ingress.startup_ready()
+                                || state_model.lock_unpoisoned().desired.tx_mic_gain_db != 1.)
+                        {
+                            continue;
+                        }
+                        stop.store(true, Ordering::Release);
+                        while !joined.load(Ordering::Acquire) {
+                            assert!(Instant::now() < end);
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        return 0;
+                    }
+                }
                 if case.native_two_tone() && status.phase == Phase::Active {
                     baseline_since.get_or_insert_with(Instant::now);
                 }
@@ -814,7 +934,16 @@ impl RuntimeIo for Io {
                                 .text("tx_mic_gain:0,-12;tx_puresignal:0,false;");
                         } else if matches!(case, Case::AutoCorrection | Case::AutoSustained) {
                             assert!(ingress.auto_mode_caps().is_some());
-                            client.as_mut().unwrap().text("tx_puresignal_mode:0,auto;");
+                            client.as_mut().unwrap().text(if case.auto_attenuation() {
+                                "tx_puresignal_auto_attenuate:0,true;tx_puresignal_mode:0,auto;"
+                            } else {
+                                "tx_puresignal_mode:0,auto;"
+                            });
+                        } else if case.auto_attenuation() {
+                            client
+                                .as_mut()
+                                .unwrap()
+                                .text("tx_puresignal_auto_attenuate:0,true;tx_puresignal:0,true;");
                         } else {
                             client.as_mut().unwrap().text("tx_puresignal:0,true;");
                         }
@@ -890,6 +1019,7 @@ impl RuntimeIo for Io {
                                     | Case::RearPttBypass
                                     | Case::MicrophoneBypass
                                     | Case::AutoCorrection
+                                    | Case::AutoAttSingle
                                     | Case::AutoSustained
                             )
                         {
@@ -969,7 +1099,17 @@ impl RuntimeIo for Io {
                 }
                 if matches!(stage, 3 | 5 | 11) {
                     if let Some(p) = &p2 {
-                        if status.phase == Phase::Active && Instant::now() >= next_feedback {
+                        if matches!(status.phase, Phase::AwaitingKey | Phase::Active)
+                            && Instant::now() >= next_feedback
+                        {
+                            if case.auto_attenuation() {
+                                if let Some(scope) = link.desired().scope {
+                                    wave.attenuation(scope.attenuation_db);
+                                    if case == Case::AutoAttRange {
+                                        wave.amplify_feedback(1000.);
+                                    }
+                                }
+                            }
                             p.feedback.send_to(&wave.p2(), p.destination).unwrap();
                             next_feedback = Instant::now() + Duration::from_millis(2);
                         }
@@ -1011,6 +1151,7 @@ impl RuntimeIo for Io {
                         | Case::RearPttBypass
                         | Case::MicrophoneBypass
                         | Case::AutoCorrection
+                        | Case::AutoAttSingle
                         | Case::AutoSustained
                 ) {
                     2
@@ -1099,6 +1240,9 @@ impl RuntimeIo for Io {
             return Err(std::io::Error::other("injected acquisition read failure").into());
         }
         let request = link.desired();
+        if self.auto_drop_feedback.load(Ordering::Acquire) && request.scope.is_some() {
+            return Ok(false);
+        }
         // Only the file-backed Direct reader needs synthetic read pacing.
         // P2 arrivals are already paced by the independent UDP producer; a
         // second 4 ms throttle here halves consumption and drops real packets
@@ -1176,6 +1320,22 @@ impl RuntimeIo for Io {
                 frame[..4].copy_from_slice(&0x100000u32.to_le_bytes());
                 frame[7] = 0x80;
                 let normal = frame.repeat(128);
+                if self.case.auto_attenuation() {
+                    if link.preparing() {
+                        direct_rx::reader_pause_only(rx);
+                        return Ok(true);
+                    }
+                    if let Some(scope) = request.scope {
+                        assert_eq!(
+                            (self.files.as_ref().unwrap().read(0x2018) >> 5) & 31,
+                            u32::from(scope.attenuation_db)
+                        );
+                        self.wave.attenuation(scope.attenuation_db);
+                        if self.case == Case::AutoAttRange {
+                            self.wave.amplify_feedback(1000.);
+                        }
+                    }
+                }
                 let paired = self.wave.direct();
                 direct_rx::reader_turn(rx, &normal, &paired[..136 * 128], self.sequence);
             }
@@ -1267,6 +1427,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         output_packets: Arc::new(AtomicU64::new(0)),
         hardware_down: Arc::new(AtomicBool::new(false)),
         hardware_sent: Instant::now() - Duration::from_secs(1),
+        auto_drop_feedback: Arc::new(AtomicBool::new(false)),
     };
     let directory = std::env::temp_dir().join(format!(
         "saturn-runtime-{}-{}",
@@ -1390,6 +1551,10 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::RearPttBypass
                 | Case::MicrophoneBypass
                 | Case::AutoCorrection
+                | Case::AutoAttSingle
+                | Case::AutoAttRelease
+                | Case::AutoAttReconfigure
+                | Case::AutoAttDisconnect
                 | Case::AutoSustained
                 | Case::BaselineTwoTone
                 | Case::NativeKeepaliveGap
@@ -1442,6 +1607,11 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::BrowserLongMeasurementClient
                 | Case::BrowserTimingMeasurementClient
                 | Case::StimulusClient
+                | Case::AutoAttRelease
+                | Case::AutoAttMissing
+                | Case::AutoAttReconfigure
+                | Case::AutoAttDisconnect
+                | Case::AutoAttRange
         ) {
             assert!(io.held_turns > 2 && io.received_turns > 10);
             assert!(
@@ -1596,6 +1766,23 @@ fn actual_run_inner_native_keepalive_liveness_both_backends() {
 fn actual_run_inner_auto_release_rearm_both_backends() {
     for direct in [false, true] {
         exercise(direct, Case::AutoCorrection);
+    }
+}
+#[test]
+#[ignore = "serial real WDSP startup Auto ATT, both actual backends; loopback/files only"]
+fn actual_run_inner_auto_attenuation_single_auto_and_cancellation() {
+    for direct in [false, true] {
+        for case in [
+            Case::AutoAttSingle,
+            Case::AutoCorrection,
+            Case::AutoAttRelease,
+            Case::AutoAttMissing,
+            Case::AutoAttReconfigure,
+            Case::AutoAttDisconnect,
+            Case::AutoAttRange,
+        ] {
+            exercise(direct, case);
+        }
     }
 }
 #[test]

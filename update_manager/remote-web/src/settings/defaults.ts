@@ -61,7 +61,7 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
   pureSignalEnabled: false,
   pureSignalMode: 'off',
   pureSignalAutoAttenuate: true,
-  pureSignalAttenuationDb: 0,
+  pureSignalAttenuationDb: 31,
   txMeterMode: 'peak',
   twoToneEnabled: false,
   txTwoToneFreq1: 700,

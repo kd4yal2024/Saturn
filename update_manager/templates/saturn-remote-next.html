@@ -7486,7 +7486,8 @@
                         </details>
                         <div class="setup-inline-fields">
                           <label class="toggle-field"><span>PS enable request</span><input id="setup-tx-puresignal-enabled" type="checkbox" disabled /></label>
-                          <label class="toggle-field"><span>Auto ATT (unavailable here)</span><input id="setup-tx-puresignal-auto-attenuate" type="checkbox" disabled /></label>
+                          <label class="toggle-field"><span id="setup-tx-puresignal-auto-attenuate-label">Auto ATT — awaiting host</span><input id="setup-tx-puresignal-auto-attenuate" type="checkbox" disabled /></label>
+                          <div class="setup-readout" id="setup-ps-auto-att-status" role="status"></div>
                         </div>
                         <div class="setup-row">
                             <label class="label" for="setup-tx-puresignal-attenuation">Feedback attenuation</label>
@@ -14435,9 +14436,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("setup-tx-phase-rotator-corner").disabled = phaseRotatorModeDisabled || !radio.txPhaseRotatorEnabled;
       }
       setChecked("setup-tx-puresignal-enabled", radio.pureSignalEnabled);
-      setChecked("setup-tx-puresignal-auto-attenuate", radio.pureSignalAutoAttenuate);
-      setValue("setup-tx-puresignal-attenuation", radio.pureSignalAttenuationDb);
-      if ($("setup-tx-puresignal-attenuation-readout")) {
+      setChecked("setup-tx-puresignal-auto-attenuate", managedPcm.status().autoAttenuationSupported && managedPcm.status().autoAttenuationEnabled === true);
+      if (document.activeElement !== $("setup-tx-puresignal-attenuation")) setValue("setup-tx-puresignal-attenuation", radio.pureSignalAttenuationDb);
+      if (document.activeElement !== $("setup-tx-puresignal-attenuation") && $("setup-tx-puresignal-attenuation-readout")) {
         $("setup-tx-puresignal-attenuation-readout").textContent = `${radio.pureSignalAttenuationDb} dB`;
       }
       syncPureSignalPanel();
@@ -14479,9 +14480,19 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         mode.querySelector('option[value="auto"]').disabled = !view.canAutoAdaptation;
         if (["off", "single", "auto"].includes(view.adaptationMode)) mode.value = view.adaptationMode;
       }
-      // Auto ATT remains a separate policy. Manual settings use the existing
-      // stop/configuration barrier when the host advertises the command.
-      if ($("setup-tx-puresignal-auto-attenuate")) $("setup-tx-puresignal-auto-attenuate").disabled = true;
+      if ($("setup-tx-puresignal-auto-attenuate")) $("setup-tx-puresignal-auto-attenuate").disabled = !view.canSetAutoAttenuation;
+      if ($("setup-tx-puresignal-auto-attenuate")) $("setup-tx-puresignal-auto-attenuate").checked = view.autoAttenuationEnabled;
+      if ($("setup-tx-puresignal-auto-attenuate-label")) $("setup-tx-puresignal-auto-attenuate-label").textContent = view.autoAttenuationSupported ? "Auto ATT — starts at 31 dB" : "Auto ATT unavailable on this host";
+      if ($("setup-ps-auto-att-status")) $("setup-ps-auto-att-status").textContent = !view.autoAttenuationSupported ? "" : !view.autoAttenuationEnabled ? "Manual feedback attenuation" : view.autoAttStatus && view.autoAttStatus.phase !== "off" ? `${view.autoAttStatus.db} dB · ${view.autoAttStatus.phase}${view.autoAttStatus.info === null ? "" : ` · level estimate ${view.autoAttStatus.info}`}` : "Next PS TX starts at 31 dB";
+      if (view.autoAttenuationEnabled) {
+        const db = view.autoAttStatus?.appliedDb ?? 31;
+        if ($("setup-tx-puresignal-attenuation")) $("setup-tx-puresignal-attenuation").value = String(db);
+        if ($("setup-tx-puresignal-attenuation-readout")) $("setup-tx-puresignal-attenuation-readout").textContent = `${db} dB · Auto ATT`;
+      } else if (document.activeElement !== $("setup-tx-puresignal-attenuation")) {
+        const db=clampPureSignalAttenuationDb(state.pureSignalAttenuationDb);
+        if ($("setup-tx-puresignal-attenuation")) $("setup-tx-puresignal-attenuation").value=String(db);
+        if ($("setup-tx-puresignal-attenuation-readout")) $("setup-tx-puresignal-attenuation-readout").textContent=`${db} dB · Manual`;
+      }
       if ($("setup-tx-puresignal-attenuation")) $("setup-tx-puresignal-attenuation").disabled = !view.canSetFeedbackAttenuation;
       if ($("setup-tx-puresignal-reset")) $("setup-tx-puresignal-reset").disabled = !view.canCalibrate || managed.psMode === "off";
       if ($("setup-ps-off")) $("setup-ps-off").disabled = !view.canConfigure && !managed.measurementActive;
@@ -14531,7 +14542,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const text = JSON.stringify({ format: "saturn-ps-ui-diagnostics-v1",
         copiedAtIso: new Date().toISOString(), mode: state.mode,
         txPhase: state.txPhase, commandedWatts: state.txDrive,
-        feedbackAttenuationCommandDb: state.pureSignalAttenuationDb,
+        feedbackAttenuationCommandDb: managedSettings.autoAttenuationEnabled ? (managedSettings.autoAttStatus?.db ?? 31) : state.pureSignalAttenuationDb,
+        manualFeedbackAttenuationPresetDb: state.pureSignalAttenuationDb,
+        autoAttenuationPreference: state.pureSignalAutoAttenuate,
+        autoAttenuationHostConfirmedDb: managedSettings.autoAttStatus?.appliedDb ?? null,
         managedPhase: managedSettings.phase, pendingSettings: managedSettings.pendingSettings,
         lastSettingsResult: managedSettings.lastTransaction,
         receiveTuningReady: managedSettings.receiveTuningReady,
@@ -18757,9 +18771,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const capabilities = managed ? managedPcm.status() : null;
       const commands = _next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false }).filter(command => {
         if (!managed) return true;
-        // Shared acquisition has no Auto ATT setter, and its native two-tone
-        // is a separately authorized action, not a replayable configuration.
-        if (/^tx_(?:puresignal_auto_attenuate|two_tone(?:_[a-z0-9_]+)?):/.test(command)) return false;
+        // Native two-tone is an authorized action. Auto ATT is a negotiated,
+        // ordered setting, saved/restored per band without keying the radio.
+        if (/^tx_two_tone(?:_[a-z0-9_]+)?:/.test(command)) return false;
+        if (command.startsWith("tx_puresignal_auto_attenuate:") && !capabilities.autoAttenuationSupported) return false;
         if (command.startsWith("tx_puresignal_attenuation:") && !capabilities.manualAttenuationSupported) return false;
         return true;
       }).map(command =>
@@ -21069,9 +21084,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // A rejected old token is not an owner fault. Do not feed that
         // diagnostic into the legacy fault-to-lock path for current output.
         text = text.split(";").filter(c => c.trim() !== "tx_fault:0,psg1,GenerationMismatch").join(";");
-        if (text.includes("saturn_tx_owner:shared,")) {
+        if (text.includes("saturn_tx_owner:shared,") || text.includes("saturn_ps_auto_att:")) {
           const phase = managedPcm.status().ownerPhase;
-          if (phase) text += `;tx_state:0,${phase === "Active" ? "keyed" : phase === "AwaitingKey" ? "armed" : "rx"};`;
+          const levelingKeyed = phase === "AwaitingKey" && managedPcm.status().autoAttStatus?.keyed;
+          if (phase) text += `;tx_state:0,${phase === "Active" || levelingKeyed ? "keyed" : phase === "AwaitingKey" ? "armed" : "rx"};`;
         }
       }
       handleRxAudioCodecEcho(text);
@@ -22597,7 +22613,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       });
       $("setup-tx-puresignal-auto-attenuate").addEventListener("change", () => {
-        syncSetupMenuFields(); // fixed host acquisition contract; no unsupported setter
+        if (!pureSignalPanelView().canSetAutoAttenuation) { syncSetupMenuFields(); return; }
+        state.pureSignalAutoAttenuate = Boolean($("setup-tx-puresignal-auto-attenuate").checked);
+        saveRadioPrefs();
+        sendTci(`tx_puresignal_auto_attenuate:0,${state.pureSignalAutoAttenuate};`);
       });
       $("setup-tx-puresignal-attenuation").addEventListener("input", () => {
         $("setup-tx-puresignal-attenuation-readout").textContent = `${$("setup-tx-puresignal-attenuation").value} dB requested`;

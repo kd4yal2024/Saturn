@@ -543,7 +543,7 @@ export function createAppState(): AppState {
     txPhaseRotatorCornerHz: 338,
     pureSignalEnabled: false,
     pureSignalAutoAttenuate: true,
-    pureSignalAttenuationDb: 0,
+    pureSignalAttenuationDb: 31,
     pureSignalState: 'off',
     pureSignalFeedbackLevel: 0,
     pureSignalCalibrationCount: 0,

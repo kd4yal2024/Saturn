@@ -187,12 +187,14 @@ impl Drop for Client {
 pub(crate) struct Wave {
     random: u32,
     sequence: u32,
+    feedback_gain: f64,
 }
 impl Wave {
     pub(crate) fn new() -> Self {
         Self {
             random: 0x53460004,
             sequence: 0,
+            feedback_gain: 1.,
         }
     }
     fn uniform(&mut self) -> f64 {
@@ -202,7 +204,7 @@ impl Wave {
     fn pair(&mut self) -> [u8; 12] {
         let r = 0.001 + 0.999 * self.uniform();
         let angle = std::f64::consts::TAU * self.uniform();
-        let feedback = 0.5 * r * (1. - 0.25 * r * r);
+        let feedback = self.feedback_gain * 0.5 * r * (1. - 0.25 * r * r);
         let phase = angle + 0.18 * r * r;
         let mut result = [0; 12];
         for (sample, dest) in [
@@ -214,7 +216,7 @@ impl Wave {
         .into_iter()
         .zip(result.chunks_exact_mut(3))
         {
-            let v = (sample * 8388608.).round() as i32;
+            let v = (sample * 8388608.).round().clamp(-8388608., 8388607.) as i32;
             dest.copy_from_slice(&v.to_be_bytes()[1..]);
         }
         result
@@ -229,6 +231,14 @@ impl Wave {
             dest.copy_from_slice(&self.pair());
         }
         packet
+    }
+    pub(crate) fn amplify_feedback(&mut self, gain: f64) {
+        self.feedback_gain *= gain;
+    }
+    pub(crate) fn attenuation(&mut self, db: u8) {
+        // Original fixture gain is at 9 dB. Model the commanded attenuator,
+        // rather than presenting invariant samples regardless of gain writes.
+        self.feedback_gain = 10f64.powf((9. - f64::from(db)) / 20.);
     }
     pub(crate) fn direct(&mut self) -> Vec<u8> {
         let mut bytes = vec![0; 136 * 256];

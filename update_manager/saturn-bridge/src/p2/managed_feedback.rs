@@ -124,7 +124,8 @@ impl P2Session {
         if let Some(scope) = desired.scope {
             managed.stream = Some(
                 Stream::new(scope, Backend::P2, managed.origin, managed.ingress.clone())
-                    .map_err(|f| io::Error::other(format!("P2 feedback storage: {f:?}")))?,
+                    .map_err(|f| io::Error::other(format!("P2 feedback storage: {f:?}")))?
+                    .with_revision(desired.serial),
             );
         }
         managed.completed = desired;

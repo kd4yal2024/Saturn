@@ -164,9 +164,10 @@ impl FullNative {
         input: &crate::correction_monitor::Input,
         model: &RadioModel,
         keyed: bool,
+        attenuation: Option<u8>,
     ) {
         if let Some(engine) = &self.engine {
-            engine.observe_correction(input, model, keyed);
+            engine.observe_correction_with_attenuation(input, model, keyed, attenuation);
         }
     }
     fn exchange(&mut self, samples: &[f32]) -> Result<Vec<f32>, Fault> {
@@ -321,6 +322,25 @@ impl NativePs for FullNative {
     }
 }
 impl ScheduledNative for FullNative {
+    fn startup_leveling_guard(&mut self) -> Result<bool, Fault> {
+        #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+        {
+            unsafe extern "C" {
+                fn saturn_try_shared_leveling_flags(flags: *mut i32) -> i32;
+            }
+            if self.cleanup.is_some() {
+                return Err(Fault::NativeFailure);
+            }
+            let mut flags = -1;
+            match unsafe { saturn_try_shared_leveling_flags(&mut flags) } {
+                0 => Ok(false), // Retry on a later block without refreshing its age.
+                1 if flags == 0 => Ok(true),
+                _ => Err(Fault::NativeFailure),
+            }
+        }
+        #[cfg(any(not(feature = "managed-puresignal"), saturn_bridge_stub_native))]
+        Err(Fault::NativeUnverified)
+    }
     fn diagnostic_stimulus(
         &mut self,
         stimulus: crate::tx_thread::feedback_owner::Stimulus,

@@ -278,6 +278,22 @@ fn setup(backend: Backend, capacity: usize) -> (Controller<FakeNative>, Rc<RefCe
     c.on_tx_state(1, true, 0).unwrap();
     (c, trace)
 }
+#[test]
+fn startup_gain_floor_keeps_original_key_time_but_rejects_retained_leveling_samples() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        let (mut c, _) = setup(backend, 4);
+        let ready = 1_000_000_000;
+        c.set_feedback_ready_ns(ready);
+        assert_eq!(c.check_deadline(ready + 200_000_000), Ok(()));
+        let old = block(&c, 0, 1024, 0, ready - 1);
+        assert_eq!(c.submit(&old, ready + 1), Err(Fault::Settling));
+        assert!(c.status().fault.is_none());
+        let fresh = block(&c, 1024, 1024, 1, ready + 1);
+        c.submit(&fresh, ready + 1).unwrap();
+        assert_eq!(c.pump(ready + 1).unwrap(), 1);
+        assert_eq!(c.check_deadline(ready + 250_000_002), Err(Fault::Stale));
+    }
+}
 fn brackets(interval: Interval, now: u64) -> [Option<CounterBracket>; 3] {
     [
         OverloadSource::Adc1,

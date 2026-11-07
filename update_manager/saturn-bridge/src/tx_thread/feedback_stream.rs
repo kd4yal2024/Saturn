@@ -9,6 +9,7 @@ use std::time::Instant;
 
 pub(crate) struct Stream {
     scope: Scope,
+    acquisition_revision: u64,
     backend: Backend,
     direct: DirectXdmaAdapter,
     p2: P2Adapter,
@@ -42,6 +43,7 @@ impl Stream {
         };
         Ok(Self {
             scope,
+            acquisition_revision: 0,
             backend,
             direct: DirectXdmaAdapter::new(scope.fence, scope.route, true),
             p2: P2Adapter::new(scope.fence, scope.route),
@@ -63,6 +65,7 @@ impl Stream {
     ) -> Self {
         Self {
             scope,
+            acquisition_revision: 0,
             backend: Backend::DirectXdma,
             direct: DirectXdmaAdapter::new(scope.fence, scope.route, true),
             p2: P2Adapter::new(scope.fence, scope.route),
@@ -87,6 +90,16 @@ impl Stream {
     }
     pub(crate) fn scope(&self) -> Scope {
         self.scope
+    }
+    pub(crate) fn with_revision(mut self, serial: u64) -> Self {
+        self.acquisition_revision = serial;
+        if let Some(block) = &mut self.scratch {
+            block.acquisition_revision = serial;
+        }
+        if let Some(block) = &mut self.accumulated {
+            block.acquisition_revision = serial;
+        }
+        self
     }
     fn observed(&self, at: Instant) -> Result<u64, Fault> {
         at.checked_duration_since(self.origin)
@@ -120,6 +133,7 @@ impl Stream {
         let batch = self.accumulated.as_mut().ok_or(Fault::QueueOverrun)?;
         if batch.pairs == 0 {
             batch.meta = scratch.meta;
+            batch.acquisition_revision = self.acquisition_revision;
             batch.meta.sequence_packets = 0;
             batch.arrival_times_recorded = scratch.arrival_times_recorded;
         }
@@ -173,6 +187,7 @@ impl Stream {
                 let block = self.accumulated.as_mut().ok_or(Fault::QueueOverrun)?;
                 if block.pairs == 0 {
                     block.meta = scratch.meta;
+                    block.acquisition_revision = self.acquisition_revision;
                     block.arrival_times_recorded = scratch.arrival_times_recorded;
                 }
                 let start = block.pairs * 2;
@@ -234,7 +249,9 @@ pub(crate) mod tests {
         let (ingress, rx) = collector();
         let origin = Instant::now();
         let s = scope(1);
-        let mut stream = Stream::new(s, Backend::DirectXdma, origin, ingress.clone()).unwrap();
+        let mut stream = Stream::new(s, Backend::DirectXdma, origin, ingress.clone())
+            .unwrap()
+            .with_revision(73);
         // Six native blocks (~32 ms), arriving in actual maximum DMA-sized
         // chunks, without any consumer scheduling between reads. The old
         // two-slot/four-box handoff failed on block three.
@@ -246,6 +263,7 @@ pub(crate) mod tests {
         for n in 0..6 {
             let block = rx.feedback.try_recv().unwrap();
             assert_eq!(block.pairs, 1024);
+            assert_eq!(block.acquisition_revision, 73);
             assert_eq!(block.meta.observed_ns, 0);
             assert!(block.arrival_ns[..1024].iter().all(|v| *v == 0));
             assert_eq!(block.meta.interval.first, n * 1024);
@@ -319,7 +337,9 @@ pub(crate) mod tests {
         let (ingress, rx) = collector();
         let origin = Instant::now();
         let s = scope(1);
-        let mut stream = Stream::new(s, Backend::P2, origin, ingress.clone()).unwrap();
+        let mut stream = Stream::new(s, Backend::P2, origin, ingress.clone())
+            .unwrap()
+            .with_revision(73);
         for n in 0..16 {
             let at = origin + std::time::Duration::from_millis(if n == 0 { 0 } else { 200 + n });
             stream.p2(Some(s), &packet(n as u32), at).unwrap();
@@ -327,6 +347,7 @@ pub(crate) mod tests {
         for batch in 0..2 {
             let b = rx.feedback.try_recv().unwrap();
             assert_eq!(b.pairs, 952);
+            assert_eq!(b.acquisition_revision, 73);
             assert_eq!(b.meta.sequence, Some(batch * 8));
             assert_eq!(b.meta.sequence_packets, 8);
             assert_eq!(b.meta.interval.first, batch as u64 * 952);

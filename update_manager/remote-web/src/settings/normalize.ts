@@ -90,7 +90,7 @@ export function clampTxPhaseRotatorCornerHz(value: unknown): number {
 }
 
 export function clampPureSignalAttenuationDb(value: unknown): number {
-  return Math.max(0, Math.min(31, Math.round(safeFiniteNumber(value, 0))));
+  return Math.max(0, Math.min(31, Math.round(safeFiniteNumber(value, 31))));
 }
 
 export function normalizeNbMode(value: unknown): RadioPrefs['rxNbMode'] {

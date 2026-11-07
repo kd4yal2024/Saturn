@@ -87,6 +87,14 @@ pub trait TxAuthority {
     fn poll_stop(&mut self, id: u64) -> Result<Option<StopReceipt>, Fault>;
     fn begin_arm(&mut self, action: FreshTxAction, output_generation: u64) -> Result<(), Fault>;
     fn poll_key(&mut self, now_ns: u64) -> Result<Option<KeyReceipt>, Fault>;
+    /// Physically keyed startup leveling: periodic authority service enforces
+    /// feedback freshness while fitting remains off and release stays first.
+    fn feedback_leveling(&self) -> bool {
+        false
+    }
+    fn feedback_ready_ns(&self) -> Option<u64> {
+        None
+    }
     /// Sole lifecycle notification after native quiescence/config retirement.
     /// It does not authorize TX. Owner adapters invalidate all pre-cleanup arms.
     fn cleanup_complete(&mut self, _stop_id: u64, _fence: Fence) -> Result<(), Fault> {
@@ -899,8 +907,9 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
                 }
             }
             Phase::AwaitingKey => {
-                if now.saturating_sub(self.status.notified_ns.unwrap())
-                    > self.limits.authority_timeout_ns
+                if !self.authority.feedback_leveling()
+                    && now.saturating_sub(self.status.notified_ns.unwrap())
+                        > self.limits.authority_timeout_ns
                 {
                     self.stop(StopCause::Fault(Fault::TxAuthority))?;
                     return Err(Fault::TxAuthority);
@@ -923,6 +932,11 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
                         self.stop(StopCause::Fault(Fault::FutureObservation))?;
                         return Err(Fault::FutureObservation);
                     }
+                    let feedback_ready = self.authority.feedback_ready_ns();
+                    if feedback_ready.is_some_and(|ready| ready > now || ready < receipt.keyed_ns) {
+                        self.stop(StopCause::Fault(Fault::FutureObservation))?;
+                        return Err(Fault::FutureObservation);
+                    }
                     self.service_release()?;
                     if self.status.phase != Phase::AwaitingKey {
                         return Ok(());
@@ -934,6 +948,9 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
                     if let Err(fault) = self.c_mut().on_tx_state(epoch, true, receipt.keyed_ns) {
                         self.stop(StopCause::Fault(fault))?;
                         return Err(fault);
+                    }
+                    if let Some(ready) = feedback_ready {
+                        self.c_mut().set_feedback_ready_ns(ready);
                     }
                     self.status.phase = Phase::Active;
                     self.status.last_known_applied_before_stop = false;

@@ -27,7 +27,7 @@ export class TxPathNegotiator {
       this.shared ||= shared;
       if (this.path !== 'pending') continue;
       // Retain negotiation only, never large spectra, audio or pairing secrets.
-      if (/^(?:ready$|tx_enable:|tx_codec_(?:accept|reject):|saturn_rx_tuning_caps:|saturn_tx_(?:media_caps|owner|arm_policy|drive_limit|committed_drive|fault_ack_caps|fault_ack_state):|saturn_ps_(?:control_caps|mode|measurement_caps|stimulus_caps|two_tone_caps|native_two_tone_caps|manual_attenuation_caps|fault_attenuation_caps|auto_caps):)/.test(c)) {
+      if (/^(?:ready$|tx_enable:|tx_puresignal_auto_attenuate:|tx_codec_(?:accept|reject):|saturn_rx_tuning_caps:|saturn_tx_(?:media_caps|owner|arm_policy|drive_limit|committed_drive|fault_ack_caps|fault_ack_state):|saturn_ps_(?:control_caps|mode|measurement_caps|stimulus_caps|two_tone_caps|native_two_tone_caps|manual_attenuation_caps|fault_attenuation_caps|auto_caps|auto_att_caps|auto_att):)/.test(c)) {
         this.bytes += c.length + 1;
         if (this.bytes > 16384) {
           this.path = 'blocked'; this.reason = 'Host TX negotiation exceeded its bounded snapshot';

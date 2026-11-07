@@ -2287,6 +2287,25 @@ impl WdspTxEngine {
         }
     }
 
+    /// Snapshot with the existing acquisition owner's confirmed Auto ATT gain.
+    #[cfg(feature = "managed-puresignal")]
+    pub(crate) fn observe_correction_with_attenuation(
+        &self,
+        input: &crate::correction_monitor::Input,
+        model: &RadioModel,
+        keyed: bool,
+        attenuation: Option<u8>,
+    ) {
+        if self.channel_open {
+            input.capture_with_attenuation(
+                self.channel_id,
+                model,
+                keyed,
+                attenuation.unwrap_or(model.desired.pure_signal_attenuation_db),
+            );
+        }
+    }
+
     /// Push mono mic audio samples (f32, normalized ±1.0) through the TX DSP
     /// chain. IQ output is accumulated in `self.pending_iq`; callers should
     /// drain it in 240-sample (DUC_IQ_SAMPLES_PER_PACKET) batches.

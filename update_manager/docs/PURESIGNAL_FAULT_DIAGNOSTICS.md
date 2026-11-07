@@ -165,7 +165,7 @@ The operator confirmed a Coaxial Dynamics 7999 adjustable sampler after the
 amplifier, connected directly from its sample port to RX BYPASS. The saved
 ANAN-G2 Thetis profile (modified 2026-11-01) has PS Auto ATT and Quick Attenuate
 enabled; its saved peak setting is 0.6121. The SDR-VST3 ANAN-G2 profile also has
-Auto ATT enabled. Saturn's shared path currently provides manual attenuation,
+Auto ATT enabled. At that investigation's source revision Saturn's shared path provided manual attenuation,
 not the Legacy P2 owner's automatic loop. Its observed command was 0 dB.
 A saved 2026-09-25 80 m calibration log changed from 31 dB at PS enable to 12 dB
 at save; that historical setting is not a measured value for the current 40 m
@@ -192,3 +192,11 @@ The actual slider handler is tested without a host echo and rejects invalid or
 unavailable edits without rewriting memory. Recall does not key RF or enable
 two-tone. Unsupported shared Auto ATT commands remain omitted; storing the
 preference does not implement or advertise the automatic feedback-level loop.
+
+## Startup Auto ATT follow-up
+
+The formerly unsupported saved checkbox is now backed by an explicit shared-owner
+startup servo. See [PureSignal startup Auto ATT](PURESIGNAL_AUTO_ATT.md) for the
+31 dB initial setting, native-disabled leveling, acquisition revision fencing,
+per-band controls, wire contract and measurement limits. Earlier manual-only
+statements above describe the preserved investigation and its original release.

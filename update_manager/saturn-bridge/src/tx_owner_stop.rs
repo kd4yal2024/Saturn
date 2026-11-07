@@ -285,6 +285,7 @@ pub(crate) struct OwnerStopAdapter<'a> {
     feedback: Option<(crate::tx_thread::feedback_owner::Link, u128)>,
     diagnostic: Option<crate::tx_signal_capture::shared::Producer>,
     diagnostic_last: Option<crate::tx_signal_capture::shared::Submission>,
+    last_auto_att_fault: Option<(Fault, AutoAttStatus, f64, f64)>,
     #[cfg(test)]
     before_key_permit: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -338,6 +339,7 @@ impl<'a> OwnerStopAdapter<'a> {
             feedback: None,
             diagnostic: None,
             diagnostic_last: None,
+            last_auto_att_fault: None,
             #[cfg(test)]
             before_key_permit: None,
         }
@@ -497,6 +499,14 @@ impl TxAuthority for OwnerStopAdapter<'_> {
     fn begin_stop(&mut self, request: StopRequest) -> Result<(), Fault> {
         // Even malformed requests fence immediately; they cannot mint receipts.
         self.fence.close();
+        if let (saturn_bridge::puresignal::tx_lifecycle::StopCause::Fault(fault), Some(servo)) =
+            (request.cause, self.rearm.auto_att.as_ref())
+        {
+            let mut snapshot = self.auto_attenuation_status(false);
+            snapshot.phase = "fault";
+            snapshot.keyed = false;
+            self.last_auto_att_fault = Some((fault, snapshot, servo.reference_peak, servo.rf_peak));
+        }
         if let OutputOwner::Direct(radio) = &self.owner {
             crate::tx_thread::TxRadio::stop_monitor(radio.as_ref());
         }
@@ -529,6 +539,12 @@ impl TxAuthority for OwnerStopAdapter<'_> {
     }
     fn poll_key(&mut self, now: u64) -> Result<Option<KeyReceipt>, Fault> {
         self.key_generation(now)
+    }
+    fn feedback_leveling(&self) -> bool {
+        self.rearm.held_key.is_some()
+    }
+    fn feedback_ready_ns(&self) -> Option<u64> {
+        self.rearm.auto_att.as_ref().and_then(|a| a.ready_ns)
     }
     fn cleanup_complete(
         &mut self,
@@ -563,6 +579,7 @@ impl Drop for OwnerStopAdapter<'_> {
     }
 }
 
+mod auto_attenuation;
 #[cfg(all(
     test,
     feature = "offline-puresignal-owner-native",
@@ -570,6 +587,15 @@ impl Drop for OwnerStopAdapter<'_> {
 ))]
 mod combined_native;
 mod rearm;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AutoAttStatus {
+    pub(crate) phase: &'static str,
+    pub(crate) db: u8,
+    pub(crate) applied_db: Option<u8>,
+    pub(crate) info: Option<u32>,
+    pub(crate) revision: u64,
+    pub(crate) keyed: bool,
+}
 pub(crate) use rearm::OutputStamp;
 #[cfg(all(test, feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
 mod measurement;

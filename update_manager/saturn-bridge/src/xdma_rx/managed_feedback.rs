@@ -245,19 +245,22 @@ impl OperationalRxSession {
             }
             drop(regs);
             if let Some(scope) = desired.scope {
-                managed.stream = Some(if let Some(monitor) = &managed.monitor {
-                    Stream::observer(scope, managed.origin, monitor.clone())
-                } else {
-                    Stream::new(
-                        scope,
-                        Backend::DirectXdma,
-                        managed.origin,
-                        managed.ingress.clone().ok_or_else(|| {
-                            XdmaError::Incompatible("missing feedback destination".into())
-                        })?,
-                    )
-                    .map_err(|f| XdmaError::Incompatible(format!("feedback buffers: {f:?}")))?
-                });
+                managed.stream = Some(
+                    if let Some(monitor) = &managed.monitor {
+                        Stream::observer(scope, managed.origin, monitor.clone())
+                    } else {
+                        Stream::new(
+                            scope,
+                            Backend::DirectXdma,
+                            managed.origin,
+                            managed.ingress.clone().ok_or_else(|| {
+                                XdmaError::Incompatible("missing feedback destination".into())
+                            })?,
+                        )
+                        .map_err(|f| XdmaError::Incompatible(format!("feedback buffers: {f:?}")))?
+                    }
+                    .with_revision(desired.serial),
+                );
             } else {
                 managed.saved = None;
                 let stats = self.parser.stats.clone();
@@ -384,6 +387,9 @@ pub(crate) mod tests {
             observed,
             false,
         );
+    }
+    pub(crate) fn reader_pause_only(session: &OperationalRxSession) {
+        session.reader_gate.service_pause();
     }
     pub(crate) fn corrupt_next_layout_readback(session: &mut OperationalRxSession, path: &Path) {
         assert!(path.is_file() && !path.starts_with("/dev"));

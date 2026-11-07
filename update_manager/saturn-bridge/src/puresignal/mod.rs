@@ -188,6 +188,9 @@ impl Default for BlockMeta {
 /// Reused bounded buffer; no vectors allocated on decoder/controller hot paths.
 pub struct PairBlock {
     pub meta: BlockMeta,
+    /// Existing acquisition owner's gain/layout request serial, stamped before
+    /// enqueue. Zero means unavailable, never a matching Auto ATT completion.
+    pub acquisition_revision: u64,
     pub pairs: usize,
     pub tx: Box<[f64; MAX_PAIRS * 2]>,
     pub rf: Box<[f64; MAX_PAIRS * 2]>,
@@ -201,6 +204,7 @@ impl Default for PairBlock {
     fn default() -> Self {
         Self {
             meta: BlockMeta::default(),
+            acquisition_revision: 0,
             pairs: 0,
             tx: Box::new([0.0; MAX_PAIRS * 2]),
             rf: Box::new([0.0; MAX_PAIRS * 2]),
@@ -212,6 +216,7 @@ impl Default for PairBlock {
 impl PairBlock {
     pub fn copy_from(&mut self, other: &Self) {
         self.meta = other.meta;
+        self.acquisition_revision = other.acquisition_revision;
         self.pairs = other.pairs;
         self.tx[..other.pairs * 2].copy_from_slice(&other.tx[..other.pairs * 2]);
         self.rf[..other.pairs * 2].copy_from_slice(&other.rf[..other.pairs * 2]);

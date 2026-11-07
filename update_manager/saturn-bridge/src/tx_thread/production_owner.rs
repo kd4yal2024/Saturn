@@ -277,6 +277,16 @@ pub(crate) fn spawn(
                     rf_gate && options.managed_rf_permitted,
                 )?;
                 output.attach_feedback_owner(thread_link, options.config.route)?;
+                if let Some(limits) = options
+                    .operational_policy
+                    .filter(|_| !options.measurement_only)
+                {
+                    output.enable_auto_attenuation(
+                        options.config.hardware_peak,
+                        limits.component_limit,
+                        options.config.stale_after_ns,
+                    )?;
+                }
                 // Strict default retained. Missing overload coverage is never
                 // fabricated; operational policy limits remain a separate review.
                 let boot = SystemTime::now()
@@ -307,6 +317,7 @@ pub(crate) fn spawn(
                 ingress.set_drive_ceiling(options.max_watts)?;
                 if options.operational_policy.is_some() && !options.measurement_only {
                     ingress.enable_auto_mode()?;
+                    ingress.enable_auto_attenuation()?;
                 }
                 if let Some(p) = diagnostic {
                     owner.attach_signal_capture(p)?;
@@ -355,12 +366,18 @@ pub(crate) fn spawn(
                         last_keepalive = Instant::now();
                     }
                     #[cfg(feature = "managed-puresignal")]
-                    if matches!(owner.life.status().phase, Phase::ReadyOff | Phase::Active) {
+                    if matches!(
+                        owner.life.status().phase,
+                        Phase::ReadyOff | Phase::AwaitingKey | Phase::Active
+                    ) {
                         if let Some(input) = correction_poll.due() {
                             if let Ok(model) = correction_model.try_lock() {
-                                let keyed = owner.life.status().phase == Phase::Active;
+                                let auto_att =
+                                    owner.life.offline_owner().auto_attenuation_status(false);
+                                let keyed =
+                                    owner.life.status().phase == Phase::Active || auto_att.keyed;
                                 owner.life.offline_native_snapshot(|n| {
-                                    n.observe_correction(&input, &model, keyed)
+                                    n.observe_correction(&input, &model, keyed, auto_att.applied_db)
                                 });
                             }
                         }

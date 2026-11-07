@@ -100,7 +100,7 @@ describe('buildAllRadioPrefsCommands', () => {
     expect(cmds).toContain('tx_phase_rotator_corner:0,338;');
     expect(cmds).toContain('tx_puresignal:0,false;');
     expect(cmds).toContain('tx_puresignal_auto_attenuate:0,true;');
-    expect(cmds).toContain('tx_puresignal_attenuation:0,0;');
+    expect(cmds).toContain('tx_puresignal_attenuation:0,31;');
     expect(cmds.some((c) => c.startsWith('tx_two_tone:'))).toBe(true);
     expect(cmds).toContain('tx_dexp:0,false;');
     expect(cmds).toContain('tx_dexp_threshold:0,-40.0;');

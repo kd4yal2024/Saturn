@@ -33,6 +33,9 @@ const MAX_TCI_MONO_FRAME_SAMPLES: usize = 1024;
 /// Feedback fitting, mic rendering, stop progress and cleanup own the SAME N.
 pub(crate) trait ScheduledNative: CooperativeNative {
     fn configure_model(&mut self, model: &RadioModel) -> Result<(), Fault>;
+    fn startup_leveling_guard(&mut self) -> Result<bool, Fault> {
+        Err(Fault::NativeUnverified)
+    }
     /// Zero-exchange, RX-only override. Unsupported ports must not silently
     /// inherit the microphone profile for an authorized diagnostic action.
     fn measurement_mic_gain(&mut self, _enabled: bool) -> Result<(), Fault> {
@@ -507,6 +510,9 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 && status.primary_fault == Some(Fault::SevereOverdrive)
                 && status.cleanup_completed_ns.is_some()
             {
+                if let Some(evidence) = self.life.offline_owner().auto_attenuation_fault() {
+                    eprintln!("saturn-bridge: shared Auto ATT fault after completed cleanup evidence={evidence:?} physical_rf=unverified");
+                }
                 if let Some(evidence) = self.life.feedback_status().overdrive_evidence {
                     eprintln!("saturn-bridge: shared PS overdrive evidence stop_id={} origin={:?} fence={:?} interval={}..{} oldest_bridge_ingress_ns={:?} reference_component_peak={:?} rf_component_peak={:?} component_limit={:?} native_info={:?} physical_rf=unverified",
                         status.stop_id, evidence.origin, evidence.interval.fence,
@@ -524,6 +530,11 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 self.life.status(),
                 self.installed.clone(),
                 self.selected,
+            );
+            ingress.publish_auto_attenuation(
+                self.life
+                    .offline_owner()
+                    .auto_attenuation_status(status.primary_fault.is_some()),
             );
         }
         if self
@@ -748,6 +759,16 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         })?;
                     }
                     self.life.offline_owner().measurement_stimulus(stimulus);
+                    let auto_att = self
+                        .ingress
+                        .as_ref()
+                        .is_some_and(|i| i.auto_attenuation_supported())
+                        && self.installed.as_ref().is_some_and(|(m, c)| {
+                            c.enabled && m.desired.pure_signal_auto_attenuate
+                        });
+                    self.life
+                        .offline_owner()
+                        .auto_attenuation_for_arm(auto_att)?;
                     let arm_result = if self
                         .installed
                         .as_ref()
@@ -1419,8 +1440,34 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         .counters
                         .max_feedback_age_ns
                         .max(now.saturating_sub(block.meta.observed_ns));
-                    if self.life.submit(&block, now).is_err() {
-                        self.counters.rejected += 1;
+                    let disabled = if self.life.offline_owner().startup_leveling_active() {
+                        self.life
+                            .offline_tx_exchange(now, |n| n.startup_leveling_guard())
+                    } else {
+                        Ok(true)
+                    };
+                    #[cfg(test)]
+                    if matches!(disabled, Ok(true))
+                        && self.life.offline_owner().startup_leveling_active()
+                    {
+                        if let Some(i) = &self.ingress {
+                            i.leveling_verified.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    match disabled.and_then(|verified| {
+                        if verified {
+                            self.life.offline_owner().level_feedback(&block, now)
+                        } else {
+                            Ok(true)
+                        }
+                    }) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            if self.life.submit(&block, now).is_err() {
+                                self.counters.rejected += 1;
+                            }
+                        }
+                        Err(fault) => self.output_error(fault, now),
                     }
                     if let Some(ingress) = &self.ingress {
                         ingress.recycle_feedback_buffer(block);
@@ -1604,7 +1651,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         .max(now.saturating_sub(period));
                 }
             }
-            if self.life.status().phase == Phase::Active && now >= self.next_iq {
+            if (self.life.status().phase == Phase::Active
+                || self.life.offline_owner().startup_leveling_active())
+                && now >= self.next_iq
+            {
                 if let Ok(stamp) = self.life.offline_owner().output_stamp() {
                     match self.life.offline_owner().flush_iq(stamp, now) {
                         Ok(true) => {

@@ -139,6 +139,7 @@ pub struct Controller<N: NativePs> {
     fence: Fence,
     keyed: bool,
     keyed_at_ns: u64,
+    feedback_ready_at_ns: u64,
     adaptation_armed: bool,
     state: State,
     fault: Option<Fault>,
@@ -164,6 +165,9 @@ pub struct Controller<N: NativePs> {
     last_observed_ns: Option<u64>,
 }
 impl<N: NativePs> Controller<N> {
+    pub(super) fn set_feedback_ready_ns(&mut self, ready: u64) {
+        self.feedback_ready_at_ns = ready;
+    }
     pub fn new(
         native: N,
         owner: Owner,
@@ -196,6 +200,7 @@ impl<N: NativePs> Controller<N> {
             },
             keyed: false,
             keyed_at_ns: 0,
+            feedback_ready_at_ns: 0,
             adaptation_armed: false,
             state: State::Off,
             fault: None,
@@ -442,6 +447,7 @@ impl<N: NativePs> Controller<N> {
         self.fence.tx_epoch = epoch;
         self.keyed = keyed;
         self.keyed_at_ns = now_ns;
+        self.feedback_ready_at_ns = now_ns;
         if self.fault.is_some() {
             self.state = State::Fault;
             return Ok(self.fence);
@@ -591,7 +597,7 @@ impl<N: NativePs> Controller<N> {
         if meta.observed_ns < self.keyed_at_ns {
             return Err(Fault::NotKeyed);
         }
-        if meta.observed_ns - self.keyed_at_ns < config.settling_ns {
+        if meta.observed_ns < self.feedback_ready_at_ns.saturating_add(config.settling_ns) {
             return Err(Fault::Settling);
         }
         if now_ns - meta.observed_ns > config.stale_after_ns {
@@ -754,10 +760,10 @@ impl<N: NativePs> Controller<N> {
             if now_ns < self.keyed_at_ns {
                 return Err(Fault::FutureObservation);
             }
-            if now_ns - self.keyed_at_ns >= config.settling_ns {
+            if now_ns >= self.feedback_ready_at_ns.saturating_add(config.settling_ns) {
                 let last = self
                     .last_observed_ns
-                    .unwrap_or(self.keyed_at_ns.saturating_add(config.settling_ns));
+                    .unwrap_or(self.feedback_ready_at_ns.saturating_add(config.settling_ns));
                 if now_ns.saturating_sub(last) > config.stale_after_ns {
                     return Err(Fault::Stale);
                 }

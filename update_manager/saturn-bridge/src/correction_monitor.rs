@@ -73,6 +73,20 @@ impl Input {
     }
     /// Called only while the existing TX owner keeps its native channel alive.
     pub(crate) fn capture(&self, channel: i32, model: &RadioModel, keyed: bool) {
+        self.capture_with_attenuation(
+            channel,
+            model,
+            keyed,
+            model.desired.pure_signal_attenuation_db,
+        );
+    }
+    pub(crate) fn capture_with_attenuation(
+        &self,
+        channel: i32,
+        model: &RadioModel,
+        keyed: bool,
+        attenuation: u8,
+    ) {
         #[cfg(not(saturn_bridge_stub_native))]
         {
             let Ok(mut slot) = self.slot.try_lock() else {
@@ -126,7 +140,7 @@ impl Input {
             r.observed = crate::rf_monitor::clock().1;
             r.frequency = model.desired.tx_frequency_hz;
             r.watts = model.desired.tx_drive;
-            r.attenuation = model.desired.pure_signal_attenuation_db;
+            r.attenuation = attenuation;
             r.requested = model.desired.pure_signal_enabled;
             r.keyed = keyed;
             if slot.ready {
@@ -135,7 +149,7 @@ impl Input {
             slot.ready = true;
         }
         #[cfg(saturn_bridge_stub_native)]
-        let _ = (channel, model, keyed);
+        let _ = (channel, model, keyed, attenuation);
     }
 }
 pub(crate) struct Poller {

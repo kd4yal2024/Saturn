@@ -23,6 +23,31 @@ function setup(capture?: ManagedCaptureFactory) {
 }
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
+  it('negotiates actual Auto ATT separately from WDSP Auto, retaining the saved manual preset',()=>{
+    const h=setup();h.ready();
+    expect(h.session.status().autoAttenuationSupported).toBe(false);
+    h.session.text('saturn_ps_auto_caps:0,continuous-wdsp-v1;',h.epoch);
+    expect(h.session.status().autoAttenuationSupported).toBe(false);
+    h.session.text('saturn_ps_auto_att_caps:0,start31-owner-v1;tx_puresignal_auto_attenuate:0,true;saturn_ps_auto_att:0,2,11,7200000,true,off,31,-1,-1,0,false;',h.epoch);
+    expect(h.session.status()).toMatchObject({autoAttenuationSupported:true,autoAttenuationEnabled:true,autoAttStatus:{phase:'off',db:31,frequencyHz:7200000,keyed:false}});
+    h.session.text('saturn_ps_auto_att:0,1,10,3909000,true,stable,12,12,152,5,true;',h.epoch);
+    expect(h.session.status().autoAttStatus?.db).toBe(31);
+    h.session.disconnect();expect(h.session.status().autoAttenuationSupported).toBe(false);
+    expect(h.session.status().autoAttStatus).toBeUndefined();
+  });
+  it('allows a negotiated Auto ATT toggle after completed fault cleanup without clearing the fault or keying',()=>{
+    const h=setup();h.ready();
+    h.session.text('saturn_ps_auto_att_caps:0,start31-owner-v1;tx_puresignal_auto_attenuate:0,true;saturn_rx_tuning_caps:0,fault-latched-v1;saturn_tx_owner:shared,2,ReadyOff,3,11,tci,false,SevereOverdrive;saturn_tx_fault_ack_state:0,3,true;',h.epoch);
+    expect(h.session.status().canAdjustFaultedAutoAtt).toBe(true);
+    h.session.sendControl('tx_puresignal_auto_attenuate:0,false;');
+    expect(h.control.at(-1)).toBe('tx_puresignal_auto_attenuate:0,false;');
+    expect(h.session.arm('tci')).toBe(false);expect(h.media).toHaveLength(0);
+    h.session.text('tx_config:0,1,queued,12;saturn_tx_owner:shared,3,ReadyOff,3,12,tci,false,SevereOverdrive;tx_puresignal_auto_attenuate:0,false;tx_config:0,1,applied,12;',h.epoch);
+    expect(h.session.status().autoAttenuationEnabled).toBe(false);expect(h.session.status().phase).toBe('fault');
+    const before=h.control.length;
+    h.session.sendControl('tx_puresignal_auto_attenuate:0,true;tx_drive:0,100;');
+    expect(h.control).toHaveLength(before);
+  });
   it('tunes through the ordered host path while retaining a completed TX fault across reconnect', () => {
     const h = setup(); h.ready();
     function fault(serial: number, config: number, epoch=h.epoch) {

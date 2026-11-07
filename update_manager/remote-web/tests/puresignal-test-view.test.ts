@@ -10,6 +10,22 @@ const managed = (): ManagedPcmStatus => ({ selected: false, phase: 'disabled', r
   pendingSettings: 0, lastTransaction: 'No managed settings result', source: 'tci', sentFrames: 0, ownerPhase: null, microphonePreparation: 'cold' });
 
 describe('PS tab presentation without invented measurements', () => {
+  it('shows host Auto ATT rather than a checked saved preference on an unsupported host',()=>{
+    const s=state(),m={...managed(),selected:true,phase:'ready' as const,psCapability:'single' as const,manualAttenuationSupported:true};
+    let view=pureSignalTestView(s,m,new PureSignalReports(),0);
+    expect(view.autoAttenuationEnabled).toBe(false);expect(view.canSetAutoAttenuation).toBe(false);
+    const capable={...m,autoAttenuationSupported:true,autoAttenuationEnabled:true};
+    view=pureSignalTestView(s,capable,new PureSignalReports(),0);
+    expect(view.autoAttenuationEnabled).toBe(true);expect(view.canSetAutoAttenuation).toBe(true);
+    expect(view.canSetFeedbackAttenuation).toBe(false);
+    expect(pureSignalTestView(s,{...capable,autoAttenuationEnabled:false},new PureSignalReports(),0).canSetFeedbackAttenuation).toBe(true);
+  });
+  it('can turn Auto ATT off after fault cleanup without unlocking unrelated TX controls',()=>{
+    const m:ManagedPcmStatus={...managed(),selected:true,phase:'fault',psCapability:'single',autoAttenuationSupported:true,autoAttenuationEnabled:true,canAdjustFaultedAutoAtt:true};
+    const view=pureSignalTestView(state(),m,new PureSignalReports(),0);
+    expect(view.canSetAutoAttenuation).toBe(true);expect(view.canSetFeedbackAttenuation).toBe(false);
+    expect(view.canConfigure).toBe(false);expect(view.canTwoTone).toBe(false);
+  });
   it('operator-controlled duration zero keeps Start available without relaxing role or RX gates', () => {
     const m: ManagedPcmStatus={...managed(), selected:true, phase:'ready', psCapability:'single', psMode:'auto',
       autoAdaptationSupported:true, twoToneOperatorControlled:true, twoToneLimitMs:0, twoToneMaxWatts:100};

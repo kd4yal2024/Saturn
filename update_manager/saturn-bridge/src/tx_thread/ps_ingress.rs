@@ -244,6 +244,11 @@ pub(crate) struct SharedIngress {
     // Reducing drive may never ratchet the permitted restore value downward.
     drive_ceiling: Arc<OnceLock<u8>>,
     auto_mode_supported: Arc<AtomicBool>,
+    auto_att_supported: Arc<AtomicBool>,
+    auto_att_status:
+        Arc<Mutex<Option<(crate::tx_owner_stop::AutoAttStatus, u64, u128, u32, bool)>>>,
+    #[cfg(test)]
+    pub(crate) leveling_verified: Arc<AtomicU64>,
     #[cfg(feature = "managed-puresignal")]
     pub(crate) rf_monitor: Arc<OnceLock<crate::rf_monitor::Input>>,
 }
@@ -297,6 +302,73 @@ impl Drop for TwoToneTrial {
     }
 }
 impl SharedIngress {
+    pub(crate) fn auto_attenuation_supported(&self) -> bool {
+        self.auto_att_supported.load(Ordering::Acquire)
+    }
+    #[cfg(test)]
+    pub(crate) fn auto_leveling_snapshot(&self) -> Option<crate::tx_owner_stop::AutoAttStatus> {
+        self.auto_att_status.lock_unpoisoned().as_ref().map(|v| v.0)
+    }
+    pub(crate) fn enable_auto_attenuation(&self) -> Result<(), Fault> {
+        if self.measurement_only_mode()
+            || self
+                .view
+                .lock_unpoisoned()
+                .as_ref()
+                .is_some_and(|v| v.installed.is_some())
+        {
+            return Err(Fault::InvalidConfig);
+        }
+        self.auto_att_supported
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| ())
+            .map_err(|_| Fault::InvalidConfig)
+    }
+    pub(crate) fn publish_auto_attenuation(&self, snapshot: crate::tx_owner_stop::AutoAttStatus) {
+        if !self.auto_attenuation_supported() {
+            return;
+        }
+        let view = self.view.lock_unpoisoned();
+        let Some(v) = view.as_ref() else { return };
+        let Some((model, config)) = v.installed.as_ref() else {
+            return;
+        };
+        let value = (
+            snapshot,
+            v.status.stop_id,
+            config.id,
+            model.desired.tx_frequency_hz,
+            model.desired.pure_signal_auto_attenuate,
+        );
+        drop(view);
+        let mut prior = self.auto_att_status.lock_unpoisoned();
+        if prior.as_ref() == Some(&value) {
+            return;
+        }
+        *prior = Some(value);
+        drop(prior);
+        self.operator
+            .media_reply(Self::auto_attenuation_message(value), || self.release());
+    }
+    fn auto_attenuation_message(
+        (s, stop, config, frequency, enabled): (
+            crate::tx_owner_stop::AutoAttStatus,
+            u64,
+            u128,
+            u32,
+            bool,
+        ),
+    ) -> String {
+        format!(
+            "saturn_ps_auto_att:0,{stop},{config},{frequency},{enabled},{},{},{},{},{},{};",
+            s.phase,
+            s.db,
+            s.applied_db.map_or(-1, i64::from),
+            s.info.map_or(-1, i64::from),
+            s.revision,
+            s.keyed
+        )
+    }
     pub(crate) fn enable_auto_mode(&self) -> Result<(), Fault> {
         if self.measurement_only_mode()
             || self
@@ -1883,6 +1955,10 @@ impl SharedIngress {
                 measurement_host: Arc::new(OnceLock::new()),
                 drive_ceiling: Arc::new(OnceLock::new()),
                 auto_mode_supported: Arc::new(AtomicBool::new(false)),
+                auto_att_supported: Arc::new(AtomicBool::new(false)),
+                auto_att_status: Arc::new(Mutex::new(None)),
+                #[cfg(test)]
+                leveling_verified: Arc::new(AtomicU64::new(0)),
                 #[cfg(feature = "managed-puresignal")]
                 rf_monitor: Arc::new(OnceLock::new()),
             },
@@ -1997,7 +2073,8 @@ impl SharedIngress {
                             tx_cessb_enabled,
                             tx_fft_size,
                             tx_low_latency,
-                            pure_signal_attenuation_db
+                            pure_signal_attenuation_db,
+                            pure_signal_auto_attenuate
                         );
                         m.sync_vfo_routes();
                         m.desired.iq_center_hz = snapshot.desired.iq_center_hz;
@@ -2069,7 +2146,22 @@ impl SharedIngress {
             "single"
         };
         let status = view.as_ref()?.status;
-        Some(format!("saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1;saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};",
+        let extra = if self.auto_attenuation_supported() {
+            let live = self
+                .auto_att_status
+                .lock_unpoisoned()
+                .as_ref()
+                .filter(|(_, stop, id, _, _)| *stop == status.stop_id && *id == config.id)
+                .copied();
+            format!(
+                "saturn_ps_auto_att_caps:0,start31-owner-v1;tx_puresignal_auto_attenuate:0,{};{}",
+                model.desired.pure_signal_auto_attenuate,
+                live.map_or_else(String::new, Self::auto_attenuation_message)
+            )
+        } else {
+            String::new()
+        };
+        Some(format!("saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1;saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};{extra}",
             config.id, mode, status.stop_id, ack_eligible(status), config.id, model.desired.tx_drive, model.desired.pure_signal_attenuation_db))
     }
     pub(crate) fn ps_control_caps(&self) -> String {
@@ -2529,6 +2621,11 @@ impl SharedIngress {
                 None => (c.model.clone(), c.config, c.source, None),
             };
             for command in commands {
+                if matches!(command, TciCommand::SetPureSignalAutoAttenuate(_))
+                    && !self.auto_attenuation_supported()
+                {
+                    return Err(Fault::InvalidConfig);
+                }
                 if matches!(command, TciCommand::SetPureSignalMode(3..)) {
                     return Err(Fault::InvalidConfig);
                 }
@@ -2572,6 +2669,7 @@ impl SharedIngress {
                         | TciCommand::SetVfoB(_)
                         | TciCommand::SetIqCenter(_)
                         | TciCommand::SetPureSignalAttenuation(_)
+                        | TciCommand::SetPureSignalAutoAttenuate(_)
                 )
             });
             envelope.transaction = Some(SettingsTransaction {
@@ -2761,6 +2859,7 @@ fn apply_config(
             ps.automatic = mode == 2;
         }
         SetPureSignalAttenuation(v) if v <= 31 => m.desired.pure_signal_attenuation_db = v,
+        SetPureSignalAutoAttenuate(v) => m.desired.pure_signal_auto_attenuate = v,
         ResetPureSignal => {}
         SatpControl { ref action, .. } if action == "tci" || action == "satp" => {
             *source = if action == "satp" {
