@@ -1132,6 +1132,57 @@ mod measurement_tests {
         }
     }
     #[test]
+    fn receive_control_readiness_keeps_tx_fault_but_requires_completed_stop_and_native_cleanup() {
+        use saturn_bridge::puresignal::tx_lifecycle::StopEvidence;
+        for field in [
+            "healthy",
+            "primary",
+            "authority",
+            "cleanup",
+            "no-stop-proof",
+            "no-cleanup",
+            "no-authority-completion",
+            "active",
+            "pending-release",
+        ] {
+            let (ingress, _) = collector();
+            ingress.release();
+            ready(&ingress);
+            {
+                let mut view = ingress.view.lock_unpoisoned();
+                let v = view.as_mut().unwrap();
+                v.status.stop_evidence = Some(StopEvidence::DirectControlReadback);
+                if field != "healthy" {
+                    v.status.primary_fault = Some(Fault::SevereOverdrive);
+                    v.clean = false;
+                }
+                match field {
+                    "authority" => v.status.authority_fault = Some(Fault::TxAuthority),
+                    "cleanup" => v.status.cleanup_fault = Some(Fault::CleanupTimeout),
+                    "no-stop-proof" => v.status.stop_evidence = None,
+                    "no-cleanup" => v.status.cleanup_completed_ns = None,
+                    "no-authority-completion" => v.status.authority_completed_ns = None,
+                    "active" => {
+                        v.phase = Phase::Active;
+                        v.status.phase = Phase::Active;
+                    }
+                    _ => {}
+                }
+            }
+            if field == "pending-release" {
+                ingress.release();
+            }
+            assert_eq!(
+                ingress.receive_control_ready(),
+                matches!(field, "healthy" | "primary"),
+                "{field}"
+            );
+            if field == "primary" {
+                assert!(!ingress.startup_ready());
+            }
+        }
+    }
+    #[test]
     fn single_fit_settings_are_queued_without_arm_and_not_published_before_commit() {
         let (ingress, rx) = crate::tx_thread::feedback_owner::tests::collector();
         ready(&ingress);
@@ -2018,7 +2069,7 @@ impl SharedIngress {
             "single"
         };
         let status = view.as_ref()?.status;
-        Some(format!("saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};",
+        Some(format!("saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1;saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};",
             config.id, mode, status.stop_id, ack_eligible(status), config.id, model.desired.tx_drive, model.desired.pure_signal_attenuation_db))
     }
     pub(crate) fn ps_control_caps(&self) -> String {
@@ -2195,6 +2246,25 @@ impl SharedIngress {
             .lock_unpoisoned()
             .as_ref()
             .is_some_and(|v| v.clean && v.installed.is_some() && v.phase == Phase::ReadyOff)
+    }
+    /// RX control application after a proven stop is distinct from startup/TX
+    /// readiness. A latched primary TX fault must not strand the receive NCO.
+    pub(crate) fn receive_control_ready(&self) -> bool {
+        let guard = self.view.lock_unpoisoned();
+        guard.as_ref().is_some_and(|v| {
+            v.installed.is_some()
+                && v.phase == Phase::ReadyOff
+                && v.status.authority_completed_ns.is_some()
+                && v.status.cleanup_completed_ns.is_some()
+                && v.status.stop_evidence.is_some()
+                && v.status.authority_fault.is_none()
+                && v.status.cleanup_fault.is_none()
+                && v.status.release_handled >= v.status.required_release
+                && v.stamp.output.is_none()
+                && !v.settings_epoch.exhausted()
+                && v.settings_epoch == self.cancel.settings_epoch.current()
+                && !self.cancel.output_open()
+        })
     }
     pub(crate) fn lifecycle_status(&self) -> Option<LifecycleStatus> {
         self.view.lock_unpoisoned().as_ref().map(|view| view.status)
@@ -2498,7 +2568,10 @@ impl SharedIngress {
             envelope.receive_tuning_only = commands.iter().all(|command| {
                 matches!(
                     command,
-                    TciCommand::SetVfoA(_) | TciCommand::SetVfoB(_) | TciCommand::SetIqCenter(_)
+                    TciCommand::SetVfoA(_)
+                        | TciCommand::SetVfoB(_)
+                        | TciCommand::SetIqCenter(_)
+                        | TciCommand::SetPureSignalAttenuation(_)
                 )
             });
             envelope.transaction = Some(SettingsTransaction {

@@ -14534,6 +14534,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         feedbackAttenuationCommandDb: state.pureSignalAttenuationDb,
         managedPhase: managedSettings.phase, pendingSettings: managedSettings.pendingSettings,
         lastSettingsResult: managedSettings.lastTransaction,
+        receiveTuningReady: managedSettings.receiveTuningReady,
+        canAdjustFaultedFeedback: managedSettings.canAdjustFaultedFeedback,
         ...pureSignalPanelView(), rfImdQualified: false }, null, 2);
       try { await navigator.clipboard.writeText(text); }
       catch (_) { window.prompt("Copy PS diagnostics", text); }

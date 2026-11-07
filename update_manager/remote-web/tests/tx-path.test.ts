@@ -19,6 +19,21 @@ describe('host-driven default TX path', () => {
     expect(()=>send('trx:0,false;')).not.toThrow();
     expect(sent.at(-1)).toBe('trx:0,false;');
   });
+  it('retains faulted RX tuning and attenuation capability through fragmented Auto negotiation',()=>{
+    const p=new TxPathNegotiator();
+    p.observe('saturn_tx_owner:shared,1,ReadyOff,3,11,tci,false,SevereOverdrive;saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1;saturn_tx_fault_ack_state:0,3,true;');
+    p.observe('saturn_ps_manual_attenuation_caps:0,rx-off-ordered-v1;');
+    p.observe('saturn_tx_media_caps:psg1,pcm,owner1,transactions1;');p.observe('ready;');
+    const controls:string[]=[];
+    const session=new ManagedPcmSession({now:()=>0,changed:()=>{},capture:async()=>{throw new Error('no RF/capture');}});
+    session.select(true);const epoch=session.connect(s=>controls.push(s),()=>{});session.setOperator(true);
+    session.text(p.takeSnapshot()+'tx_codec_accept:0,pcm;',epoch);
+    expect(session.status().receiveTuningReady).toBe(true);
+    expect(session.status().canAdjustFaultedFeedback).toBe(true);
+    session.sendControl('vfo:0,0,7100000;dds:0,7100000;');
+    expect(controls.at(-1)).toBe('vfo:0,0,7100000;dds:0,7100000;');
+    expect(session.status().phase).toBe('fault');expect(session.arm('tci')).toBe(false);
+  });
   it('retains manual ATT and separately negotiated Auto through fragmented startup without transmitting', () => {
     const p = new TxPathNegotiator();
     p.observe('saturn_ps_manual_attenuation_caps:0,rx-off-ordered-v1;');

@@ -81,7 +81,8 @@ export function pureSignalTestView(state: PsTestState, managed: ManagedPcmStatus
   return {
     editable,
     canConfigure: Boolean(editable && shared),
-    canSetFeedbackAttenuation: Boolean(editable && shared && managed.manualAttenuationSupported),
+    canSetFeedbackAttenuation: Boolean(available && state.remoteClientRole === 'operator' && !busy && !state.rxRecoveryPending
+      && shared && managed.manualAttenuationSupported && (editable || managed.canAdjustFaultedFeedback)),
     canAutoAdaptation: Boolean(editable && managed.psCapability === 'single' && managed.autoAdaptationSupported),
     adaptationMode: managed.psMode ?? 'unavailable',
     canCalibrate: Boolean(editable && managed.psCapability === 'single'),

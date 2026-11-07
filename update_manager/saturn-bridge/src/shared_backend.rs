@@ -422,9 +422,11 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                     if frontend.hardware_ptt_poll_due(now) {
                         frontend.observe_hardware_ptt(rx.read_ptt_input()?, now);
                     }
-                    // Tuning/relay/attenuation application waits until the sole
-                    // lifecycle is clean/off, never overwriting a keyed route.
-                    if runtime.ingress.startup_ready() || runtime.link.preparing() {
+                    // Apply RX controls after completed stop/native cleanup,
+                    // even when a TX fault remains latched. Startup/TX readiness
+                    // deliberately rejects that fault and cannot gate the RX NCO.
+                    // Existing feedback preparation keeps its acquisition route.
+                    if runtime.ingress.receive_control_ready() || runtime.link.preparing() {
                         let requested = (
                             snapshot.desired.iq_center_hz,
                             snapshot.desired.rx_antenna,

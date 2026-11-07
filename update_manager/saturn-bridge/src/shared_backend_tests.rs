@@ -32,6 +32,7 @@ enum Case {
     AutoSustained,
     ReceiveMeter,
     BandRecall,
+    FaultedReceiveTune,
     ReceiveSpectrum,
     ShutdownActive,
     RearPtt,
@@ -218,6 +219,7 @@ impl RuntimeIo for Io {
         }
         self.link = Some(runtime.link.clone());
         let state_model = self.state_model.as_ref().unwrap().clone();
+        let direct_register_path = self.files.as_ref().map(|f| f.register_path());
         let check_persistence = self.expected_rx.is_some();
         let direct = self.direct;
         let perf_path = self.perf_path.clone();
@@ -560,6 +562,140 @@ impl RuntimeIo for Io {
                                 thread::sleep(Duration::from_millis(1));
                             }
                             return 0; // no arm or key; actual row worker and TCI output
+                        }
+                        if case == Case::FaultedReceiveTune {
+                            use std::os::unix::fs::FileExt;
+                            ingress.stop(Fault::SevereOverdrive);
+                            let deadline = Instant::now() + Duration::from_secs(5);
+                            while ingress.lifecycle_status().unwrap().phase != Phase::ReadyOff
+                                || ingress.lifecycle_status().unwrap().primary_fault.is_none()
+                            {
+                                client.as_mut().unwrap().drain();
+                                assert!(Instant::now() < deadline, "fault cleanup timed out");
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            assert!(
+                                !ingress.startup_ready(),
+                                "fault must not become startup/TX readiness"
+                            );
+                            let register =
+                                std::fs::File::open(direct_register_path.as_ref().unwrap())
+                                    .unwrap();
+                            for hz in [7_100_000u32, 3_899_000, 7_220_000] {
+                                let c = client.as_mut().unwrap();
+                                let applied_before = c
+                                    .transactions
+                                    .iter()
+                                    .filter(|x| x.contains(",applied,"))
+                                    .count();
+                                c.text(&format!("vfo:0,0,{hz};dds:0,{hz};"));
+                                let expected = ((u128::from(hz) * (1u128 << 32) + 61_440_000)
+                                    / 122_880_000)
+                                    as u32;
+                                let deadline = Instant::now() + Duration::from_secs(3);
+                                loop {
+                                    c.drain();
+                                    let mut bytes = [0; 4];
+                                    register.read_exact_at(&mut bytes, 0x18).unwrap();
+                                    let applied = c
+                                        .transactions
+                                        .iter()
+                                        .filter(|x| x.contains(",applied,"))
+                                        .count();
+                                    if applied > applied_before
+                                        && u32::from_le_bytes(bytes) == expected
+                                    {
+                                        break;
+                                    }
+                                    assert!(Instant::now()<deadline,"model committed but DDC6 did not retune: requested={hz} register={:#x} expected={expected:#x} transactions={:?}",u32::from_le_bytes(bytes),c.transactions);
+                                    thread::sleep(Duration::from_millis(2));
+                                }
+                                let status = ingress.lifecycle_status().unwrap();
+                                assert_eq!(status.phase, Phase::ReadyOff);
+                                assert_eq!(status.primary_fault, Some(Fault::SevereOverdrive));
+                                assert_eq!(state_model.lock_unpoisoned().desired.iq_center_hz, hz);
+                                assert!(!state_model.lock_unpoisoned().desired.tx_enabled);
+                            }
+                            // Fix the return level while leaving the fault latched.
+                            // The attenuation is then proved at the real acquisition
+                            // register boundary on a fresh, separately authorized arm.
+                            let c = client.as_mut().unwrap();
+                            let applied = c
+                                .transactions
+                                .iter()
+                                .filter(|x| x.contains(",applied,"))
+                                .count();
+                            c.text("tx_puresignal_attenuation:0,17;");
+                            let deadline = Instant::now() + Duration::from_secs(3);
+                            loop {
+                                c.drain();
+                                if c.transactions
+                                    .iter()
+                                    .filter(|x| x.contains(",applied,"))
+                                    .count()
+                                    > applied
+                                {
+                                    break;
+                                }
+                                assert!(
+                                    Instant::now() < deadline,
+                                    "faulted attenuation update rejected: {:?}",
+                                    c.transactions
+                                );
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            assert_eq!(
+                                state_model
+                                    .lock_unpoisoned()
+                                    .desired
+                                    .pure_signal_attenuation_db,
+                                17
+                            );
+                            let st = ingress.lifecycle_status().unwrap();
+                            assert_eq!(st.primary_fault, Some(Fault::SevereOverdrive));
+                            c.text(&format!("saturn_tx_fault_ack:0,1,{};", st.stop_id));
+                            while ingress.lifecycle_status().unwrap().primary_fault.is_some() {
+                                c.drain();
+                                assert!(
+                                    Instant::now() < deadline,
+                                    "acknowledgment did not complete"
+                                );
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            c.text("trx:0,true;");
+                            loop {
+                                c.drain();
+                                if let Some(scope) = link.desired().scope {
+                                    if link.prepared(scope.output).unwrap_or(false) {
+                                        assert_eq!(scope.attenuation_db, 17);
+                                        let mut b = [0; 4];
+                                        register.read_exact_at(&mut b, 0x2018).unwrap();
+                                        assert_eq!((u32::from_le_bytes(b)>>5)&31,17,"feedback ATT must reach the acquisition-owned register");
+                                        break;
+                                    }
+                                }
+                                assert!(
+                                    Instant::now() < deadline,
+                                    "fresh feedback prepare did not complete"
+                                );
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            assert_eq!(
+                                ingress.lifecycle_status().unwrap().phase,
+                                Phase::AwaitingKey
+                            );
+                            c.text("trx:0,false;");
+                            while ingress.lifecycle_status().unwrap().phase != Phase::ReadyOff {
+                                c.drain();
+                                assert!(Instant::now() < deadline, "release did not complete");
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            stop.store(true, Ordering::Release);
+                            while !joined.load(Ordering::Acquire) {
+                                assert!(Instant::now() < end);
+                                thread::sleep(Duration::from_millis(1));
+                            }
+                            return 0;
                         }
                         if case == Case::BandRecall {
                             let fixture = include_str!(
@@ -1259,6 +1395,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::NativeKeepaliveGap
                 | Case::ReceiveMeter
                 | Case::BandRecall
+                | Case::FaultedReceiveTune
                 | Case::ReceiveSpectrum
                 | Case::MeasurementClient
                 | Case::BrowserMeasurementClient
@@ -1297,6 +1434,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::NativeKeepaliveMissing
                 | Case::ReceiveMeter
                 | Case::BandRecall
+                | Case::FaultedReceiveTune
                 | Case::ReceiveSpectrum
                 | Case::AttachmentFailure
                 | Case::MeasurementClient
@@ -1749,4 +1887,9 @@ fn actual_run_inner_band_recall_80m_40m_roundtrip_both_backends() {
     for direct in [true, false] {
         exercise(direct, Case::BandRecall);
     }
+}
+
+#[test]
+fn actual_run_inner_faulted_receive_tuning_programs_ddc6() {
+    exercise(true, Case::FaultedReceiveTune);
 }

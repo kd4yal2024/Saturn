@@ -68,6 +68,24 @@ describe('selectable managed PCM controller', () => {
     h.session.sendControl('vfo:0,0,7100000;dds:0,7100000;');
     h.session.release();h.advance(1);expect(h.control.at(-1)).toBe('trx:0,false;');
   });
+  it('allows a separately negotiated feedback attenuation correction while the TX fault stays latched',()=>{
+    const h=setup();h.ready();
+    h.session.text('saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_manual_attenuation_caps:0,rx-off-ordered-v1;saturn_tx_owner:shared,2,ReadyOff,3,11,tci,false,SevereOverdrive;saturn_tx_fault_ack_state:0,3,true;',h.epoch);
+    expect(h.session.status().canAdjustFaultedFeedback).toBe(false);
+    const count=h.control.length;h.session.sendControl('tx_puresignal_attenuation:0,17;');expect(h.control).toHaveLength(count);
+    h.session.text('saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1;',h.epoch);
+    expect(h.session.status().canAdjustFaultedFeedback).toBe(true);
+    h.session.sendControl('tx_puresignal_attenuation:0,17;');
+    expect(h.control.at(-1)).toBe('tx_puresignal_attenuation:0,17;');
+    expect(h.session.status().canAdjustFaultedFeedback).toBe(false);
+    h.session.text('tx_config:0,1,queued,12;saturn_tx_owner:shared,3,ReadyOff,3,12,tci,false,SevereOverdrive;tx_config:0,1,applied,12;',h.epoch);
+    expect(h.session.status().canAdjustFaultedFeedback).toBe(true);
+    expect(h.session.status().phase).toBe('fault');expect(h.session.arm('tci')).toBe(false);expect(h.media).toHaveLength(0);
+    const end=h.control.length;
+    for(const invalid of ['tx_puresignal_attenuation:0,32;','tx_puresignal_attenuation:0,-1;','tx_puresignal_attenuation:0,0;tx_drive:0,100;'])h.session.sendControl(invalid);
+    expect(h.control).toHaveLength(end);
+    h.session.disconnect();expect(h.session.status().canAdjustFaultedFeedback).toBe(false);
+  });
   it('prepares only the selected operator microphone without granting TX, and keeps it prepared across release', async () => {
     const close = vi.fn(), prepare = vi.fn(async () => {}), dispose = vi.fn(), cancel = vi.fn();
     const factory: ManagedCaptureFactory = Object.assign(async (token: string) => ({token, historyResetAtMs: 100, close}), {prepare, dispose, cancel});

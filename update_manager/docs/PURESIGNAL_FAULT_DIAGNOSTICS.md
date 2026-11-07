@@ -126,3 +126,53 @@ configuration identity is published with the previous receive settings, so a
 fresh request cannot reuse that identity or inherit a rejected frequency. A
 deterministic native-information hook exercises this boundary and a subsequent
 successful fresh tune on both backend fixtures.
+
+## Acquisition completion and amplifier feedback follow-up
+
+The first faulted-tuning repair committed VFO/DDS settings in the owner but the
+Direct acquisition loop still gated hardware programming on `startup_ready()`.
+That predicate deliberately rejects a latched primary fault. The result was a
+changed software/readout frequency with an unchanged receiver NCO. The new
+`receive_control_ready()` checks completed authority/native cleanup, stop
+receipt evidence, a closed output fence and current cancellation epoch, while
+retaining the primary TX fault. It is used only for receive control application;
+startup/TX readiness remains separate.
+
+The actual `shared_backend::run_inner` regression reproduces the previous
+failure after a fault: an applied transaction with an unchanged file-backed
+DDC6 phase register. It now checks real acquisition-register changes for three
+frequencies, retaining the fault and producing no transmit samples. It also
+sets manual feedback attenuation while faulted, separately acknowledges the
+fault, and verifies the next independently authorized preparation programs the
+ADC TX attenuation bits to the selected value. No microphone/IQ input is
+provided, so the fixture remains awaiting key until release.
+
+A separate `saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1` contract permits
+only a validated manual feedback-attenuation setter through completed fault
+cleanup. It retains normal settings receipts, permissions, cancellation and
+fault acknowledgment. A mixed TX batch cannot acquire this exception. Both
+capabilities survive fragmented Auto negotiation. The UI keeps other PS/TX
+actions unavailable while faulted and exposes receive-tuning/attenuation
+readiness in copied diagnostics.
+
+The installed G2 event at 2026-11-06 23:35:53 EST recorded origin
+`SampleComponentLimit`, reference component peak 0.64124596118927, RF component
+peak 1.0 and component limit 0.95. Native flags were zero. This establishes the
+sample guard's reason, not independently observed ADC overload coverage or
+physical RF measurements. The protection threshold is unchanged.
+
+The operator confirmed a Coaxial Dynamics 7999 adjustable sampler after the
+amplifier, connected directly from its sample port to RX BYPASS. The saved
+ANAN-G2 Thetis profile (modified 2026-11-01) has PS Auto ATT and Quick Attenuate
+enabled; its saved peak setting is 0.6121. The SDR-VST3 ANAN-G2 profile also has
+Auto ATT enabled. Saturn's shared path currently provides manual attenuation,
+not the Legacy P2 owner's automatic loop. Its observed command was 0 dB.
+A saved 2026-09-25 80 m calibration log changed from 31 dB at PS enable to 12 dB
+at save; that historical setting is not a measured value for the current 40 m
+amplifier trial. Do not copy it as a calibration or claim this manual-control
+repair implements Thetis Auto ATT.
+
+Manufacturer reference: https://www.coaxial.com/products/7998_7999.htm
+The sampler's actual coupling setting, amplifier output and input return level
+must be accounted for before a high-power correction claim. No live keying or
+RF level-setting was performed during this source repair.

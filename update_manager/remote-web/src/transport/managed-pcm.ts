@@ -33,6 +33,8 @@ export interface ManagedPcmStatus {
   timingSupported?: boolean;
   nativeTwoToneSupported?: boolean;
   manualAttenuationSupported?: boolean;
+  canAdjustFaultedFeedback?: boolean;
+  receiveTuningReady?: boolean;
   autoAdaptationSupported?: boolean;
   twoToneOperatorControlled?: boolean;
   twoToneMaxWatts?: number | undefined;
@@ -82,6 +84,13 @@ function powerKey(text: string): string | null {
   const value=Number(match?.[1]);
   return match && Number.isSafeInteger(value) && value>=1 && value<=100 ? 'power:0' : null;
 }
+function feedbackAttenuationKey(text: string): string | null {
+  const commands=text.split(';').map(c=>c.trim()).filter(Boolean);
+  if(commands.length!==1)return null;
+  const m=/^tx_puresignal_attenuation:0,([0-9]+)$/.exec(commands[0]!);
+  const db=Number(m?.[1]);
+  return m && Number.isInteger(db) && db>=0 && db<=31 ? 'feedback-attenuation:0' : null;
+}
 function tag(frame: ArrayBuffer, token: string): ArrayBuffer {
   const view = new DataView(frame);
   for (let i = 0; i < 16; i++) view.setUint8(44 + i, parseInt(token.slice(i * 2, i * 2 + 2), 16));
@@ -125,6 +134,7 @@ export class ManagedPcmSession {
   private faultReleaseSent = false;
   private ackSupported = false;
   private faultedTuningSupported = false;
+  private faultedAttenuationSupported = false;
   private ackStop: bigint | null = null;
   private nextAck = 0n;
   private ackPending: {id: string; stop: bigint; serial: bigint; at: number} | null = null;
@@ -165,6 +175,9 @@ export class ManagedPcmSession {
       measurementActive: this.measurement !== null, timingSupported: this.timingSupported,
       nativeTwoToneSupported: this.nativeTwoToneSupported,
       manualAttenuationSupported: this.manualAttenuationSupported,
+      canAdjustFaultedFeedback: this.faultedAttenuationSupported && this.manualAttenuationSupported
+        && this.faultedTuningReady() && this.statusPendingWire()===0 && this.settingsQueue.length===0,
+      receiveTuningReady: this.faultedTuningReady(),
       autoAdaptationSupported: this.autoAdaptationSupported,
       twoToneOperatorControlled: this.twoToneLimits?.operatorControlled ?? false, twoToneMaxWatts: this.twoToneLimits?.maxWatts,
       twoToneLimitMs: this.twoToneLimits?.maxMs, twoToneFrequencyHz: this.twoToneLimits?.frequencyHz,
@@ -235,7 +248,7 @@ export class ManagedPcmSession {
     this.appliedConfig = null;
     this.cleanupAfterStop = null;
     this.settingsQueue = []; this.tuningEchoTargets.clear(); this.faultReleaseSent = false;
-    this.faultedTuningSupported = false;
+    this.faultedTuningSupported = false; this.faultedAttenuationSupported = false;
     this.ackSupported = false; this.ackStop = null; this.ackPending = null; this.driveLimit = undefined;
     this.ackResult = 'No fault acknowledgment requested';
     this.committedDrive = undefined;
@@ -285,10 +298,11 @@ export class ManagedPcmSession {
       this.settingsQueue = []; this.tuningEchoTargets.clear();
     }
     const tune = tuningKey(text);
-    const key = tune ?? powerKey(text);
+    const attenuation = feedbackAttenuationKey(text);
+    const key = tune ?? attenuation ?? powerKey(text);
     if (this.selected && managedSettingsMessage(text)) {
       if (['fault', 'unsupported', 'unavailable'].includes(this.phase)
-        && !(tune && this.faultedTuningReady())) return;
+        && !((tune || (attenuation && this.faultedAttenuationSupported && this.manualAttenuationSupported)) && this.faultedTuningReady())) return;
       if (tune) {
       for (const c of text.split(';').map(c => c.trim()).filter(Boolean)) {
         this.tuningEchoTargets.set(c.slice(0, c.lastIndexOf(',')), c);
@@ -327,7 +341,9 @@ export class ManagedPcmSession {
       && this.owner?.phase === 'ReadyOff' && this.owner.fault !== 'none' && this.ackStop === this.owner.stop;
   }
   private flushTune(): void {
-    const faultedTune = this.faultedTuningReady() && !!tuningKey(this.settingsQueue[0]?.text ?? '');
+    const nextText=this.settingsQueue[0]?.text ?? '';
+    const faultedTune = this.faultedTuningReady() && (!!tuningKey(nextText)
+      || (this.faultedAttenuationSupported && this.manualAttenuationSupported && !!feedbackAttenuationKey(nextText)));
     if (!this.settingsQueue.length || !this.control
       || (['fault', 'unsupported', 'unavailable'].includes(this.phase) && !faultedTune)) return;
     if (this.awaitingQueue.length || this.transactions.size || (this.owner && !this.owner.clean && !faultedTune)
@@ -493,6 +509,7 @@ export class ManagedPcmSession {
         const m = /^saturn_tx_drive_limit:0,([1-9][0-9]*)$/.exec(c);
         this.driveLimit = m && Number(m[1]) <= 100 ? Number(m[1]) : undefined;
       }
+      if (c.startsWith('saturn_ps_fault_attenuation_caps:')) this.faultedAttenuationSupported = c === 'saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1';
       if (c.startsWith('saturn_rx_tuning_caps:')) this.faultedTuningSupported = c === 'saturn_rx_tuning_caps:0,fault-latched-v1';
       if (c.startsWith('saturn_tx_fault_ack_caps:')) this.ackSupported = c === 'saturn_tx_fault_ack_caps:0,stop-fence-v1';
       const ackState = /^saturn_tx_fault_ack_state:0,([0-9]+),(true|false)$/.exec(c);

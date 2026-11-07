@@ -27,6 +27,14 @@ describe('PS tab presentation without invented measurements', () => {
     for(const changed of [{...s,txEnabled:true},{...s,remoteClientRole:'viewer'},{...s,connected:false}])
       expect(pureSignalTestView(changed,capable,new PureSignalReports(),0).canSetFeedbackAttenuation).toBe(false);
   });
+  it('permits only the negotiated manual feedback adjustment after completed fault cleanup',()=>{
+    const s=state();const m:ManagedPcmStatus={...managed(),selected:true,phase:'fault',psCapability:'single',manualAttenuationSupported:true,canAdjustFaultedFeedback:true};
+    const v=()=>pureSignalTestView(s,m,new PureSignalReports(),0);
+    expect(v().canSetFeedbackAttenuation).toBe(true);expect(v().canConfigure).toBe(false);expect(v().canTwoTone).toBe(false);expect(v().canCalibrate).toBe(false);
+    m.canAdjustFaultedFeedback=false;expect(v().canSetFeedbackAttenuation).toBe(false);
+    m.canAdjustFaultedFeedback=true;s.txEnabled=true;expect(v().canSetFeedbackAttenuation).toBe(false);
+    s.txEnabled=false;s.remoteClientRole='viewer';expect(v().canSetFeedbackAttenuation).toBe(false);
+  });
   function nativeReport(keyed = false) {
     const monitor = new CorrectionMonitorState();
     monitor.reset(1);

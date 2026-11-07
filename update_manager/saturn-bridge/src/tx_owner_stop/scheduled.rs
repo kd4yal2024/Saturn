@@ -2660,6 +2660,29 @@ fn faulted_rx_tuning_actual_dispatch_both_backends_preserves_fault_and_output_fe
                     "receive tuning must not invoke native configuration, render, fitting or cleanup");
                 assert!(replies.contains("tx_config:0,1,applied,12;"), "{replies}");
                 assert!(replies.contains("tx_config:0,2,applied,13;"), "{replies}");
+                let attenuation_capture =
+                    ingress.capture(origin + Duration::from_nanos(now)).unwrap();
+                ingress
+                    .configure_batch(
+                        7,
+                        Some(&attenuation_capture),
+                        &[TciCommand::SetPureSignalAttenuation(17)],
+                    )
+                    .unwrap();
+                for _ in 0..10 {
+                    now += 1_000_000;
+                    r.turn(now);
+                }
+                assert_eq!(
+                    shared_model
+                        .lock()
+                        .unwrap()
+                        .desired
+                        .pure_signal_attenuation_db,
+                    17
+                );
+                assert_eq!(r.life.status().primary_fault, Some(Fault::SevereOverdrive));
+                assert!(r.snapshot().output().is_none());
                 // Even a new operator PTT action cannot clear the retained fault.
                 let c = ingress.capture(origin + Duration::from_nanos(now)).unwrap();
                 ingress
