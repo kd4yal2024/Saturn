@@ -20,6 +20,18 @@ describe('PS tab presentation without invented measurements', () => {
     expect(view.canSetFeedbackAttenuation).toBe(false);
     expect(pureSignalTestView(s,{...capable,autoAttenuationEnabled:false},new PureSignalReports(),0).canSetFeedbackAttenuation).toBe(true);
   });
+  it('shows PS-off Auto ATT as armed and permits the manual baseline attenuation',()=>{
+    const m:ManagedPcmStatus={...managed(),selected:true,phase:'ready',psCapability:'single',psMode:'off',
+      manualAttenuationSupported:true,autoAttenuationSupported:true,autoAttenuationEnabled:true};
+    const v=pureSignalTestView(state(),m,new PureSignalReports(),0);
+    expect(v.autoAttenuationArmedOnly).toBe(true);expect(v.autoAttenuationEnabled).toBe(true);
+    expect(v.canSetFeedbackAttenuation).toBe(true);
+    for(const psMode of ['single','auto'] as const){
+      const active=pureSignalTestView(state(),{...m,psMode},new PureSignalReports(),0);
+      expect(active.autoAttenuationArmedOnly).toBe(false);expect(active.canSetFeedbackAttenuation).toBe(false);
+    }
+    expect(pureSignalTestView({...state(),txEnabled:true},m,new PureSignalReports(),0).canSetFeedbackAttenuation).toBe(false);
+  });
   it('can turn Auto ATT off after fault cleanup without unlocking unrelated TX controls',()=>{
     const m:ManagedPcmStatus={...managed(),selected:true,phase:'fault',psCapability:'single',autoAttenuationSupported:true,autoAttenuationEnabled:true,canAdjustFaultedAutoAtt:true};
     const view=pureSignalTestView(state(),m,new PureSignalReports(),0);

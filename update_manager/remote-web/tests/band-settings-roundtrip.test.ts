@@ -73,6 +73,8 @@ describe('automatic band operating settings', () => {
     f.state.txPhase='keyed';m.phase='streaming';m.ownerPhase='Active';sync();expect(checkbox.disabled).toBe(true);
     expect(slider.value).toBe('12');expect(slider.disabled).toBe(true);expect(f.state.pureSignalAttenuationDb).toBe(18);
     f.state.txPhase='rx';m.phase='ready';m.ownerPhase='ReadyOff';m.autoAttenuationEnabled=false;sync();expect(slider.value).toBe('18');expect(slider.disabled).toBe(false);
+    m.autoAttenuationEnabled=true;m.psMode='off';sync();expect(slider.value).toBe('18');expect(slider.disabled).toBe(false);
+    expect(status.textContent).toContain('PS-off uses the manual');
     doc.activeElement=slider;slider.value='23';readout.textContent='23 dB requested';sync();
     expect(slider.value).toBe('23');expect(readout.textContent).toBe('23 dB requested');
   });

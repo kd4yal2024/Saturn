@@ -10,8 +10,10 @@ Auto ATT and its manual alternative are saved per band. An explicit saved manual
 0 dB remains 0 dB; new manual preferences default to 31 dB. A capable shared host
 reports its committed Auto ATT selection. The checkbox is usable while RX/off
 (including completed fault cleanup); it is unchecked and unavailable for hosts
-that do not advertise support. The manual slider is editable with Auto ATT off.
-With Auto ATT on it displays confirmed applied attenuation, independently of the
+that do not advertise support. With PS off, Auto ATT is armed for a later PS
+transmission; the manual baseline slider remains usable and displays the manual
+value actually requested. With PS enabled and Auto ATT on, the slider displays
+confirmed applied attenuation, independently of the
 saved manual preset. A focused manual edit is not overwritten by panel refresh.
 Neither changing a setting nor acknowledging a completed fault keys the radio.
 

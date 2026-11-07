@@ -14483,8 +14483,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("setup-tx-puresignal-auto-attenuate")) $("setup-tx-puresignal-auto-attenuate").disabled = !view.canSetAutoAttenuation;
       if ($("setup-tx-puresignal-auto-attenuate")) $("setup-tx-puresignal-auto-attenuate").checked = view.autoAttenuationEnabled;
       if ($("setup-tx-puresignal-auto-attenuate-label")) $("setup-tx-puresignal-auto-attenuate-label").textContent = view.autoAttenuationSupported ? "Auto ATT — starts at 31 dB" : "Auto ATT unavailable on this host";
-      if ($("setup-ps-auto-att-status")) $("setup-ps-auto-att-status").textContent = !view.autoAttenuationSupported ? "" : !view.autoAttenuationEnabled ? "Manual feedback attenuation" : view.autoAttStatus && view.autoAttStatus.phase !== "off" ? `${view.autoAttStatus.db} dB · ${view.autoAttStatus.phase}${view.autoAttStatus.info === null ? "" : ` · level estimate ${view.autoAttStatus.info}`}` : "Next PS TX starts at 31 dB";
-      if (view.autoAttenuationEnabled) {
+      if ($("setup-ps-auto-att-status")) $("setup-ps-auto-att-status").textContent = !view.autoAttenuationSupported ? "" : !view.autoAttenuationEnabled ? "Manual feedback attenuation" : view.autoAttenuationArmedOnly ? "Auto ATT armed for PS; PS-off uses the manual feedback attenuation below" : view.autoAttStatus && view.autoAttStatus.phase !== "off" ? `${view.autoAttStatus.db} dB · ${view.autoAttStatus.phase}${view.autoAttStatus.info === null ? "" : ` · level estimate ${view.autoAttStatus.info}`}` : "Next PS TX starts at 31 dB";
+      if (view.autoAttenuationEnabled && !view.autoAttenuationArmedOnly) {
         const db = view.autoAttStatus?.appliedDb ?? 31;
         if ($("setup-tx-puresignal-attenuation")) $("setup-tx-puresignal-attenuation").value = String(db);
         if ($("setup-tx-puresignal-attenuation-readout")) $("setup-tx-puresignal-attenuation-readout").textContent = `${db} dB · Auto ATT`;
@@ -14542,7 +14542,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const text = JSON.stringify({ format: "saturn-ps-ui-diagnostics-v1",
         copiedAtIso: new Date().toISOString(), mode: state.mode,
         txPhase: state.txPhase, commandedWatts: state.txDrive,
-        feedbackAttenuationCommandDb: managedSettings.autoAttenuationEnabled ? (managedSettings.autoAttStatus?.db ?? 31) : state.pureSignalAttenuationDb,
+        feedbackAttenuationCommandDb: managedSettings.autoAttenuationEnabled && managedSettings.psMode !== "off" ? (managedSettings.autoAttStatus?.db ?? 31) : state.pureSignalAttenuationDb,
         manualFeedbackAttenuationPresetDb: state.pureSignalAttenuationDb,
         autoAttenuationPreference: state.pureSignalAutoAttenuate,
         autoAttenuationHostConfirmedDb: managedSettings.autoAttStatus?.appliedDb ?? null,
