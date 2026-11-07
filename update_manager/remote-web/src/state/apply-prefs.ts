@@ -1,3 +1,4 @@
+import { normalizePaCalibration } from '../settings/pa-calibration';
 import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 /**
  * Pure state-mutation helpers for applying and normalizing prefs on AppState.
@@ -89,6 +90,7 @@ export interface RadioPrefsTarget {
   filterHigh: number;
   rxFilterShiftHz?: number;
   txDrive: number;
+  txPaCalibration?: number[] | null;
   txMicGainDb: number;
   txFilterLow: number;
   txFilterHigh: number;
@@ -251,6 +253,7 @@ export function applyRadioPrefsToState(
   state.filterHigh = clampFilterHighHz(scalarPref(prefs.filterHigh, state.filterHigh));
   state.rxFilterShiftHz = additional.rxFilterShiftHz;
   state.txDrive = clampTxDriveWatts(prefs.txDrive ?? state.txDrive);
+  if (Object.prototype.hasOwnProperty.call(prefs, "txPaCalibration")) state.txPaCalibration = normalizePaCalibration(prefs.txPaCalibration);
   state.txMicGainDb = clampTxMicGainDb(prefs.txMicGainDb ?? state.txMicGainDb);
   state.txFilterLow = clampFilterLowHz(scalarPref(prefs.txFilterLow, state.txFilterLow));
   state.txFilterHigh = clampFilterHighHz(scalarPref(prefs.txFilterHigh, state.txFilterHigh));

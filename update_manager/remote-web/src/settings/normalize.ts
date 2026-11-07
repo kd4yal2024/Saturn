@@ -1,3 +1,4 @@
+import { normalizePaCalibration } from '../settings/pa-calibration';
 import { normalizeTerrain } from './terrain';
 import {
   DEFAULT_DISPLAY_PREFS,
@@ -322,6 +323,7 @@ export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | unde
     filterLow: clampFilterLowHz(source.filterLow),
     filterHigh: clampFilterHighHz(source.filterHigh),
     txDrive: clampTxDriveWatts(source.txDrive),
+    txPaCalibration: normalizePaCalibration(source.txPaCalibration),
     txMicGainDb: clampTxMicGainDb(source.txMicGainDb),
     txFilterLow: clampFilterLowHz(source.txFilterLow),
     txFilterHigh: clampFilterHighHz(source.txFilterHigh),
@@ -401,7 +403,7 @@ export function normalizeBandMemory(input: unknown): BandMemory {
     const entry = raw as Record<string, unknown>;
     output[label] = {
       frequency: Math.max(0, Math.round(safeFiniteNumber(entry.frequency, 0))),
-      radioPrefs: normalizeRadioPrefs(entry.radioPrefs as DeepPartial<RadioPrefs> | null | undefined),
+      radioPrefs: (() => { const prefs = normalizeRadioPrefs(entry.radioPrefs as DeepPartial<RadioPrefs> | null | undefined); delete prefs.txPaCalibration; return prefs; })(),
       displayPrefs: normalizeDisplayPrefs(entry.displayPrefs as DeepPartial<DisplayPrefs> | null | undefined),
       displayZoom: Math.max(1, Math.min(32, Math.round(safeFiniteNumber(entry.displayZoom, 1)))),
     };

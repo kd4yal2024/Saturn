@@ -105,6 +105,10 @@ export type TciRadioState = {
   remoteClientRole: TciClientRole | null;
   remoteClientId: string | null;
   txDrive: number;
+  txPaCalibrationSupported?: boolean;
+  txPaCalibrationHost?: number[] | null;
+  txPaDriveReport?: string;
+  txPaCalibrationError?: string;
   txMicGainDb?: number;
   txMonitorSupported?: boolean;
   txMonitorEnabled?: boolean;

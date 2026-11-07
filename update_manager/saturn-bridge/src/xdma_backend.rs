@@ -1512,6 +1512,12 @@ fn handle_command(
             model.desired.tx_drive = drive.clamp(1, DIRECT_TX_MAX_WATTS);
             let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
         }
+        TciCommand::SetTxPaCalibration(profile) => {
+            if let Some(p) = profile.filter(|p| p.valid() && !model.desired.tx_enabled && !tx_control.requested) {
+                model.desired.tx_pa_calibration = p;
+                let _ = tx_cmd_tx.send(TxCommand::ModelChanged);
+            } else { tci.publish_pa_calibration_rejection(); }
+        }
         TciCommand::SetTxMicGain(gain_db) => {
             model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);
             let _ = tx_cmd_tx.send(TxCommand::ModelChanged);

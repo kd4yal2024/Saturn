@@ -424,6 +424,7 @@ pub struct DesiredRadioState {
     /// Remote TX power target in watts. The P2 drive byte is derived from this
     /// target in the high-priority packet builder.
     pub tx_drive: u8,
+    pub tx_pa_calibration: crate::pa_calibration::PaCalibration,
     pub tx_mic_gain_db: f64,
     pub tx_monitor_available: bool,
     pub tx_monitor_enabled: bool,
@@ -581,6 +582,7 @@ impl RadioModel {
                 ddc0_sample_rate_khz,
                 ddc0_sample_size_bits,
                 tx_drive: 10,
+                tx_pa_calibration: Default::default(),
                 tx_mic_gain_db: 0.0,
                 tx_monitor_available: false,
                 tx_monitor_enabled: false,

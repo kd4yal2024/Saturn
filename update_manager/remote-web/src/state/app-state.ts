@@ -101,6 +101,11 @@ export interface AppState {
   moxRequested: boolean;
   txPhase: 'rx' | 'armed' | 'keyed';
   txDrive: number;
+  txPaCalibrationSupported?: boolean;
+  txPaCalibrationHost?: number[] | null;
+  txPaDriveReport?: string;
+  txPaCalibrationError?: string;
+  txPaCalibration?: number[] | null;
   remoteTxRfEnabled: boolean | null;
   txMicGainDb: number;
   satp?: import('../audio/satp').SatpState;
@@ -495,6 +500,7 @@ export function createAppState(): AppState {
     moxRequested: false,
     txPhase: 'rx',
     txDrive: 10,
+    txPaCalibration: null,
     remoteTxRfEnabled: null,
     txMicGainDb: 0,
     txMonitorSupported: false,

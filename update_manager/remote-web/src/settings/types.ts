@@ -57,6 +57,7 @@ export type RadioPrefs = {
   filterLow: number;
   filterHigh: number;
   txDrive: number;
+  txPaCalibration?: number[] | null;
   txMicGainDb: number;
   txFilterLow: number;
   txFilterHigh: number;

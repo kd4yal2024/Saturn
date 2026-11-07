@@ -838,10 +838,14 @@ impl RuntimeIo for Io {
                                     .filter(|s| s.contains(",applied,"))
                                     .count();
                                 let messages = &step[5..];
+                                let profile = crate::pa_calibration::PaCalibration::Bands(
+                                    crate::pa_calibration::G2_STARTING_GAINS,
+                                );
+                                c.text(&format!("tx_pa_calibration:0,{};", profile.wire()));
                                 for wire in messages {
                                     c.text(wire);
                                 }
-                                let expected = applied_before + messages.len();
+                                let expected = applied_before + messages.len() + 1;
                                 let deadline = Instant::now() + Duration::from_secs(5);
                                 loop {
                                     c.drain();
@@ -874,6 +878,7 @@ impl RuntimeIo for Io {
                                 assert_eq!(m.desired.vfo_b_hz, frequency);
                                 assert_eq!(m.desired.iq_center_hz, frequency);
                                 assert_eq!(u64::from(m.desired.tx_drive), watts);
+                                assert_eq!(m.desired.tx_pa_calibration, profile);
                                 assert_eq!(f64::from(m.desired.tx_mic_gain_db), mic);
                                 assert_eq!(
                                     m.desired.rx_antenna,

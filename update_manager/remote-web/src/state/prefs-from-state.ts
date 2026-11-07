@@ -1,3 +1,4 @@
+import { normalizePaCalibration } from '../settings/pa-calibration';
 import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 import type { RadioPrefs, DisplayPrefs } from '../settings/types';
 import {
@@ -83,6 +84,7 @@ export interface RadioPrefsSource {
   filterLow: number;
   filterHigh: number;
   txDrive: number;
+  txPaCalibration?: number[] | null;
   txMicGainDb: number;
   txFilterLow: number;
   txFilterHigh: number;
@@ -189,6 +191,7 @@ export function radioPrefsFromState(s: RadioPrefsSource): RadioPrefs {
     filterLow: clampFilterLowHz(s.filterLow),
     filterHigh: clampFilterHighHz(s.filterHigh),
     txDrive: clampTxDriveWatts(s.txDrive),
+    txPaCalibration: normalizePaCalibration(s.txPaCalibration),
     txMicGainDb: clampTxMicGainDb(s.txMicGainDb),
     txFilterLow: clampFilterLowHz(s.txFilterLow),
     txFilterHigh: clampFilterHighHz(s.txFilterHigh),

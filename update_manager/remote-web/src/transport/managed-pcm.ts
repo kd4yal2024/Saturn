@@ -55,7 +55,7 @@ export interface ManagedPcmStatus {
 interface Measurement { id: string | null; stopAt: number; stopping: boolean; complete: boolean; timing: boolean; native: boolean }
 interface Owner { serial: bigint; stop: bigint; phase: string; config: string; source: Source; clean: boolean; fault: string }
 interface Transaction { config: string; queuedAt: number }
-const SETTINGS = /^(?:modulation|vfo|vfo_active|split|split_enable|drive|tx_drive|tx_mic_gain|tx_filter_band|tx_eq_enable|tx_eq_band|tx_cfc_enable|tx_cfc_precomp|tx_cfc_band|tx_phase_rotator|tx_phase_rotator_auto|tx_phase_rotator_corner|tx_noise_gate|tx_noise_gate_threshold|tx_dexp|tx_dexp_threshold|tx_dexp_expansion|tx_speech_processor|tx_speech_processor_gain|tx_cessb|tx_fft_size|tx_low_latency|tx_puresignal|tx_puresignal_mode|tx_puresignal_auto_attenuate|tx_puresignal_attenuation|tx_puresignal_reset|tx_two_tone|tx_two_tone_freq1|tx_two_tone_freq2|tx_two_tone_level_db|tx_two_tone_invert_lsb|tx_two_tone_delay_ms):/;
+const SETTINGS = /^(?:modulation|vfo|vfo_active|split|split_enable|drive|tx_drive|tx_pa_calibration|tx_mic_gain|tx_filter_band|tx_eq_enable|tx_eq_band|tx_cfc_enable|tx_cfc_precomp|tx_cfc_band|tx_phase_rotator|tx_phase_rotator_auto|tx_phase_rotator_corner|tx_noise_gate|tx_noise_gate_threshold|tx_dexp|tx_dexp_threshold|tx_dexp_expansion|tx_speech_processor|tx_speech_processor_gain|tx_cessb|tx_fft_size|tx_low_latency|tx_puresignal|tx_puresignal_mode|tx_puresignal_auto_attenuate|tx_puresignal_attenuation|tx_puresignal_reset|tx_two_tone|tx_two_tone_freq1|tx_two_tone_freq2|tx_two_tone_level_db|tx_two_tone_invert_lsb|tx_two_tone_delay_ms):/;
 export function managedSettingsMessage(text: string): boolean {
   return text.split(';').some(raw => {
     const c = raw.trim();

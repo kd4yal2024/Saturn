@@ -859,6 +859,9 @@ impl TciFrontend {
             model.desired.rx_noise_reduction_mode != NoiseReductionMode::Off
         ));
         self.send_text(format!("rx_anf_enable:0,{};", model.desired.anf_enabled));
+        for message in Self::pa_calibration_messages(model) {
+            self.send_text(message);
+        }
         self.send_text(format!("tx_drive:0,{};", model.desired.tx_drive));
         self.send_text(format!("drive:0,{};", model.desired.tx_drive));
         self.send_text(format!(
@@ -1024,7 +1027,35 @@ impl TciFrontend {
         self.publish_telemetry(model);
     }
 
+    fn pa_calibration_messages(model: &RadioModel) -> [String; 2] {
+        let profile = model.desired.tx_pa_calibration;
+        let drive = match profile.gain(model.desired.tx_frequency_hz) {
+            Some(gain) => {
+                let band = crate::pa_calibration::BAND_NAMES
+                    [crate::pa_calibration::band_index(model.desired.tx_frequency_hz).unwrap()];
+                format!(
+                    "tx_pa_drive:0,{},{},{},{},{gain};",
+                    model.desired.tx_frequency_hz,
+                    model.desired.tx_drive,
+                    profile.drive(model.desired.tx_drive, model.desired.tx_frequency_hz, 68),
+                    band
+                )
+            }
+            None => "tx_pa_drive:0,legacy;".into(),
+        };
+        [
+            format!(
+                "tx_pa_calibration_supported:0,true;tx_pa_calibration:0,{};",
+                profile.wire()
+            ),
+            drive,
+        ]
+    }
+
     pub fn publish_standard_radio_state_to(&self, client_id: u64, model: &RadioModel) {
+        for message in Self::pa_calibration_messages(model) {
+            self.send_text_to(client_id, message);
+        }
         let agc_mode = match model.desired.agc_mode {
             crate::radio_model::AgcMode::Off => "off",
             crate::radio_model::AgcMode::Fast => "fast",
@@ -1302,6 +1333,10 @@ impl TciFrontend {
 
     pub fn publish_satp_not_ready(&self) {
         self.send_safety_text("tx_fault:0,satp_not_ready;".into());
+    }
+
+    pub(crate) fn publish_pa_calibration_rejection(&self) {
+        self.send_text("tx_pa_calibration_result:0,rejected,InvalidProfileOrTxActive;".into());
     }
 
     pub fn publish_tx_power_trip(&self, forward_watts: f32, limit_watts: f32) {

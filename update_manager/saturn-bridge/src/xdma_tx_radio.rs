@@ -414,7 +414,7 @@ impl DirectTxState {
             |value| value | MOX_BIT,
             "could not assert production direct-XDMA MOX",
         )?;
-        let drive = tx_drive_watts_to_byte(model.desired.tx_drive);
+        let drive = model_drive_byte(model);
         self.registers
             .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))?;
         self.verify_keyed(model)?;
@@ -818,7 +818,7 @@ impl DirectTxState {
         // Verify the applied DAC code, not just MOX/stream bits. This is one
         // key-boundary read, not a new periodic poll or RF power measurement.
         let dac = self.registers.read_register(DAC_CONTROL_REGISTER)?;
-        let expected_dac = dac_control_word(tx_drive_watts_to_byte(model.desired.tx_drive));
+        let expected_dac = dac_control_word(model_drive_byte(model));
         let expected_tx_duc = frequency_to_phase_word(model.desired.tx_frequency_hz);
         let filter = alex_tx_filter_bits(model.desired.tx_frequency_hz);
         let alex = self
@@ -1383,7 +1383,7 @@ impl TxRadio for DirectXdmaTxRadio {
                 state.shutdown()
             } else if state.keyed {
                 state.apply_frequency_and_filter(model)?;
-                let drive = tx_drive_watts_to_byte(model.desired.tx_drive);
+                let drive = model_drive_byte(model);
                 state
                     .registers
                     .write_register(DAC_CONTROL_REGISTER, dac_control_word(drive))?;
@@ -1569,32 +1569,17 @@ fn frequency_to_phase_word(frequency_hz: u32) -> u32 {
     ((numerator + 61_440_000) / 122_880_000) as u32
 }
 
+#[cfg(test)]
 fn tx_drive_watts_to_byte(watts: u8) -> u8 {
-    let watts = f32::from(watts.min(DIRECT_TX_MAX_WATTS));
-    if watts == 0.0 {
-        return 0;
-    }
-    let curve = [
-        (0.0_f32, 0.0_f32),
-        (5.0, 18.0),
-        (10.0, 24.0),
-        (25.0, 34.0),
-        (50.0, 46.0),
-        (100.0, 68.0),
-    ];
-    let mut lower = curve[0];
-    let mut upper = curve[curve.len() - 1];
-    for window in curve.windows(2) {
-        if watts <= window[1].0 {
-            lower = window[0];
-            upper = window[1];
-            break;
-        }
-    }
-    let fraction = (watts - lower.0) / (upper.0 - lower.0);
-    (lower.1 + (upper.1 - lower.1) * fraction)
-        .round()
-        .clamp(1.0, 68.0) as u8
+    crate::pa_calibration::legacy_drive(watts, 68)
+}
+
+fn model_drive_byte(model: &RadioModel) -> u8 {
+    model.desired.tx_pa_calibration.drive(
+        model.desired.tx_drive.min(DIRECT_TX_MAX_WATTS),
+        model.desired.tx_frequency_hz,
+        68,
+    )
 }
 
 fn dac_control_word(level: u8) -> u32 {
@@ -1756,6 +1741,45 @@ mod tests {
                 "wrong DAC drive {wrong} must not certify keyed state"
             );
         }
+    }
+
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[test]
+    fn calibrated_direct_dac_readback_rejects_the_old_global_curve() {
+        let fixture = offline_fixture::DirectFixture::new();
+        let mut m = crate::tx_owner_stop::tests::model();
+        m.desired.tx_drive = 40;
+        m.desired.tx_frequency_hz = 27_426_000;
+        m.desired.tx_pa_calibration =
+            crate::pa_calibration::PaCalibration::Bands(crate::pa_calibration::G2_STARTING_GAINS);
+        fixture.write(
+            RF_GPIO_REGISTER,
+            MOX_BIT | TX_ENABLE_BIT | RF_DATA_NETWORK_ENDIAN_BIT,
+        );
+        fixture.write(TX_CONFIG_REGISTER, keyed_stream_config(0));
+        fixture.write(
+            TX_DUC_REGISTER,
+            frequency_to_phase_word(m.desired.tx_frequency_hz),
+        );
+        fixture.write(
+            ALEX_TX_FILTER_TX_ANTENNA_REGISTER,
+            u32::from(
+                alex_tx_filter_bits(m.desired.tx_frequency_hz) | ALEX_ANT1_BIT | ALEX_TX_RELAY_BIT,
+            ),
+        );
+        assert_eq!(model_drive_byte(&m), 68);
+        fixture.write(DAC_CONTROL_REGISTER, dac_control_word(41));
+        assert!(fixture
+            .radio
+            .state
+            .lock()
+            .unwrap()
+            .verify_keyed(&m)
+            .is_err());
+        fixture.write(DAC_CONTROL_REGISTER, dac_control_word(68));
+        assert!(fixture.radio.state.lock().unwrap().verify_keyed(&m).is_ok());
+        m.desired.tx_frequency_hz = 7_200_000;
+        assert_eq!(model_drive_byte(&m), 41);
     }
 
     #[test]

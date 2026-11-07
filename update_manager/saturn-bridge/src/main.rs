@@ -7,6 +7,7 @@ mod display_spectrum;
 mod fftw_wisdom;
 mod native_build_info;
 mod p2;
+mod pa_calibration;
 mod radio_model;
 #[cfg(feature = "managed-puresignal")]
 mod rf_monitor;
@@ -994,6 +995,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                     }
                     model.desired.tx_drive = clamped;
                     needs_high_priority = true;
+                }
+                TciCommand::SetTxPaCalibration(profile) => {
+                    if let Some(p) = profile.filter(|p| {
+                        p.valid()
+                            && !model.desired.tx_enabled
+                            && !tx_requested.load(Ordering::Relaxed)
+                            && model.desired.tx_phase == TxPhase::Rx
+                    }) {
+                        model.desired.tx_pa_calibration = p;
+                        needs_high_priority = true;
+                    } else {
+                        tci.publish_pa_calibration_rejection();
+                    }
                 }
                 TciCommand::SetTxMicGain(gain_db) => {
                     model.desired.tx_mic_gain_db = gain_db.clamp(-20.0, 20.0);

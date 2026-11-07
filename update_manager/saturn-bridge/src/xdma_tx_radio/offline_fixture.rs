@@ -241,8 +241,35 @@ fn cooperative_direct_writer_obeys_fifo_space_and_final_cancellation_without_a_t
 
 #[test]
 fn managed_key_refills_partial_fifo_before_live_iq_and_key() {
+    exercise_managed_prefill(
+        crate::pa_calibration::PaCalibration::Legacy,
+        7_200_000,
+        5,
+        18,
+    );
+}
+
+#[test]
+fn calibrated_profile_reaches_actual_key_and_complete_stop() {
+    exercise_managed_prefill(
+        crate::pa_calibration::PaCalibration::Bands(crate::pa_calibration::G2_STARTING_GAINS),
+        27_426_000,
+        40,
+        68,
+    );
+}
+
+fn exercise_managed_prefill(
+    profile: crate::pa_calibration::PaCalibration,
+    frequency: u32,
+    watts: u8,
+    expected_drive: u8,
+) {
     let fixture = DirectFixture::with_key_clock();
-    let model = crate::tx_owner_stop::tests::model();
+    let mut model = crate::tx_owner_stop::tests::model();
+    model.desired.tx_pa_calibration = profile;
+    model.desired.tx_frequency_hz = frequency;
+    model.desired.tx_drive = watts;
     let iq = [0.2; DUC_FRAME_IQ_FLOATS];
     let mut stage = DirectKeyStage::default();
     fixture.write(DUC_FIFO_MONITOR_REGISTER, 0);
@@ -294,6 +321,12 @@ fn managed_key_refills_partial_fifo_before_live_iq_and_key() {
         fixture.read(RF_GPIO_REGISTER) & (MOX_BIT | TX_ENABLE_BIT),
         MOX_BIT | TX_ENABLE_BIT
     );
+    assert_eq!(
+        fixture.read(DAC_CONTROL_REGISTER),
+        dac_control_word(expected_drive)
+    );
+    fixture.radio.state.lock().unwrap().shutdown().unwrap();
+    fixture.assert_off();
 }
 
 #[test]

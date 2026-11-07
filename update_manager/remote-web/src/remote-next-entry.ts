@@ -1,3 +1,4 @@
+import { PaCalibrationPanel, paCalibrationCommand } from './settings/pa-calibration';
 import { DisplayFftProducer } from './display/fft-producer';
 import { planDisplayIqWindow } from './display/iq-window';
 import { SettingsWorkbench } from './settings/workbench';
@@ -433,6 +434,8 @@ const api = {
   clampSpectrumVisualEffect,
   sanitizePhonePanels,
   normalizeBandMemory,
+
+  PaCalibrationPanel, paCalibrationCommand,
 
   // Audio
   volumeAmplitudeFromDb,

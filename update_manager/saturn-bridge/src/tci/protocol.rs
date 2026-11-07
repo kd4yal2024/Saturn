@@ -99,6 +99,7 @@ pub enum TciCommand {
     SetAgcMode(AgcMode),
     SetAgcGain(f64),
     SetTxDrive(u8),
+    SetTxPaCalibration(Option<crate::pa_calibration::PaCalibration>),
     SetTxMicGain(f64),
     SetTxMonitor(bool),
     SetRxHeadphones(bool),
@@ -912,6 +913,12 @@ pub(crate) fn parse_tci_command_with_roles(
                 if let Ok(drive) = drive_text.trim().parse::<u8>() {
                     let _ = command_tx.send(TciCommand::SetTxDrive(drive));
                 }
+            }
+        }
+        "tx_pa_calibration" => {
+            if args.len() == 2 && args[0].trim() == "0" {
+                let value = crate::pa_calibration::PaCalibration::parse(args[1].trim());
+                let _ = command_tx.send(TciCommand::SetTxPaCalibration(value));
             }
         }
         "tx_monitor" => {

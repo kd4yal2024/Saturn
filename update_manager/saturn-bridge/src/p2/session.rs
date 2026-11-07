@@ -696,40 +696,9 @@ fn build_ddc_phase_array(model: &RadioModel) -> [u32; 10] {
     phase_words
 }
 
+#[cfg(test)]
 fn tx_drive_watts_to_p2_byte(watts: u8, drive_byte_at_100w: u8) -> u8 {
-    if watts == 0 {
-        return 0;
-    }
-    let calibrated_full_scale = f64::from(drive_byte_at_100w.max(1));
-    let target_watts = f64::from(watts.min(100));
-    let measured_curve_at_68 = [
-        (0.0, 0.0),
-        (5.0, 18.0),
-        (10.0, 24.0),
-        (25.0, 34.0),
-        (50.0, 46.0),
-        (100.0, 68.0),
-    ];
-
-    let mut lower = measured_curve_at_68[0];
-    let mut upper = *measured_curve_at_68.last().unwrap();
-    for window in measured_curve_at_68.windows(2) {
-        if target_watts <= window[1].0 {
-            lower = window[0];
-            upper = window[1];
-            break;
-        }
-    }
-
-    let span = upper.0 - lower.0;
-    let fraction = if span > 0.0 {
-        (target_watts - lower.0) / span
-    } else {
-        0.0
-    };
-    let drive_at_68 = lower.1 + ((upper.1 - lower.1) * fraction);
-    let drive = drive_at_68 * (calibrated_full_scale / 68.0);
-    drive.round().clamp(1.0, calibrated_full_scale) as u8
+    crate::pa_calibration::legacy_drive(watts, drive_byte_at_100w)
 }
 
 #[cfg(feature = "managed-puresignal")]
@@ -747,7 +716,11 @@ fn build_high_priority_state(model: &RadioModel, drive_byte_at_100w: u8) -> High
         tx: model.desired.tx_enabled,
         ddc_phase_words: build_ddc_phase_array(model),
         duc_phase_word: frequency_to_phase_word(model.desired.tx_frequency_hz),
-        tx_drive: tx_drive_watts_to_p2_byte(model.desired.tx_drive, drive_byte_at_100w),
+        tx_drive: model.desired.tx_pa_calibration.drive(
+            model.desired.tx_drive,
+            model.desired.tx_frequency_hz,
+            drive_byte_at_100w,
+        ),
         cat_port: 0,
         alex_tx_word: build_alex_tx_word(
             model.desired.tx_frequency_hz,
@@ -950,6 +923,30 @@ mod tests {
         let state = build_high_priority_state(&model, 68);
 
         assert_eq!(state.tx_drive, 46);
+    }
+
+    #[test]
+    fn pa_calibration_uses_tx_vfo_and_keeps_legacy_full_scale_policy() {
+        let mut m = RadioModel::new(2, 7_200_000, 0, 192, 24, 2048, true, 4096, true);
+        m.desired.tx_drive = 40;
+        m.desired.tx_pa_calibration =
+            crate::pa_calibration::PaCalibration::Bands(crate::pa_calibration::G2_STARTING_GAINS);
+        m.desired.vfo_b_hz = 27_426_000;
+        m.desired.split_enabled = true;
+        m.sync_vfo_routes();
+        let state = build_high_priority_state(&m, 68);
+        assert_eq!(state.tx_drive, 68);
+        assert_eq!(
+            crate::p2::packets::build_high_priority_to_sdr(&state)[345],
+            68
+        );
+        m.desired.split_enabled = false;
+        m.sync_vfo_routes();
+        assert_eq!(build_high_priority_state(&m, 68).tx_drive, 41);
+        m.desired.tx_pa_calibration = Default::default();
+        assert_eq!(build_high_priority_state(&m, 68).tx_drive, 41);
+        m.desired.tx_drive = 100;
+        assert_eq!(build_high_priority_state(&m, 120).tx_drive, 120);
     }
 
     #[test]

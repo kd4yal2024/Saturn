@@ -5843,3 +5843,43 @@ fn the_production_accept_path_counts_a_confirmed_socket() {
     drop(peer);
     worker.join().unwrap();
 }
+
+#[test]
+fn pa_profile_parser_rejects_invalid_profiles_and_viewer_mutations() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let clients = test_client_registry(30);
+    let p = crate::pa_calibration::PaCalibration::Bands(crate::pa_calibration::G2_STARTING_GAINS);
+    parse_tci_command(
+        &format!("tx_pa_calibration:0,{}", p.wire()),
+        &tx,
+        &clients,
+        30,
+        true,
+    );
+    assert!(matches!(rx.recv().unwrap(),TciCommand::SetTxPaCalibration(Some(v)) if v==p));
+    parse_tci_command("tx_pa_calibration:0,NaN", &tx, &clients, 30, true);
+    assert!(matches!(
+        rx.recv().unwrap(),
+        TciCommand::SetTxPaCalibration(None)
+    ));
+    parse_tci_command("tx_pa_calibration:0,legacy", &tx, &clients, 30, false);
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn late_client_receives_committed_pa_profile_without_a_radio_change() {
+    let (front, _) = rear_ptt_frontend();
+    let mut m = RadioModel::new(6, 27_426_000, 0, 384, 24, 2048, true, 4096, true);
+    m.desired.tx_drive = 40;
+    m.desired.tx_pa_calibration =
+        crate::pa_calibration::PaCalibration::Bands(crate::pa_calibration::G2_STARTING_GAINS);
+    front.publish_standard_radio_state_to(7, &m);
+    let texts = drain_all_text(&front.clients, 7).join("");
+    assert!(texts.contains("tx_pa_calibration_supported:0,true;"));
+    assert!(texts.contains(&format!(
+        "tx_pa_calibration:0,{};",
+        m.desired.tx_pa_calibration.wire()
+    )));
+    assert!(texts.contains("tx_pa_drive:0,27426000,40,68,11m,46.5;"));
+    assert!(!m.desired.tx_enabled);
+}

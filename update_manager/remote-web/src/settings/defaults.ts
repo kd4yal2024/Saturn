@@ -45,6 +45,7 @@ export const DEFAULT_RADIO_PREFS: RadioPrefs = {
   filterLow: 50,
   filterHigh: 3050,
   txDrive: 10,
+  txPaCalibration: null,
   txMicGainDb: 0,
   txFilterLow: 250,
   txFilterHigh: 3000,

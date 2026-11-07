@@ -1056,6 +1056,50 @@ mod measurement_tests {
         );
     }
     #[test]
+    fn pa_profile_is_an_ordered_configuration_and_invalid_profiles_are_rejected() {
+        use crate::pa_calibration::{PaCalibration, G2_STARTING_GAINS};
+        let (ingress, rx) = crate::tx_thread::feedback_owner::tests::collector();
+        ingress.set_drive_ceiling(100).unwrap();
+        ready(&ingress);
+        let capture = ingress.capture(Instant::now()).unwrap();
+        let p = PaCalibration::Bands(G2_STARTING_GAINS);
+        assert!(is_tx_configuration(&TciCommand::SetTxPaCalibration(Some(
+            p
+        ))));
+        ingress
+            .configure_batch(
+                7,
+                Some(&capture),
+                &[TciCommand::SetTxPaCalibration(Some(p))],
+            )
+            .unwrap();
+        let TxCommand::PureSignalOwnerConfig(c) = rx.commands.try_recv().unwrap() else {
+            panic!("missing PA transaction");
+        };
+        assert_eq!(c.view().0.desired.tx_pa_calibration, p);
+        for bad in [
+            None,
+            Some(PaCalibration::Bands([f64::NAN; 12])),
+            Some(PaCalibration::Bands([39.; 12])),
+        ] {
+            assert_eq!(
+                ingress.configure_batch(7, Some(&capture), &[TciCommand::SetTxPaCalibration(bad)]),
+                Err(Fault::InvalidConfig)
+            );
+        }
+        assert!(rx.commands.try_recv().is_err());
+        ingress.release();
+        assert_eq!(
+            ingress.configure_batch(
+                7,
+                Some(&capture),
+                &[TciCommand::SetTxPaCalibration(Some(p))]
+            ),
+            Err(Fault::GenerationMismatch)
+        );
+    }
+
+    #[test]
     fn explicit_host_drive_ceiling_survives_lower_startup_and_ordered_settings() {
         let (ingress, rx) = crate::tx_thread::feedback_owner::tests::collector();
         assert_eq!(ingress.set_drive_ceiling(0), Err(Fault::InvalidConfig));
@@ -2052,6 +2096,7 @@ impl SharedIngress {
                             rx_antenna,
                             rx_attenuation_db,
                             tx_drive,
+                            tx_pa_calibration,
                             tx_mic_gain_db,
                             tx_filter_low_hz,
                             tx_filter_high_hz,
@@ -2734,6 +2779,7 @@ pub(crate) fn is_tx_configuration(c: &TciCommand) -> bool {
             | SetActiveVfo(_)
             | SetSplitEnabled(_)
             | SetTxDrive(_)
+            | SetTxPaCalibration(_)
             | SetTxMicGain(_)
             | SetTxFilterBand { .. }
             | SetTxEqEnabled(_)
@@ -2820,6 +2866,7 @@ fn apply_config(
         }
         // The immutable reviewed ceiling is checked before applying the batch.
         SetTxDrive(v) => m.desired.tx_drive = v.max(1),
+        SetTxPaCalibration(Some(p)) if p.valid() => m.desired.tx_pa_calibration = p,
         SetTxMicGain(v) => m.desired.tx_mic_gain_db = v.clamp(-20., 20.),
         SetTxFilterBand { low_hz, high_hz } => {
             m.desired.tx_filter_low_hz = low_hz;

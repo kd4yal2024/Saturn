@@ -8512,6 +8512,19 @@
               </div>
             </div>
 
+            <details class="tx-advanced-card" id="tx-pa-calibration">
+              <summary>PA calibration by band</summary>
+              <div class="tx-advanced-body">
+                <p class="small">PA gain (dB): larger values reduce drive. G2 defaults are a starting profile; verify output on your external meter.</p>
+                <div class="field-row"><label>Band <select data-pa="band" aria-label="PA calibration band"></select></label>
+                  <label>PA gain (dB) <input data-pa="gain" type="number" min="40" max="80" step="0.1" aria-label="PA gain in dB" /></label></div>
+                <div class="row"><button class="btn ghost" data-pa="defaults" type="button">G2 starting values</button>
+                  <button class="btn ghost" data-pa="legacy" type="button">Legacy curve</button>
+                  <button class="btn" data-pa="apply" id="tx-pa-calibration-apply" type="button">Apply profile</button></div>
+                <p class="mono small" data-pa="status">Host not confirmed</p>
+              </div>
+            </details>
+
             <details class="tx-advanced-card" id="tx-advanced-card">
               <summary>
                 <span>
@@ -14023,7 +14036,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function currentBandMemoryEntry() {
       return {
         frequency: activeVfoFrequency() || state.dds,
-        radioPrefs: currentRadioPrefs(),
+        radioPrefs: (() => { const prefs = currentRadioPrefs(); delete prefs.txPaCalibration; return prefs; })(),
         displayPrefs: currentDisplayPrefs(),
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
       };
@@ -14045,7 +14058,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!memory || typeof memory !== "object") return false;
       state.applyingBandMemory = true;
       try {
-        applyRadioPrefsObject(memory.radioPrefs);
+        applyRadioPrefsObject({ ...memory.radioPrefs, txPaCalibration: state.txPaCalibration });
         applyDisplayPrefsObject(memory.displayPrefs);
         if (Number.isFinite(Number(memory.displayZoom))) {
           state.displayZoom = Math.max(1, Math.min(32, Number(memory.displayZoom)));
@@ -14546,6 +14559,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         manualFeedbackAttenuationPresetDb: state.pureSignalAttenuationDb,
         autoAttenuationPreference: state.pureSignalAutoAttenuate,
         autoAttenuationHostConfirmedDb: managedSettings.autoAttStatus?.appliedDb ?? null,
+        txPaCalibrationRequested: state.txPaCalibration ?? "legacy",
+        txPaCalibrationHost: state.txPaCalibrationHost === undefined ? "unavailable" : state.txPaCalibrationHost ?? "legacy",
+        txPaDriveReport: state.txPaDriveReport ?? "unavailable",
         managedPhase: managedSettings.phase, pendingSettings: managedSettings.pendingSettings,
         lastSettingsResult: managedSettings.lastTransaction,
         receiveTuningReady: managedSettings.receiveTuningReady,
@@ -18063,6 +18079,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         element.textContent = state.connected ? (state.twoToneHostResult || "No host two-tone result in this connection") : "Disconnected; no current host result";
       });
       updateTxZone();
+      updatePaCalibrationPanel();
       const instrumentState = instrumentOperatingState(
         state.txPhase,
         state.moxRequested,
@@ -18769,7 +18786,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       const managed = managedPcmSelected();
       const capabilities = managed ? managedPcm.status() : null;
-      const commands = _next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false }).filter(command => {
+      const pa = state.txPaCalibrationSupported ? [_next.paCalibrationCommand(state.txPaCalibration ?? null)] : [];
+      const commands = [...pa, ..._next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false })].filter(command => {
         if (!managed) return true;
         // Native two-tone is an authorized action. Auto ATT is a negotiated,
         // ordered setting, saved/restored per band without keying the radio.
@@ -18782,7 +18800,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ? "tx_puresignal_mode:0,auto;" : command);
       // Managed TX reads committed host settings; reconnect must not replay
       // stale TX preferences or an unreviewed generated-source configuration.
-      sendTci((managedPcmSelected() && !restoreTx ? commands.filter(c => !_next.managedSettingsMessage(c)) : commands).join(""));
+      sendTci((managedPcmSelected() && !restoreTx ? commands.filter(c => !_next.managedSettingsMessage(c) || c.startsWith("tx_pa_calibration:")) : commands).join(""));
       restoreLocalAudioPreferences(prefs);
     }
 
@@ -20783,6 +20801,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       state.intentionalDisconnect = false;
       state.bridgeReady = false;
+      state.txPaCalibrationSupported = false;
+      state.txPaCalibrationHost = undefined;
+      state.txPaDriveReport = undefined;
+      state.txPaCalibrationError = undefined;
       state.txMonitorSupported = false;
       state.txMonitorEnabled = false;
       state.rxHeadphonesSupported = false;
@@ -20927,6 +20949,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // re-negotiates. Reverting here also stops rendering stale server rows.
         resetDisplayTransport("socket closed");
         resetSatpState();
+        state.txPaCalibrationSupported = false;
+        state.txPaCalibrationHost = undefined;
+        state.txPaDriveReport = undefined;
+        state.txPaCalibrationError = undefined;
         state.txMonitorSupported = false;
         state.txMonitorEnabled = false;
         state.rxHeadphonesSupported = false;
@@ -21007,6 +21033,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.bridgeReady = false;
       resetDisplayTransport("manual disconnect");
       resetSatpState();
+      state.txPaCalibrationSupported = false;
+      state.txPaCalibrationHost = undefined;
+      state.txPaDriveReport = undefined;
+      state.txPaCalibrationError = undefined;
       state.txMonitorSupported = false;
       state.txMonitorEnabled = false;
       state.rxHeadphonesSupported = false;
@@ -22349,7 +22379,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
     }
 
+    let paCalibrationPanel = null;
+    function updatePaCalibrationPanel() {
+      if (!paCalibrationPanel) return;
+      const managed = managedPcmSelected() ? managedPcm.status() : null;
+      paCalibrationPanel.update({ requested: state.txPaCalibration ?? null, host: state.txPaCalibrationHost,
+        drive: state.txPaDriveReport, error: state.txPaCalibrationError,
+        canApply: Boolean(state.txPaCalibrationSupported && state.connected && state.bridgeReady && state.remoteClientRole === "operator"
+          && state.txPhase !== "keyed" && !state.ptt && (!managed || (managed.phase === "ready" && !managed.pendingSettings && !managed.measurementActive))) });
+    }
     function initInteractions() {
+      paCalibrationPanel = new _next.PaCalibrationPanel($("tx-pa-calibration"), profile => {
+        state.txPaCalibration = profile;
+        saveRadioPrefs();
+        sendTci(_next.paCalibrationCommand(profile));
+      });
       initReceiveRadioGroups();
       initReceiveExactSliderEntry();
       initSettingsSections();

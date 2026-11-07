@@ -1,3 +1,4 @@
+import { parsePaCalibration } from '../settings/pa-calibration';
 import { parseTciText, type TciCommand, booleanArg, numericArg, trailingArg } from './parser';
 import { parseSatpState } from '../audio/satp';
 import { clampDemodMode, decomposeSignedPassbandWithShift, uiCutsFromSignedPassband } from '../radio/passband';
@@ -296,6 +297,19 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'rx_headphones') {
     const value = booleanArg(argAt(args, 1));
     if (value != null) next.rxHeadphonesEnabled = value;
+  } else if (command.name === 'tx_pa_calibration_supported') {
+    next.txPaCalibrationSupported = args.length === 2 && args[0] === '0' && booleanArg(args[1]) === true;
+  } else if (command.name === 'tx_pa_calibration') {
+    if (args.length === 2 && args[0] === '0') {
+      const profile = parsePaCalibration(args[1]!);
+      if (profile !== undefined) { next.txPaCalibrationHost = profile; next.txPaCalibrationError = ''; }
+    }
+  } else if (command.name === 'tx_pa_drive') {
+    if (args.length === 2 && args[1] === 'legacy') next.txPaDriveReport = 'Legacy drive curve';
+    else if (args.length === 6 && args[0] === '0' && args.slice(1,4).every(v => Number.isFinite(Number(v))))
+      next.txPaDriveReport = `${args[4]} · host drive command ${args[3]}/255 at ${args[2]} W target (${Number(args[1])/1e6} MHz); RF unmeasured`;
+  } else if (command.name === 'tx_pa_calibration_result') {
+    next.txPaCalibrationError = args.slice(1).join(': ');
   } else if (command.name === 'tx_drive') {
     const value = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (value != null) next.txDrive = clampTxDriveWatts(value);

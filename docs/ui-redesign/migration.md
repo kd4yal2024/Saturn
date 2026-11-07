@@ -152,7 +152,7 @@ RX audio, DSP and filtering — **live radio state**: no restore-defaults here.
 | Noise blanker threshold (panel) | id `rx-nb-threshold` | main screen, pinnable | Receive → legacy dsp panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | WFM mode | id `wfm-mode-btn` | main screen, default | Receive → legacy dsp panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 
-## Transmit (50)
+## Transmit (58)
 
 TX audio path, monitor and transmit controls — **live radio state**: no restore-defaults here.
 
@@ -171,6 +171,7 @@ TX audio path, monitor and transmit controls — **live radio state**: no restor
 | Pair native sender | id `satp-pair-btn` | main screen, pinnable | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Monitor transmit audio | id `tx-mon-btn` | main screen, pinnable | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Monitor level | id `tx-mon-level` | main screen, pinnable | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| PA calibration by band | id `tx-pa-calibration-apply` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | TX drive | id `tx-drive` | main screen, pinnable | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Microphone gain | id `tx-mic-gain` | main screen, pinnable | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | TX filter low cut | id `tx-filter-low` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
@@ -181,7 +182,14 @@ TX audio path, monitor and transmit controls — **live radio state**: no restor
 | TX downward expander | id `tx-dexp-enabled` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Speech processor | id `tx-speech-processor-enabled` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | CESSB | id `tx-cessb-enabled` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
-| PureSignal | id `setup-tx-puresignal-enabled` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| PureSignal enable request | id `setup-tx-puresignal-enabled` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| Open PS tab | id `setup-tx-open-ps-btn` | main screen, pinnable | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| Copy PS diagnostics | id `setup-ps-copy-btn` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| PS Off | id `setup-ps-off` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| Calibrate (prepare single) | id `setup-ps-calibrate` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| PS adaptation mode | id `setup-ps-adaptation` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| Measure Only / Timing Measurement | id `setup-ps-measure` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| Acknowledge completed TX fault | id `setup-ps-ack-fault` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Phase rotator | id `setup-tx-phase-rotator-enabled` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Two-tone test | id `setup-tx-two-tone-section` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | TX timeout | id `setup-tx-timeout-enabled` | Settings only | Transmit → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
@@ -195,9 +203,9 @@ TX audio path, monitor and transmit controls — **live radio state**: no restor
 | TX timeout seconds | id `setup-tx-timeout-seconds` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Phase rotator auto | id `setup-tx-phase-rotator-auto` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Phase rotator corner | id `setup-tx-phase-rotator-corner` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
-| PureSignal auto attenuation | id `setup-tx-puresignal-auto-attenuate` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
-| PureSignal attenuation | id `setup-tx-puresignal-attenuation` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
-| Reset PureSignal | id `setup-tx-puresignal-reset` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| PureSignal auto attenuation | id `setup-tx-puresignal-auto-attenuate` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| PureSignal attenuation | id `setup-tx-puresignal-attenuation` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| Reset PureSignal | id `setup-tx-puresignal-reset` | Settings only | Transmit → legacy ps panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Expander threshold | id `tx-dexp-threshold` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Expander ratio | id `tx-dexp-expansion` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Speech processor gain | id `tx-speech-processor-gain` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
@@ -349,15 +357,16 @@ Device, versions, diagnostics
 
 ## Coverage
 
-234 interactive elements carry an id in the template: **171 indexed** and **63 explicitly excluded**, so nothing is unaccounted for.
+249 interactive elements carry an id in the template: **179 indexed** and **70 explicitly excluded**, so nothing is unaccounted for.
 The registry test fails if a template control is neither indexed nor excluded, and also fails on a stale exclusion, so this total is enforced rather than asserted here.
 
 ## Excluded controls, with reasons
 
-### Navigation and modal chrome (38)
+### Navigation and modal chrome (39)
 
 | Control | Covered by | Reason it is not a separate setting |
 | --- | --- | --- |
+| `ps-reset-panel-layout` | — | Restores docked PS views and clears their saved window sizes; no radio setting or TX action. |
 | `phone-menu-btn` | — | Trigger for the phone overflow sheet. |
 | `phone-menu-back-btn` | — | Returns from the hosted System view. |
 | `phone-menu-close-btn` | — | Closes the phone overflow sheet. |
@@ -397,10 +406,11 @@ The registry test fails if a template control is neither indexed nor excluded, a
 | `shortcut-close-btn` | Keyboard shortcuts | Closes the shortcut help overlay. |
 | `freq-entry-cancel-btn` | Direct frequency entry | Cancels direct frequency entry. |
 
-### Duplicates of an indexed control (per-tier or quick action) (11)
+### Duplicates of an indexed control (per-tier or quick action) (12)
 
 | Control | Covered by | Reason it is not a separate setting |
 | --- | --- | --- |
+| `ps-two-tone-btn` | Two-tone generator | PS-tab start/stop uses the same authorized generator action as Setup. |
 | `system-go-live-btn` | Go live | System-menu entry forwards to the original Go Live, Cancel Connect or Cancel Retry handler. |
 | `operator-detail-copy-rx-btn` | Operator diagnostics | Copies the same operator log as the diagnostics button. |
 | `vfo-mode-tag` | Demodulation mode | VFO mode shortcut for the mode grid. |
@@ -413,11 +423,11 @@ The registry test fails if a template control is neither indexed nor excluded, a
 | `mobile-filter-btn` | Filter low cut | Phone-view quick action for the RX filter. |
 | `mobile-wake-lock-btn` | Wake lock toggle | Phone-view quick action for the wake lock. |
 
-### Parameters inside a control surface that is already indexed (14)
+### Parameters inside a control surface that is already indexed (19)
 
 | Control | Covered by | Reason it is not a separate setting |
 | --- | --- | --- |
-| `managed-pcm-select` | PureSignal | Non-persisted offline-review TX owner selection; change only disconnected. |
+| `managed-pcm-select` | PureSignal enable request | Non-persisted offline-review TX owner selection; change only disconnected. |
 | `band-more-btn` | Band | Reveals the remaining band choices on narrow tiers. |
 | `mode-more-btn` | Demodulation mode | Reveals the remaining mode choices on narrow tiers. |
 | `two-tone-freq1` | Two-tone generator | Two-tone generator parameter. |
@@ -425,6 +435,11 @@ The registry test fails if a template control is neither indexed nor excluded, a
 | `two-tone-level` | Two-tone generator | Two-tone generator parameter. |
 | `two-tone-delay` | Two-tone generator | Two-tone generator parameter. |
 | `two-tone-invert-lsb` | Two-tone generator | Two-tone generator parameter. |
+| `setup-ps-duration-ms` | Measure Only / Timing Measurement | Host-bounded measurement duration, never persisted as authorization. |
+| `setup-ps-commanded-watts` | Measure Only / Timing Measurement | Host-ceiling-bounded commanded measurement power; applied receipt and owner commit required. Not measured RF power. |
+| `setup-ps-measurement-kind` | Measure Only / Timing Measurement | Explicit negotiated diagnostic stimulus; never calibration or RF authorization. |
+| `setup-ps-attended` | Measure Only / Timing Measurement | Fresh attended confirmation consumed by one action. |
+| `setup-ps-measure-stop` | Measure Only / Timing Measurement | Immediate local inhibition and host stop request, not a cleanup receipt. |
 | `rx-spectrum-duration` | RX Measure | Duration for an RX spectrum capture. |
 | `rx-spectrum-start-btn` | RX Measure | Starts the RX spectrum capture. |
 | `rx-spectrum-download-btn` | RX Measure | Downloads the completed RX spectrum capture. |
