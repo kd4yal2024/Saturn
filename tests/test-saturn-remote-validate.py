@@ -1794,9 +1794,38 @@ class RestartTimingTests(RigCase):
         rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 2.5})
         meminfo = rig.world / "proc" / "meminfo"
         text = "MemTotal: 927000 kB\nMemAvailable: %d kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n"
-        threading.Timer(0.8, lambda: meminfo.write_text(text % (360 * 1024))).start()      # more than before, still less than the 382 MiB needed
-        threading.Timer(1.4, lambda: meminfo.write_text(text % (320 * 1024))).start()
+        # Each transition follows an actual reader, rather than a timer that
+        # can fire before a busy Pi starts the validator. Replace the FIFO's
+        # name before closing its writer: that reader retains its old pipe,
+        # and the next open sees the next reading. The final regular file is
+        # stable through expiry. The production bound and assertions stay put.
+        meminfo.unlink()
+        os.mkfifo(meminfo)
+        observed, errors = [], []
+
+        def memory_rises_then_falls():
+            try:
+                for index, available in enumerate((300, 360)):
+                    with meminfo.open("w") as current:
+                        self.assertIsNone(rig.browser_pid(), "browser started without sufficient memory")
+                        current.write(text % (available * 1024))
+                        next_reading = meminfo.with_suffix(".next")
+                        if index == 0:
+                            os.mkfifo(next_reading)
+                        else:
+                            next_reading.write_text(text % (320 * 1024))
+                        os.replace(next_reading, meminfo)
+                        observed.append(available)
+            except Exception as error:
+                errors.append(error)
+
+        memory = threading.Thread(target=memory_rises_then_falls, daemon=True)
+        memory.start()
         self.run_to_failure(rig, "host.memory_headroom", detail=r"actual MemAvailable 320 MiB.*382 MiB needed.*300 MiB at first, 360 MiB at the most.*no browser was started")
+        memory.join(timeout=1)
+        self.assertFalse(memory.is_alive(), "memory fixture did not finish")
+        self.assertEqual(errors, [])
+        self.assertEqual(observed, [300, 360], "both transient readings must actually be requested")
         self.assertIsNone(rig.browser_pid())
 
     def test_memory_that_becomes_unreadable_while_waiting_is_not_assumed(self):
