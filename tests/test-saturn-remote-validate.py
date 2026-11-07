@@ -1821,9 +1821,38 @@ class RestartTimingTests(RigCase):
     def test_memory_that_climbs_back_is_waited_for_and_the_browser_starts_only_then(self):
         rig = self.rig(isolation="systemd", mem_available_kb=300 * 1024, limits={"headroom_wait_s": 8})
         meminfo = rig.world / "proc" / "meminfo"
-        threading.Timer(1.2, lambda: meminfo.write_text("MemTotal: 927000 kB\nMemAvailable: 450000 kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n")).start()
+        # Wait for the validator's first read, not elapsed startup time. On a
+        # busy Pi the old timer could restore memory before that read, so the
+        # intended low-memory/wait path was never exercised. The open FIFO
+        # supplies the low reading; replacing its path before closing the
+        # writer makes the NEXT read high without changing the first reader's
+        # file descriptor. No production timing or memory gate is relaxed.
+        low = meminfo.read_text()
+        meminfo.unlink()
+        os.mkfifo(meminfo)
+        observed = threading.Event()
+        errors = []
+
+        def memory_returns_after_first_read():
+            try:
+                with meminfo.open("w") as first:
+                    self.assertIsNone(rig.browser_pid(), "browser started before the first memory reading")
+                    first.write(low)
+                    ready = meminfo.with_suffix(".ready")
+                    ready.write_text("MemTotal: 927000 kB\nMemAvailable: 450000 kB\nSwapTotal: 3000000 kB\nSwapFree: 2700000 kB\n")
+                    os.replace(ready, meminfo)
+                    observed.set()
+            except Exception as error:
+                errors.append(error)
+
+        memory = threading.Thread(target=memory_returns_after_first_read, daemon=True)
+        memory.start()
         rig.start()
         self.assertEqual(rig.wait_ready()[0], 0, rig.status().get("failed"))
+        memory.join(timeout=1)
+        self.assertFalse(memory.is_alive(), "memory fixture did not finish")
+        self.assertTrue(observed.is_set(), "validator never requested the low-memory reading")
+        self.assertEqual(errors, [])
         detail = rig.condition("host.memory_headroom")
         self.assertTrue(detail["ok"], detail)
         self.assertRegex(detail["detail"], r"actual MemAvailable 439 MiB.*after waiting [0-9.]+ s: 300 MiB at first")
