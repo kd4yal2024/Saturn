@@ -39,10 +39,13 @@ export const phaseDegrees=(cos:number,sin:number,reference:number):number=>wrapP
 export const wrapPhase=(degrees:number):number=>((degrees+180)%360+360)%360-180;
 export class CorrectionMonitorState {
   frame:CorrectionFrame|null=null;capability=false;note='No native correction display received';
+  // Display history only. Native cleanup may publish a fresh empty frame;
+  // status() must continue reporting that current state rather than this curve.
+  private heldCurve:CorrectionFrame|null=null;
   private generation=-1;private requests=new Map<string,{at:number;barrier:boolean}>();
   private timing:{boot:string;lower:number;at:number}|null=null;private lastTick:number|null=null;
   private transmitting=false;private barrier:bigint|null=null;
-  reset(generation:number):void {this.generation=generation;this.frame=null;this.capability=false;this.timing=null;this.requests.clear();this.lastTick=null;this.barrier=null;this.note='Waiting for native correction display';}
+  reset(generation:number):void {this.generation=generation;this.frame=null;this.heldCurve=null;this.capability=false;this.timing=null;this.requests.clear();this.lastTick=null;this.barrier=null;this.note='Waiting for native correction display';}
   request(nonce:string,generation:number,now:number):void {
     if(generation!==this.generation)this.reset(generation);
     if(!id(nonce)||!finite(now)||now<0)return;
@@ -64,7 +67,7 @@ export class CorrectionMonitorState {
           const r=parseCorrection(part.slice('saturn_ps_correction:'.length));
           if(!this.validAge(r,now)) {this.note='Delayed native snapshot rejected';continue;}
           if(this.frame&&this.frame.boot===r.boot&&BigInt(r.serial)<=BigInt(this.frame.serial))continue;
-          this.frame=r;this.note='Native readback only; fit age and curve configuration unknown';
+          this.frame=r;this.retainCurve(now);this.note='Native readback only; fit age and curve configuration unknown';
         }catch{this.note='Invalid native correction display rejected';}
       }
     }
@@ -74,23 +77,45 @@ export class CorrectionMonitorState {
     const age=now-Number(BigInt(r.snapshotNs))/1e6-this.timing.lower;
     return age>=0&&age<=1250;
   }
+  private retainCurve(now:number):void {
+    const r=this.frame;
+    if(this.capability&&this.transmitting&&this.barrier!==null&&r?.keyed
+      &&r.nativeSamples>0&&BigInt(r.snapshotNs)>=this.barrier&&this.validAge(r,now))this.heldCurve=r;
+  }
   current(now:number,connected:boolean,transmitting:boolean):boolean {
     this.setTransmitting(connected&&transmitting);
     if(this.lastTick!==null&&(now<this.lastTick||now-this.lastTick>1250)){
       this.timing=null;this.requests.clear();this.barrier=null;this.note='Consumer stalled; timing invalidated';
     }
     this.lastTick=now;
+    this.retainCurve(now);
     return connected&&this.capability&&!!this.frame&&this.validAge(this.frame,now)
       &&(!transmitting||(this.barrier!==null&&BigInt(this.frame.snapshotNs)>=this.barrier&&this.frame.keyed));
   }
   status(generation:number,now:number,connected:boolean,transmitting:boolean):CorrectionFrame|null {
     return generation===this.generation&&this.current(now,connected,transmitting)?this.frame:null;
   }
+  display(now:number,connected:boolean,transmitting:boolean):{frame:CorrectionFrame|null;live:boolean;label:string} {
+    const fresh=this.current(now,connected,transmitting);
+    if(this.heldCurve&&(!connected||!transmitting||!fresh))return {
+      frame:this.heldCurve,live:false,
+      label:!connected?'DISCONNECTED / held last valid TX curve — not live'
+        :transmitting?'TX / held last valid TX curve — waiting for current readback; not live'
+          :'RX / held last valid TX curve — not live',
+    };
+    const r=this.frame;
+    return {frame:r,live:fresh&&transmitting,
+      label:!connected?'DISCONNECTED — no live correction evidence':!this.capability?'UNAVAILABLE — host native correction display not enabled'
+        :!r?`WAITING — ${this.note}`:!fresh?`STALE / held native snapshot — ${this.note}`
+          :r.nativeSamples===0?'NO CALIBRATION CURVE — fresh native readback; no fitted curve available'
+            :!transmitting?'RX / held native curve — not live'
+              :`LIVE native readback — correction ${r.nativeApplied?'applied (WDSP flag)':'not applied'}; fit age unknown`};
+  }
 }
 export function correctionSummary(r:CorrectionFrame):string {
-  return `${r.backend} · WDSP native AmpView · ${r.centerHz.toLocaleString()} Hz commanded now (curve frequency unknown)\n`
+  return `${r.backend} · WDSP native AmpView · ${r.centerHz.toLocaleString()} Hz commanded at snapshot (curve frequency unknown)\n`
     +`${r.commandedWatts} commanded W (not measured); attenuation command ${r.attenuationCommandDb} dB.\n`
-    +`Native IQC run flag: ${r.nativeApplied?'enabled':'disabled'}; TX owner keyed report: ${r.keyed}; PS requested: ${r.psRequested}.\n`
+    +`At snapshot — native IQC run flag: ${r.nativeApplied?'enabled':'disabled'}; TX owner keyed report: ${r.keyed}; PS requested: ${r.psRequested}.\n`
     +`Calibration counter ${r.calibrations}; native state code ${r.nativeState}. ${r.measured.length}/${r.nativeSamples} measured scatter points; ${r.correction.length}/512 correction points.\n`
     +`Phase = atan2(ys, yc) in degrees minus WDSP reference ${r.phaseReferenceDeg.toFixed(3)}°; displayed modulo 360°. Correction phase is WDSP ya_cor (degrees).\n`
     +'Magnitude uses WDSP ym / ym_cor, in the native inverse-gain convention; dB view is 20 log10(ratio). Not a forward PA-gain calibration.\n'
@@ -126,7 +151,7 @@ function plot(canvas:HTMLCanvasElement,series:{points:number[][];color:string;li
 }
 export function mountCorrectionMonitor(root:HTMLElement,model:CorrectionMonitorState):(connected:boolean,transmitting:boolean,now:number)=>void {
   const main:View={status:root.querySelector('[data-correction-status]')!,summary:root.querySelector('[data-correction-summary]')!,gain:root.querySelector('[data-correction-gain]')!,phase:root.querySelector('[data-correction-phase]')!};
-  let popup:Window|null=null,child:View|null=null,db=true;
+  let popup:Window|null=null,child:View|null=null,db=true,displayed:CorrectionFrame|null=null;
   const decorate=(view:View,legend:HTMLElement)=>{
     const doc=view.summary.ownerDocument;legend.replaceChildren();legend.style.cssText='display:flex;flex-wrap:wrap;gap:8px 18px;margin:10px 0;font:12px system-ui';
     for(const [label,color] of [['Magnitude measured',RF_COLORS.trace],['Magnitude correction',RF_COLORS.imd3],['Phase measured',RF_COLORS.imd5],['Phase correction',RF_COLORS.fundamental]]){
@@ -141,8 +166,8 @@ export function mountCorrectionMonitor(root:HTMLElement,model:CorrectionMonitorS
     const exportButton=doc.createElement('button');exportButton.type='button';exportButton.textContent='Export curve JSON';exportButton.setAttribute('data-correction-export','');
     button.after(exportButton);
     exportButton.addEventListener('click',()=>{
-      if(!model.frame)return;const win=doc.defaultView;if(!win)return;
-      const text=JSON.stringify({format:'saturn-ps-correction-export-v1',copiedAtIso:new Date().toISOString(),displayStatus:view.status.textContent,qualification:view.summary.textContent,frame:model.frame},null,2);
+      if(!displayed)return;const win=doc.defaultView;if(!win)return;
+      const text=JSON.stringify({format:'saturn-ps-correction-export-v1',copiedAtIso:new Date().toISOString(),displayStatus:view.status.textContent,qualification:view.summary.textContent,frame:displayed},null,2);
       const url=URL.createObjectURL(new Blob([text],{type:'application/json'}));const a=doc.createElement('a');a.href=url;a.download='saturn-wdsp-correction.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
     });
   };
@@ -170,8 +195,9 @@ export function mountCorrectionMonitor(root:HTMLElement,model:CorrectionMonitorS
     status.textContent=main.status.textContent;summary.textContent=main.summary.textContent;
   });
   return (connected,transmitting,now)=>{
-    const fresh=model.current(now,connected,transmitting),r=model.frame;
-    const label=!connected?'DISCONNECTED — no live correction evidence':!model.capability?'UNAVAILABLE — host native correction display not enabled':!r?`WAITING — ${model.note}`:!fresh?`STALE / held native snapshot — ${model.note}`:r.nativeSamples===0?'NO CALIBRATION CURVE — fresh native readback; no fitted curve available':!transmitting?'RX / held native curve — not live':`LIVE native readback — correction ${r.nativeApplied?'applied (WDSP flag)':'not applied'}; fit age unknown`;
+    const display=model.display(now,connected,transmitting),r=display.frame;
+    displayed=r;
+    const fresh=display.live,label=display.label;
     const summary=r?correctionSummary(r):'Waiting for real WDSP GetPSDisp-equivalent data. No synthetic curves. Opening this panel cannot enable PureSignal or key the radio.';
     const magnitude=(n:number)=>db?(n>0?20*Math.log10(n):NaN):n;
     const measured=r?.measured.map(p=>[p[0]!,magnitude(p[1]!)])??[],curve=r?.correction.map(p=>[p[0]!,magnitude(p[1]!)])??[];

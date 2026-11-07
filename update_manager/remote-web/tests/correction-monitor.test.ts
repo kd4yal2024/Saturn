@@ -58,6 +58,55 @@ describe('WDSP correction / phase monitor',()=>{
   it('does not accept an unbounded timing exchange',()=>{
     const m=new CorrectionMonitorState();m.request('1',1,100);m.observe('saturn_ps_spectrum_clock:1,10,100000000;',1,800);m.observe(wire(correctionFixture()),1,810);expect(m.frame).toBeNull();
   });
+  it('holds the last keyed curve through release, native cleanup and a long RX inspection',()=>{
+    const m=ready();m.observe(wire(correctionFixture()),1,400);
+    // Release can arrive before another paint. A fresh empty cleanup readback
+    // remains authoritative for PS status, but must not erase the plots.
+    m.setTransmitting(false);
+    m.observe(wire(correctionFixture({serial:'2',snapshotNs:'450000000',publishedNs:'460000000',
+      keyed:false,nativeApplied:false,nativeSamples:0,calibrations:0,nativeState:0,measured:[],correction:[]})),1,470);
+    const display=m.display(480,true,false);
+    expect(display.live).toBe(false);expect(display.label).toContain('RX / held last valid TX curve');
+    expect(display.frame?.serial).toBe('1');expect(display.frame?.correction).toHaveLength(512);
+    expect(m.status(1,480,true,false)?.nativeApplied).toBe(false);
+    expect(m.status(1,480,true,false)?.nativeSamples).toBe(0);
+    expect(m.display(60_000,true,false).frame).toBe(display.frame);
+    expect(m.display(60_010,false,false).label).toContain('DISCONNECTED / held');
+    expect(correctionSummary(display.frame!)).toContain('At snapshot');
+  });
+  it('does not overwrite held TX results with a later RX curve or admit a delayed frame',()=>{
+    const m=ready();m.observe(wire(correctionFixture()),1,400);m.setTransmitting(false);
+    m.observe(wire(correctionFixture({serial:'2',keyed:false,centerHz:14_200_000})),1,450);
+    expect(m.frame?.centerHz).toBe(14_200_000);
+    expect(m.display(460,true,false).frame?.centerHz).toBe(7_200_000);
+    m.observe(wire(correctionFixture({serial:'3',nativeSamples:0,measured:[],correction:[]})),1,1800);
+    expect(m.display(1800,true,false).frame?.serial).toBe('1');
+  });
+  it('replaces held results only with a fresh curve from the next keyed interval',()=>{
+    const m=ready();m.observe(wire(correctionFixture()),1,400);m.setTransmitting(false);m.current(410,true,false);
+    expect(m.display(420,true,true).live).toBe(false);
+    m.request('2',1,440);m.observe('saturn_ps_spectrum_clock:2,10,440000000;',1,450);
+    m.observe(wire(correctionFixture({serial:'2',snapshotNs:'500000000',publishedNs:'510000000',
+      nativeSamples:0,measured:[],correction:[],nativeApplied:false,calibrations:0,nativeState:0})),1,520);
+    const empty=m.display(520,true,true);
+    expect(empty.frame?.nativeSamples).toBe(0);expect(empty.label).toContain('NO CALIBRATION CURVE');
+    m.observe(wire(correctionFixture({serial:'3',snapshotNs:'530000000',publishedNs:'540000000',calibrations:2})),1,550);
+    expect(m.display(550,true,true).live).toBe(true);
+    m.setTransmitting(false);
+    expect(m.display(560,true,false).frame?.serial).toBe('3');
+    expect(m.display(560,true,false).frame?.calibrations).toBe(2);
+  });
+  it('never promotes a pre-key curve to held TX evidence and clears history on reconnection',()=>{
+    const m=new CorrectionMonitorState();m.request('1',1,100);
+    m.observe('saturn_ps_correction_caps:wdsp-ampview-v1;saturn_ps_spectrum_clock:1,10,100000000;',1,120);
+    m.observe(wire(correctionFixture()),1,400);m.current(410,true,true);
+    m.setTransmitting(false);
+    m.observe(wire(correctionFixture({serial:'2',nativeSamples:0,measured:[],correction:[],keyed:false})),1,420);
+    expect(m.display(430,true,false).frame?.nativeSamples).toBe(0);
+    const good=ready();good.observe(wire(correctionFixture()),1,400);good.setTransmitting(false);
+    expect(good.display(410,true,false).frame?.correction).toHaveLength(512);
+    good.reset(2);expect(good.display(420,true,false).frame).toBeNull();
+  });
   it('has separate phase canvas/pop-out/copy, without a transmit or calibration command route',()=>{
     const src=readFileSync(new URL('../src/puresignal/correction-monitor.ts',import.meta.url),'utf8');
     expect(src).not.toContain('sendTci(');expect(src).not.toContain('new WebSocket');
