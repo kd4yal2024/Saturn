@@ -120,3 +120,9 @@ release/disconnect, retained fault, zero output and zero native configuration
 or processing. Browser tests cover reconnect, 1,000 tuning edits, old hosts,
 incomplete cleanup, lost operator authority and TX commands. The frozen native
 fault-evidence test also retunes without losing the original observation.
+
+Release arriving during the faulted retag cancels the transaction. Its retired
+configuration identity is published with the previous receive settings, so a
+fresh request cannot reuse that identity or inherit a rejected frequency. A
+deterministic native-information hook exercises this boundary and a subsequent
+successful fresh tune on both backend fixtures.

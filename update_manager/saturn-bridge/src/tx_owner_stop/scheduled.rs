@@ -46,6 +46,7 @@ struct Trace {
     info_fault_bits: i32,
     model_fault: Option<Fault>,
     cancel_in_configure: Option<crate::tx_thread::ps_owner_loop::Cancel>,
+    cancel_in_information: Option<crate::tx_thread::ps_owner_loop::Cancel>,
 }
 struct Fake {
     trace: Rc<RefCell<Trace>>,
@@ -1598,6 +1599,9 @@ impl NativePs for Fake {
         trace.process_fault.map_or(Ok(()), Err)
     }
     fn information(&mut self) -> Result<[i32; 16], Fault> {
+        if let Some(cancel) = self.trace.borrow_mut().cancel_in_information.take() {
+            cancel.release();
+        }
         let mut i = [0; 16];
         let t = self.trace.borrow();
         i[5] = t.fits as i32;
@@ -2506,7 +2510,13 @@ fn controller<N: ScheduledNative>(
 fn faulted_rx_tuning_actual_dispatch_both_backends_preserves_fault_and_output_fence() {
     use crate::tci::TciCommand;
     for backend in [Backend::P2, Backend::DirectXdma] {
-        for case in ["tune", "release", "disconnect", "mixed-tx"] {
+        for case in [
+            "tune",
+            "release",
+            "retune-release",
+            "disconnect",
+            "mixed-tx",
+        ] {
             let p2 = (backend == Backend::P2).then(super::tests::p2_separate_lanes);
             let direct = (backend == Backend::DirectXdma).then(DirectFixture::new);
             if let Some(d) = &direct {
@@ -2608,6 +2618,9 @@ fn faulted_rx_tuning_actual_dispatch_both_backends_preserves_fault_and_output_fe
             if case == "release" {
                 ingress.release();
             }
+            if case == "retune-release" {
+                trace.borrow_mut().cancel_in_information = Some(r.cancel_handle());
+            }
             if case == "disconnect" {
                 clients
                     .lock()
@@ -2704,6 +2717,19 @@ fn faulted_rx_tuning_actual_dispatch_both_backends_preserves_fault_and_output_fe
                 assert_eq!(shared_model.lock().unwrap().desired.tx_drive, 5);
                 assert!(replies.contains(",rejected,"), "{case}: {replies}");
                 assert!(!replies.contains(",applied,"), "{case}: {replies}");
+                if case == "retune-release" {
+                    // The rejected operation advanced identity before release.
+                    // A later fresh tune must still work without clearing TX.
+                    dispatch("vfo:0,0,7180000;dds:0,7180000;");
+                    for _ in 0..20 {
+                        now += 1_000_000;
+                        r.turn(now);
+                    }
+                    assert_eq!(shared_model.lock().unwrap().desired.iq_center_hz, 7_180_000);
+                    assert_eq!(r.life.status().primary_fault, Some(Fault::SevereOverdrive));
+                    assert_eq!(r.life.status().phase, Phase::ReadyOff);
+                    assert!(r.snapshot().output().is_none());
+                }
             }
             assert!(legacy_rx.try_recv().is_err());
             if let Some(d) = &direct {

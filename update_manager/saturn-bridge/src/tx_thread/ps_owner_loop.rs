@@ -947,15 +947,31 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                     let result = self
                         .life
                         .offline_faulted_tuning(current.fence, config.config.id, now)
-                        .and_then(|_| self.life.offline_owner().install_clean_model(&config.model));
+                        .and_then(|_| {
+                            // This is the settings commit boundary. The backend
+                            // model install below is a stopped snapshot copy,
+                            // never native/device work. Cancellation afterwards
+                            // still closes output before the next owner turn.
+                            if config.transaction.as_ref().is_some_and(|t| !t.live()) {
+                                self.cancel_handle().release();
+                                return Err(Fault::GenerationMismatch);
+                            }
+                            self.life.offline_owner().install_clean_model(&config.model)
+                        });
                     if let Err(fault) = result {
+                        // Retagging can have advanced identity before a release
+                        // wins. Keep the previous settings/model, but publish
+                        // the retired identity so the next proposal cannot
+                        // accidentally reuse it. Never apply the rejected tune.
+                        let id = self.life.fence().config;
+                        if let Some((_, ps)) = &mut self.installed {
+                            ps.id = id;
+                        }
+                        self.discard_local();
                         if !matches!(fault, Fault::CleanupPending | Fault::GenerationMismatch) {
                             self.fault(fault, now);
                         }
                         return Err(fault);
-                    }
-                    if config.transaction.as_ref().is_some_and(|t| !t.live()) {
-                        return Err(Fault::GenerationMismatch);
                     }
                     self.installed = Some((config.model.clone(), config.config));
                     self.counters.configurations += 1;
