@@ -751,6 +751,37 @@ fn release_during_fit_and_reset_is_priority_and_never_blocking() {
     }
 }
 #[test]
+fn overdrive_evidence_survives_completed_authority_and_native_cleanup() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        let (mut l, n, a) = make(backend);
+        let now = ready(&mut l);
+        let now = key(&mut l, 1, now);
+        n.borrow_mut().info[6] = 2;
+        let mut b = block(&l, now + 1, false);
+        b.meta.backend = backend;
+        if backend == Backend::DirectXdma {
+            b.meta.sequence = None;
+            b.meta.sequence_packets = 0;
+        }
+        let original = b.meta.interval;
+        l.submit(&b, now + 1).unwrap();
+        assert_eq!(l.pump(now + 1), Err(Fault::SevereOverdrive));
+        assert!(a.borrow().output_inhibited);
+        let end = off(&mut l, now + 1);
+        assert!(l.status().cleanup_completed_ns.is_some());
+        let evidence = l.feedback_status().overdrive_evidence.unwrap();
+        assert_eq!(
+            evidence.origin,
+            super::super::controller::OverdriveOrigin::NativeStatusFlag2
+        );
+        assert_eq!(evidence.native_info[6], 2);
+        assert_eq!(evidence.interval, original);
+        assert_eq!(l.feedback_status().info_raw, [0; 16]);
+        l.shutdown(end + 1).unwrap();
+        off(&mut l, end + 1);
+    }
+}
+#[test]
 fn missing_feedback_latches_then_unkeys_before_native_cleanup() {
     let (mut l, n, a) = make(Backend::P2);
     let now = ready(&mut l);

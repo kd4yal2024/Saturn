@@ -14527,10 +14527,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     async function copyPureSignalDiagnostics() {
       // Whitelist only non-secret presentation fields. No SATP key or socket
       // object is copied. Receipt age is explicitly not observation freshness.
+      const managedSettings = managedPcm.status();
       const text = JSON.stringify({ format: "saturn-ps-ui-diagnostics-v1",
         copiedAtIso: new Date().toISOString(), mode: state.mode,
         txPhase: state.txPhase, commandedWatts: state.txDrive,
         feedbackAttenuationCommandDb: state.pureSignalAttenuationDb,
+        managedPhase: managedSettings.phase, pendingSettings: managedSettings.pendingSettings,
+        lastSettingsResult: managedSettings.lastTransaction,
         ...pureSignalPanelView(), rfImdQualified: false }, null, 2);
       try { await navigator.clipboard.writeText(text); }
       catch (_) { window.prompt("Copy PS diagnostics", text); }

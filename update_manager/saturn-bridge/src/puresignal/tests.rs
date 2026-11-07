@@ -32,6 +32,42 @@ mod proposal_tests {
         (c, t)
     }
     #[test]
+    fn component_trip_preserves_original_channel_peaks_and_interval_after_reset() {
+        for backend in [Backend::P2, Backend::DirectXdma] {
+            for reference in [true, false] {
+                let (mut c, _) = draft(backend);
+                let mut b = block(&c, 0, 1024, 0, 1);
+                if reference {
+                    b.tx[5] = -1.0;
+                } else {
+                    b.rf[7] = 1.0;
+                }
+                c.submit(&b, 1).unwrap();
+                assert_eq!(c.pump(1), Err(Fault::SevereOverdrive));
+                let evidence = c.status().overdrive_evidence.unwrap();
+                assert_eq!(evidence.origin, OverdriveOrigin::SampleComponentLimit);
+                assert_eq!(evidence.component_limit, Some(limits().component_limit));
+                assert_eq!(
+                    if reference {
+                        evidence.reference_component_peak
+                    } else {
+                        evidence.rf_component_peak
+                    },
+                    Some(1.0)
+                );
+                assert_eq!(evidence.interval.first, 0);
+                assert_eq!(evidence.interval.end, 1024);
+                assert_eq!(evidence.oldest_observed_ns, Some(1));
+                assert_eq!(evidence.native_info[6], 0);
+                c.on_tx_state(2, false, 2).unwrap();
+                assert_eq!(
+                    c.status().overdrive_evidence.unwrap().origin,
+                    OverdriveOrigin::SampleComponentLimit
+                );
+            }
+        }
+    }
+    #[test]
     fn default_gate_is_still_strict_with_feature_compiled() {
         let (mut c, _) = setup(Backend::P2, 4);
         assert!(!c.uses_offline_admission_proposal());
@@ -568,10 +604,17 @@ fn severe_overdrive_bitmask_fault_is_not_cleared_by_unkey_rekey() {
         c.submit(&block(&c, 0, 1024, 1, 1), 1).unwrap();
         assert_eq!(c.pump(1), Err(Fault::SevereOverdrive));
         assert!(c.raw_capture().is_none());
+        let evidence = c.status().overdrive_evidence.unwrap();
+        assert_eq!(evidence.origin, OverdriveOrigin::NativeStatusFlag2);
+        assert_eq!(evidence.native_info[6], code);
+        assert_eq!(evidence.reference_component_peak, None);
+        assert_eq!(evidence.interval.first, 0);
+        assert_eq!(evidence.interval.end, 1024);
         assert!(!c.status().correction_applied_reported);
         c.on_tx_state(2, false, 2).unwrap();
         c.on_tx_state(3, true, 3).unwrap();
         assert_eq!(c.status().state, State::Fault);
+        assert_eq!(c.status().overdrive_evidence.unwrap().native_info[6], code);
     }
 }
 #[test]

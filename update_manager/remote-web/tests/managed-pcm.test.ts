@@ -107,6 +107,39 @@ describe('selectable managed PCM controller', () => {
     expect(h.session.status().manualAttenuationSupported).toBe(false);
     expect(h.media).toHaveLength(0);
   });
+  it('keeps a rapid power adjustment bounded without disabling PTT', () => {
+    const h=setup();h.ready();
+    for(let i=0;i<1000;i++)h.session.sendControl(`tx_drive:0,${1+i%100};`);
+    expect(h.session.status().phase).not.toBe('fault');
+    expect(h.session.status().pendingSettings).toBe(2);
+    expect(h.control.slice(1)).toEqual(['tx_drive:0,1;']);
+    for(let id=1;id<=2;id++){
+      h.session.text(`tx_config:0,${id},queued,${11+id};saturn_tx_owner:shared,${id+1},ReadyOff,${id+2},${11+id},tci,true,none;tx_config:0,${id},applied,${11+id};`,h.epoch);
+      h.advance(1);
+    }
+    expect(h.control.slice(1)).toEqual(['tx_drive:0,1;','tx_drive:0,100;']);
+    expect(h.session.status().pendingSettings).toBe(0);
+    expect(h.session.arm('tci','17')).toBe(true);
+    expect(h.control.at(-1)).toBe('saturn_ptt:0,17;');
+  });
+  it('does not coalesce power across a PS configuration or source barrier', () => {
+    const h=setup();h.ready();
+    for(const c of ['tx_drive:0,1;','tx_drive:0,10;','tx_puresignal:0,true;',
+      'tx_drive:0,20;','tx_drive:0,30;','saturn_satp_control:tci,0;','tx_drive:0,40;'])h.session.sendControl(c);
+    expect(h.session.status().pendingSettings).toBe(6);
+    for(let id=1;id<=6;id++){
+      h.session.text(`tx_config:0,${id},queued,${11+id};saturn_tx_owner:shared,${id+1},ReadyOff,${id+2},${11+id},tci,true,none;tx_config:0,${id},applied,${11+id};`,h.epoch);h.advance(1);
+    }
+    expect(h.control.slice(1)).toEqual(['tx_drive:0,1;','tx_drive:0,10;','tx_puresignal:0,true;',
+      'tx_drive:0,30;','saturn_satp_control:tci,0;','tx_drive:0,40;']);
+    expect(h.control).not.toContain('trx:0,true;');expect(h.session.status().phase).toBe('ready');
+  });
+  it.each(['release','disconnect'])('drops unsent coalesced power on %s', how => {
+    const h=setup();h.ready();h.session.sendControl('tx_drive:0,1;');
+    for(let i=2;i<=100;i++)h.session.sendControl(`tx_drive:0,${i};`);
+    if(how==='release')h.session.release();else h.session.disconnect();
+    h.advance(1);expect(h.control).not.toContain('tx_drive:0,100;');expect(h.media).toHaveLength(0);
+  });
   it('backpressures an 18-message settings burst to one wire transaction and commits all in order', () => {
     const h = setup(); h.ready();
     const expected = Array.from({length:18}, (_,i) => `tx_mic_gain:0,${-i};`);

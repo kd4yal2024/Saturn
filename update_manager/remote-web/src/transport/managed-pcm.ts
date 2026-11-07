@@ -71,6 +71,17 @@ function tuningKey(text: string): string | null {
   if (!commands.length || !commands.every(c => /^(?:vfo:0,[01],[0-9]+|dds:0,[0-9]+)$/.test(c))) return null;
   return commands.map(c => c.slice(0, c.lastIndexOf(','))).join(';');
 }
+// Power is an absolute target. A burst of slider/spinner edits must retain the
+// latest unsent target, not turn ordinary UI input into a session-wide TX fault.
+// Only adjacent, valid power setters coalesce; source/mode/PS actions and other
+// settings remain ordering barriers. Sent transactions keep their real receipts.
+function powerKey(text: string): string | null {
+  const commands=text.split(';').map(c=>c.trim()).filter(Boolean);
+  if(commands.length!==1)return null;
+  const match=/^(?:tx_drive|drive):0,([0-9]+)$/.exec(commands[0]!);
+  const value=Number(match?.[1]);
+  return match && Number.isSafeInteger(value) && value>=1 && value<=100 ? 'power:0' : null;
+}
 function tag(frame: ArrayBuffer, token: string): ArrayBuffer {
   const view = new DataView(frame);
   for (let i = 0; i < 16; i++) view.setUint8(44 + i, parseInt(token.slice(i * 2, i * 2 + 2), 16));
@@ -108,7 +119,7 @@ export class ManagedPcmSession {
   private appliedConfig: string | null = null;
   private cleanupAfterStop: bigint | null = null;
   // One settings transaction on the wire. The bounded local FIFO preserves
-  // barriers; only adjacent absolute tuning targets may supersede one another.
+  // barriers; adjacent absolute tuning/power targets may supersede one another.
   private settingsQueue: { text: string; key: string | null }[] = [];
   private tuningEchoTargets = new Map<string, string>();
   private faultReleaseSent = false;
@@ -271,10 +282,11 @@ export class ManagedPcmSession {
     if (text.split(';').some(c => /^(?:trx:0,false|saturn_ps_measurement:0,stop)$/.test(c.trim()))) {
       this.settingsQueue = []; this.tuningEchoTargets.clear();
     }
-    const key = tuningKey(text);
+    const tune = tuningKey(text);
+    const key = tune ?? powerKey(text);
     if (this.selected && managedSettingsMessage(text)) {
       if (['fault', 'unsupported', 'unavailable'].includes(this.phase)) return;
-      if (key) {
+      if (tune) {
       for (const c of text.split(';').map(c => c.trim()).filter(Boolean)) {
         this.tuningEchoTargets.set(c.slice(0, c.lastIndexOf(',')), c);
       }

@@ -86,6 +86,23 @@ pub enum State {
     Correcting,
     Fault,
 }
+/// Frozen fault evidence. This is Bridge-ingress/sample-domain evidence, not
+/// calibrated RF power or a claim that the ADC was observed unclipped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverdriveOrigin {
+    SampleComponentLimit,
+    NativeStatusFlag2,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct OverdriveEvidence {
+    pub origin: OverdriveOrigin,
+    pub interval: Interval,
+    pub oldest_observed_ns: Option<u64>,
+    pub reference_component_peak: Option<f64>,
+    pub rf_component_peak: Option<f64>,
+    pub component_limit: Option<f64>,
+    pub native_info: [i32; 16],
+}
 #[derive(Clone, Copy, Debug)]
 pub struct Status {
     pub fence: Fence,
@@ -93,6 +110,7 @@ pub struct Status {
     pub fault: Option<Fault>,
     pub keyed: bool,
     pub info_raw: [i32; 16],
+    pub overdrive_evidence: Option<OverdriveEvidence>,
     pub correction_applied_reported: bool,
     pub actual_delay_seconds: Option<f64>,
     pub accepted_pairs: u64,
@@ -126,6 +144,7 @@ pub struct Controller<N: NativePs> {
     fault: Option<Fault>,
     actual_delay: Option<f64>,
     info: [i32; 16],
+    overdrive_evidence: Option<OverdriveEvidence>,
     calibration_baseline: i32,
     queue: Vec<PairBlock>,
     head: usize,
@@ -182,6 +201,7 @@ impl<N: NativePs> Controller<N> {
             fault: None,
             actual_delay: None,
             info: [0; 16],
+            overdrive_evidence: None,
             calibration_baseline: 0,
             queue: (0..capacity).map(|_| PairBlock::default()).collect(),
             head: 0,
@@ -323,6 +343,7 @@ impl<N: NativePs> Controller<N> {
             fault: self.fault,
             keyed: self.keyed,
             info_raw: self.info,
+            overdrive_evidence: self.overdrive_evidence,
             correction_applied_reported: self.state == State::Correcting
                 && self.fault.is_none()
                 && self.info[14] != 0,
@@ -359,6 +380,7 @@ impl<N: NativePs> Controller<N> {
         }
         self.retire()?;
         self.config = Some(config);
+        self.overdrive_evidence = None;
         self.fence.config = config.id;
         self.fault = None;
         self.actual_delay = None;
@@ -786,6 +808,25 @@ impl<N: NativePs> Controller<N> {
                             &self.rf[..],
                             self.config.unwrap().hardware_peak,
                         ) {
+                            if fault == Fault::SevereOverdrive {
+                                self.overdrive_evidence = Some(OverdriveEvidence {
+                                    origin: OverdriveOrigin::SampleComponentLimit,
+                                    interval: Interval {
+                                        fence: self.fence,
+                                        first: self.partial_first.unwrap(),
+                                        end: meta.interval.first + consumed as u64,
+                                    },
+                                    oldest_observed_ns: self.partial_observed_ns,
+                                    reference_component_peak: Some(
+                                        self.tx.iter().fold(0.0_f64, |peak, x| peak.max(x.abs())),
+                                    ),
+                                    rf_component_peak: Some(
+                                        self.rf.iter().fold(0.0_f64, |peak, x| peak.max(x.abs())),
+                                    ),
+                                    component_limit: Some(limits.component_limit),
+                                    native_info: self.info,
+                                });
+                            }
                             return self.reject(fault, true).map(|_| 0);
                         }
                     }
@@ -810,6 +851,19 @@ impl<N: NativePs> Controller<N> {
                         Err(_) => return self.reject(Fault::NativeFailure, true).map(|_| 0),
                     };
                     if self.info[6] & 2 != 0 {
+                        self.overdrive_evidence = Some(OverdriveEvidence {
+                            origin: OverdriveOrigin::NativeStatusFlag2,
+                            // Observation block, not a sample-aligned link to
+                            // the asynchronous fitter's original input window.
+                            interval: self.raw_interval.unwrap(),
+                            oldest_observed_ns: self.raw_observed_ns,
+                            // pscc mutates both arrays. Do not mislabel post-delay
+                            // values as the original component-limit evidence.
+                            reference_component_peak: None,
+                            rf_component_peak: None,
+                            component_limit: None,
+                            native_info: self.info,
+                        });
                         return self.reject(Fault::SevereOverdrive, true).map(|_| 0);
                     }
                     if self.info[6] & 1 != 0 {

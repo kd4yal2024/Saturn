@@ -498,6 +498,21 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 ArmSignalTiming::elapsed_us(self.arm_signal_timing.first_mic, self.armed),
                 ArmSignalTiming::elapsed_us(self.arm_signal_timing.first_iq, self.armed),
                 ArmSignalTiming::elapsed_us(Some(published), self.armed));
+            // Preserve the cause before Controller::clear_buffers/native
+            // recreation erase the live info. Emit only after completed stop
+            // and cleanup; diagnostic formatting must not delay unkeying.
+            if status.phase == Phase::ReadyOff
+                && status.primary_fault == Some(Fault::SevereOverdrive)
+                && status.cleanup_completed_ns.is_some()
+            {
+                if let Some(evidence) = self.life.feedback_status().overdrive_evidence {
+                    eprintln!("saturn-bridge: shared PS overdrive evidence stop_id={} origin={:?} fence={:?} interval={}..{} oldest_bridge_ingress_ns={:?} reference_component_peak={:?} rf_component_peak={:?} component_limit={:?} native_info={:?} physical_rf=unverified",
+                        status.stop_id, evidence.origin, evidence.interval.fence,
+                        evidence.interval.first, evidence.interval.end, evidence.oldest_observed_ns,
+                        evidence.reference_component_peak, evidence.rf_component_peak,
+                        evidence.component_limit, evidence.native_info);
+                }
+            }
             self.reported_lifecycle = Some(transition);
         }
         if let Some(ingress) = self.ingress.clone() {
