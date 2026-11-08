@@ -1082,6 +1082,10 @@ enum PumpBoundary {
     Release,
     MissingAuthority,
     Healthy,
+    RetainedRelease,
+    RetainedMissingAuthority,
+    RetainedHealthy,
+    RetainedStale,
 }
 
 #[cfg(feature = "managed-puresignal")]
@@ -1192,12 +1196,37 @@ fn production_turn_clock_is_sampled_after_dequeue_without_rejuvenating_observati
 // Injection is at the actual initial-tick -> pump boundary, with rendering and
 // packet sending due. No sleeps or races determine which operation happens.
 fn exercise_pump_boundary(case: PumpBoundary) {
+    exercise_pump_boundary_backend(case, Backend::DirectXdma);
+}
+fn exercise_pump_boundary_backend(case: PumpBoundary, backend: Backend) {
     let d = DirectFixture::with_key_clock();
     d.fifo_ready();
+    let p2 = (backend == Backend::P2).then(super::tests::p2_separate_lanes);
+    if let Some((_, hp, iq)) = &p2 {
+        hp.set_nonblocking(true).unwrap();
+        iq.set_nonblocking(true).unwrap();
+    }
+    let drain = || {
+        if let Some((_, hp, iq)) = &p2 {
+            let mut bytes = [0; 2048];
+            while hp.recv(&mut bytes).is_ok() {}
+            while iq.recv(&mut bytes).is_ok() {}
+        }
+    };
+    let wait = || {
+        if backend == Backend::P2 {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        drain();
+    };
     let (mut iq, mut mic) = queues();
     let mut m = model();
     m.desired.tx_drive = 5;
-    let mut owner = OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap();
+    let mut owner = if let Some((session, _, _)) = &p2 {
+        OwnerStopAdapter::p2(session.clone(), &m, &mut iq, &mut mic).unwrap()
+    } else {
+        OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap()
+    };
     owner.enable_offline_handoff(&m, 5).unwrap();
     let trace = Rc::new(RefCell::new(Trace::default()));
     let life = controller(
@@ -1205,7 +1234,7 @@ fn exercise_pump_boundary(case: PumpBoundary) {
             trace: trace.clone(),
         },
         owner,
-        Backend::DirectXdma,
+        backend,
     );
     let (commands, rx) = mpsc::sync_channel(16);
     let (audio, arx) = mpsc::sync_channel(16);
@@ -1229,6 +1258,7 @@ fn exercise_pump_boundary(case: PumpBoundary) {
     let mut next_audio = 0;
     // Scheduled setup progresses the actual owner/native lifecycle to Active.
     for _ in 0..100 {
+        wait();
         now += 1_000_000;
         match stage {
             0 if r.life.status().phase == Phase::ReadyOff => {
@@ -1262,12 +1292,37 @@ fn exercise_pump_boundary(case: PumpBoundary) {
     while r.life.offline_owner().has_iq_packet() {
         assert!(r.life.offline_owner().flush_iq(stamp, now).unwrap());
     }
+    let mut first_pair = 0;
+    if backend == Backend::P2 {
+        // A real eight-packet P2 batch is 952 pairs. Prime the native 1024
+        // pair block without rendering, then supply the next sequential batch
+        // on the observed turn so both adapters actually call native fitting.
+        now += 1_000_000;
+        feedback(&mut r, &fb, &mut first_pair, now, backend);
+        let renders = trace.borrow().renders;
+        r.turn(now);
+        assert_eq!(trace.borrow().renders, renders);
+        assert_eq!(trace.borrow().fits, 0);
+    }
+    if case == PumpBoundary::RetainedStale {
+        // Stage real source audio while the next render is not due, then let
+        // it age beyond 150 ms without changing its ingress timestamp.
+        now += 1_000_000;
+        let renders = trace.borrow().renders;
+        send_audio(&mut r, &audio, now);
+        r.turn(now);
+        assert_eq!(trace.borrow().renders, renders);
+        now += 151_000_000;
+    }
     now += 1_000_000;
     r.render_due(now);
-    if case != PumpBoundary::MissingAuthority {
+    if !matches!(
+        case,
+        PumpBoundary::MissingAuthority | PumpBoundary::RetainedStale
+    ) {
         send_audio(&mut r, &audio, now);
     }
-    feedback(&mut r, &fb, &mut 0, now, Backend::DirectXdma);
+    feedback(&mut r, &fb, &mut first_pair, now, backend);
     let before_render = trace.borrow().renders;
     let before_cleanup = trace.borrow().cleanup;
     let before_fit = trace.borrow().fits;
@@ -1298,37 +1353,60 @@ fn exercise_pump_boundary(case: PumpBoundary) {
         None
     };
     r.counters.active_max_turn_ns = 0;
-    r.turn_with_before_pump(now, |r| {
-        hook_ran = true;
-        assert_eq!(
-            r.life.status().phase,
-            Phase::Active,
-            "initial tick must precede injection"
+    if matches!(
+        case,
+        PumpBoundary::RetainedRelease
+            | PumpBoundary::RetainedMissingAuthority
+            | PumpBoundary::RetainedHealthy
+    ) {
+        r.turn_with_before_audio_check(
+            now,
+            match case {
+                PumpBoundary::RetainedRelease => |r| r.cancel_handle().release(),
+                PumpBoundary::RetainedMissingAuthority => {
+                    |r| r.life.offline_owner().disconnect_output()
+                }
+                PumpBoundary::RetainedHealthy => |_| {},
+                _ => unreachable!(),
+            },
         );
-        assert!(!r.life.offline_owner().has_iq_packet());
-        match case {
-            PumpBoundary::NativeFailure => {
-                trace.borrow_mut().process_fault = Some(Fault::NativeFailure)
+        hook_ran = true;
+    } else {
+        r.turn_with_before_pump(now, |r| {
+            hook_ran = true;
+            assert_eq!(
+                r.life.status().phase,
+                Phase::Active,
+                "initial tick must precede injection"
+            );
+            assert!(!r.life.offline_owner().has_iq_packet());
+            match case {
+                PumpBoundary::NativeFailure => {
+                    trace.borrow_mut().process_fault = Some(Fault::NativeFailure)
+                }
+                PumpBoundary::SevereOverdrive => trace.borrow_mut().info_fault_bits = 2,
+                PumpBoundary::Release => r.cancel_handle().release(),
+                PumpBoundary::MissingAuthority => r.life.offline_owner().disconnect_output(),
+                PumpBoundary::Healthy | PumpBoundary::RetainedStale => {}
+                _ => unreachable!(),
             }
-            PumpBoundary::SevereOverdrive => trace.borrow_mut().info_fault_bits = 2,
-            PumpBoundary::Release => r.cancel_handle().release(),
-            PumpBoundary::MissingAuthority => r.life.offline_owner().disconnect_output(),
-            PumpBoundary::Healthy => {}
-        }
-    });
+        });
+    }
     assert!(hook_ran);
     let active_turn_ns = r.counters.active_max_turn_ns;
     assert!(
         active_turn_ns > 0,
         "retain the final active turn even when pump stops it"
     );
-    if case == PumpBoundary::Healthy {
+    if matches!(case, PumpBoundary::Healthy | PumpBoundary::RetainedHealthy) {
         assert_eq!(r.life.status().phase, Phase::Active);
         assert_eq!(r.life.status().primary_fault, None);
         assert_eq!(trace.borrow().renders, before_render + 1);
         assert_eq!(trace.borrow().exchanges, before_exchanges + 1);
         assert_eq!(r.counters.iq_packets, before_packets + 1);
-        assert_eq!(d.dma_writes(), before_dma + 1);
+        if backend == Backend::DirectXdma {
+            assert_eq!(d.dma_writes(), before_dma + 1);
+        }
         commands.try_send(TxCommand::Shutdown).unwrap();
         now += 1_000_000;
         r.turn(now);
@@ -1336,9 +1414,12 @@ fn exercise_pump_boundary(case: PumpBoundary) {
         let fault = match case {
             PumpBoundary::NativeFailure => Some(Fault::NativeFailure),
             PumpBoundary::SevereOverdrive => Some(Fault::SevereOverdrive),
-            PumpBoundary::MissingAuthority => Some(Fault::TxAuthority),
-            PumpBoundary::Release => None,
-            PumpBoundary::Healthy => unreachable!(),
+            PumpBoundary::MissingAuthority | PumpBoundary::RetainedMissingAuthority => {
+                Some(Fault::TxAuthority)
+            }
+            PumpBoundary::Release | PumpBoundary::RetainedRelease => None,
+            PumpBoundary::RetainedStale => Some(Fault::Stale),
+            PumpBoundary::Healthy | PumpBoundary::RetainedHealthy => unreachable!(),
         };
         assert_eq!(
             r.life.status().primary_fault,
@@ -1364,7 +1445,8 @@ fn exercise_pump_boundary(case: PumpBoundary) {
     }
     // Subsequent scheduled turns, not a second tick in the faulting turn,
     // must obtain the actual fixture receipt and finish native cleanup.
-    for _ in 0..20 {
+    for _ in 0..100 {
+        wait();
         now += 1_000_000;
         let exchanges = trace.borrow().exchanges;
         r.turn(now);
@@ -1378,7 +1460,11 @@ fn exercise_pump_boundary(case: PumpBoundary) {
     assert!(r.life.status().cleanup_completed_ns.is_some());
     assert_eq!(
         r.life.status().stop_evidence,
-        Some(saturn_bridge::puresignal::tx_lifecycle::StopEvidence::DirectControlReadback)
+        Some(if backend == Backend::DirectXdma {
+            saturn_bridge::puresignal::tx_lifecycle::StopEvidence::DirectControlReadback
+        } else {
+            saturn_bridge::puresignal::tx_lifecycle::StopEvidence::P2CommandBurstOnly
+        })
     );
     assert!(trace.borrow().cleanup > before_cleanup);
     if let Some((resume, worker, started)) = paused_producer {
@@ -1390,18 +1476,59 @@ fn exercise_pump_boundary(case: PumpBoundary) {
             "release/receipt/native cleanup waited behind paused queue producer: {elapsed:?}"
         );
     }
-    if case != PumpBoundary::Healthy {
+    if !matches!(case, PumpBoundary::Healthy | PumpBoundary::RetainedHealthy) {
         assert_eq!(
             r.counters.active_max_turn_ns, active_turn_ns,
             "later stop/cleanup turns cannot replace active timing evidence"
         );
     }
     assert!(r.life.offline_owner().queues_empty());
-    d.assert_off(); // ordinary-file control readback, NOT physical RF-off
-    if case != PumpBoundary::Healthy {
+    if backend == Backend::DirectXdma {
+        d.assert_off(); // ordinary-file control readback, NOT physical RF-off
+    }
+    if !matches!(case, PumpBoundary::Healthy | PumpBoundary::RetainedHealthy) {
         assert_eq!(trace.borrow().renders, before_render);
         assert_eq!(r.counters.iq_packets, before_packets);
         assert_eq!(d.dma_writes(), before_dma);
+    }
+
+    if case == PumpBoundary::RetainedStale {
+        assert_eq!(r.counters.last_stale.unwrap().fields[0], 3);
+    } else if case == PumpBoundary::RetainedRelease {
+        assert!(r.counters.last_stale.is_none());
+        // Cleanup itself never re-arms. Only this fresh authorized action
+        // can grant a new generation; no fault acknowledgment is necessary.
+        let stopped_generation = r.snapshot();
+        send_arm(&mut r, &commands, &ingress);
+        for _ in 0..100 {
+            wait();
+            now += 1_000_000;
+            if r.life.status().phase == Phase::AwaitingKey {
+                send_audio(&mut r, &audio, now);
+            }
+            r.turn(now);
+            if r.life.status().phase == Phase::Active {
+                break;
+            }
+        }
+        assert_eq!(r.life.status().phase, Phase::Active);
+        assert_ne!(r.snapshot(), stopped_generation);
+        assert_eq!(r.life.status().primary_fault, None);
+        r.cancel_handle().release();
+        for _ in 0..100 {
+            wait();
+            now += 1_000_000;
+            r.turn(now);
+            if r.life.status().phase == Phase::ReadyOff {
+                break;
+            }
+        }
+        assert_eq!(r.life.status().phase, Phase::ReadyOff);
+        assert!(r.life.status().cleanup_completed_ns.is_some());
+        assert_eq!(r.life.status().primary_fault, None);
+        if backend == Backend::DirectXdma {
+            d.assert_off();
+        }
     }
 }
 
@@ -1424,6 +1551,31 @@ fn scheduled_pump_missing_authority_does_not_unwrap_and_completes_cleanup() {
 #[test]
 fn scheduled_pump_healthy_control_renders_and_sends_one_exchange() {
     exercise_pump_boundary(PumpBoundary::Healthy);
+}
+#[test]
+fn scheduled_retained_audio_release_is_not_stale_and_completes_cleanup() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        exercise_pump_boundary_backend(PumpBoundary::RetainedRelease, backend);
+    }
+}
+#[test]
+fn scheduled_retained_audio_revoked_authority_remains_a_fault() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        exercise_pump_boundary_backend(PumpBoundary::RetainedMissingAuthority, backend);
+    }
+}
+#[test]
+fn scheduled_retained_audio_healthy_control_renders_and_sends_one_exchange() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        exercise_pump_boundary_backend(PumpBoundary::RetainedHealthy, backend);
+    }
+}
+
+#[test]
+fn scheduled_retained_audio_expired_samples_still_fault_and_complete_cleanup() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        exercise_pump_boundary_backend(PumpBoundary::RetainedStale, backend);
+    }
 }
 
 // A control/media stall can deliver valid PCM in bursts while acquisition
@@ -2975,24 +3127,28 @@ fn feedback<N: ScheduledNative>(
     backend: Backend,
 ) {
     let mut b = PairBlock::default();
-    b.pairs = 1024;
+    b.pairs = if backend == Backend::P2 {
+        8 * 119
+    } else {
+        1024
+    };
     b.meta = BlockMeta {
         fence: r.life.fence(),
         interval: Interval {
             fence: r.life.fence(),
             first: *first,
-            end: *first + 1024,
+            end: *first + b.pairs as u64,
         },
         backend,
         route: 20,
         observed_ns: now,
-        sequence: None,
-        sequence_packets: 0,
+        sequence: (backend == Backend::P2).then_some((*first / 119) as u32),
+        sequence_packets: if backend == Backend::P2 { 8 } else { 0 },
         rate_hz: 192000,
         overload: [None; 3],
     };
     let mut random = 0x53460004u32;
-    for i in 0..1024 {
+    for i in 0..b.pairs {
         random = random.wrapping_mul(1664525).wrapping_add(1013904223);
         let radius = 0.001 + 0.999 * f64::from(random) / 4294967296.;
         random = random.wrapping_mul(1664525).wrapping_add(1013904223);
@@ -3004,8 +3160,9 @@ fn feedback<N: ScheduledNative>(
         b.rf[i * 2] = rf * phase.cos();
         b.rf[i * 2 + 1] = rf * phase.sin();
     }
+    let pairs = b.pairs as u64;
     if send.try_send(Box::new(b)).is_ok() {
-        *first += 1024;
+        *first += pairs;
     }
 }
 

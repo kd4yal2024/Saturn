@@ -354,6 +354,8 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     two_tone_deadline: Option<u64>,
     reported_lifecycle: Option<(Phase, u64)>,
     last_signal_report: Instant,
+    #[cfg(test)]
+    before_audio_check: Option<fn(&mut Self)>,
 }
 impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
     /// Exclusive channel construction for the selected shared owner. No
@@ -425,6 +427,8 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             two_tone_deadline: None,
             reported_lifecycle: None,
             last_signal_report: Instant::now(),
+            #[cfg(test)]
+            before_audio_check: None,
         })
     }
     pub(crate) fn cancel_handle(&mut self) -> Cancel {
@@ -649,12 +653,21 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         self.pending_config = None;
     }
     fn output_error(&mut self, fault: Fault, now: u64) {
+        self.output_error_observed(fault, now, StaleOrigin::Output, None);
+    }
+    fn output_error_observed(
+        &mut self,
+        fault: Fault,
+        now: u64,
+        origin: StaleOrigin,
+        oldest: Option<u64>,
+    ) {
         // A release can race the exchange's final return or queue write. Give
         // its zero-exchange service first refusal: ordinary cancellation is
         // not a new CleanupPending/GenerationMismatch fault requiring ack.
         let _ = self.life.offline_tx_exchange(now, |_| Ok(()));
         if matches!(self.life.status().phase, Phase::AwaitingKey | Phase::Active) {
-            self.fault_from(fault, now, StaleOrigin::Output);
+            self.fault_observed(fault, now, origin, oldest);
         } else {
             self.discard_local();
         }
@@ -1152,6 +1165,17 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         self.next_iq = now;
     }
     #[cfg(test)]
+    pub(crate) fn turn_with_before_audio_check(
+        &mut self,
+        now: u64,
+        hook: fn(&mut Self),
+    ) -> scheduler::Turn {
+        // Cancel after pump and the initial output-authority checks, at the
+        // final retained-audio admission boundary. No production callback.
+        self.before_audio_check = Some(hook);
+        self.turn(now)
+    }
+    #[cfg(test)]
     pub(crate) fn replace_feedback_receiver(&mut self, receiver: Receiver<Box<PairBlock>>) {
         self.feedback = receiver;
     }
@@ -1565,12 +1589,20 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         return self.finish_turn(worked);
                     }
                 };
-                if !self.audio_matches(stamp)
-                    || observed > now
-                    || now - observed > self.timing.mic_age_ns
-                {
+                #[cfg(test)]
+                if let Some(hook) = self.before_audio_check.take() {
+                    hook(self);
+                }
+                if !self.audio_matches(stamp) {
+                    // An operator release closes the fence immediately, even
+                    // after pump's last check. That invalidates this stamp,
+                    // not the age of the retained samples. Service the release
+                    // before deciding whether authority was genuinely lost.
                     self.counters.rejected += 1;
-                    self.fault_observed(
+                    self.output_error(Fault::TxAuthority, now);
+                } else if observed > now || now - observed > self.timing.mic_age_ns {
+                    self.counters.rejected += 1;
+                    self.output_error_observed(
                         Fault::Stale,
                         now,
                         StaleOrigin::RetainedMic,
