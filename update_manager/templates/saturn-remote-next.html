@@ -13775,6 +13775,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function applyRadioPrefsObject(prefs) {
+      if (prefs && Object.prototype.hasOwnProperty.call(prefs, "txDrive") && typeof txPowerDraft !== "undefined") txPowerDraft.cancel();
       _next.applyRadioPrefsToState(prefs, state);
       state.rxAdc = REMOTE_FIXED_RX_ADC;
       // An explicit saved audio profile wins over URL lab defaults.
@@ -14053,6 +14054,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function applyBandMemoryForFrequency(hz) {
+      if (typeof txPowerDraft !== "undefined") txPowerDraft.cancel();
       const key = bandKeyForFrequency(hz);
       const memory = key ? state.bandMemory[key] : null;
       if (!memory || typeof memory !== "object") return false;
@@ -14555,6 +14557,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const text = JSON.stringify({ format: "saturn-ps-ui-diagnostics-v1",
         copiedAtIso: new Date().toISOString(), mode: state.mode,
         txPhase: state.txPhase, commandedWatts: state.txDrive,
+        committedWatts: managedSettings.committedWatts ?? null,
+        audioDroppedFrames: managedSettings.audioDroppedFrames ?? 0,
         feedbackAttenuationCommandDb: managedSettings.autoAttenuationEnabled && managedSettings.psMode !== "off" ? (managedSettings.autoAttStatus?.db ?? 31) : state.pureSignalAttenuationDb,
         manualFeedbackAttenuationPresetDb: state.pureSignalAttenuationDb,
         autoAttenuationPreference: state.pureSignalAutoAttenuate,
@@ -17997,7 +18001,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       $("filter-low-readout").textContent = wfmActive ? "Fixed" : `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = wfmActive ? "180 kHz RF" : `${state.filterHigh} Hz`;
-      $("tx-drive-readout").textContent = `${state.txDrive} W`;
+      const shownWatts = txPowerDraft.displayed(state.txDrive);
+      const confirmedWatts = managedPcmSelected() ? managedPcm.status().committedWatts : undefined;
+      $("tx-drive-readout").textContent = `${shownWatts} W${txPowerDraft.editing ? " requested" : ""}${confirmedWatts !== undefined && shownWatts !== confirmedWatts ? ` · host ${confirmedWatts} W` : ""}`;
       $("tx-mic-gain-readout").textContent = `${safeFixed(state.txMicGainDb, 1, "0.0")} dB`;
       const monAllowed = state.connected && state.bridgeReady && state.remoteClientRole === "operator" && state.txMonitorSupported;
       const rxHeadphonesAllowed = state.connected && state.bridgeReady && state.remoteClientRole === "operator" && state.rxHeadphonesSupported;
@@ -18320,7 +18326,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("rx-nb-threshold").value !== nbThreshold) {
         $("rx-nb-threshold").value = nbThreshold;
       }
-      const txDrive = `${state.txDrive}`;
+      const txDrive = `${txPowerDraft.displayed(state.txDrive)}`;
       if ($("tx-drive").value !== txDrive) { $("tx-drive").value = txDrive; }
       const txMicGain = `${state.txMicGainDb}`;
       if ($("tx-mic-gain").value !== txMicGain) { $("tx-mic-gain").value = txMicGain; }
@@ -18372,6 +18378,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     let managedPcmEpoch = 0;
+    const txPowerDraft = new _next.TxPowerDraft();
     let txPathPreference = "auto";
     let txPathNegotiator = new _next.TxPathNegotiator(txPathPreference);
     const managedPcm = new _next.ManagedPcmSession({
@@ -18397,9 +18404,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             state.txMicLevel = null; state.txMicLevelVisual = 0; state.txMicLevelAt = 0;
           }
         }
-        if (status.committedWatts !== undefined && status.pendingSettings === 0 && status.phase === "ready") state.txDrive = status.committedWatts;
+        if (["disconnected", "disabled"].includes(status.phase)) txPowerDraft.cancel();
+        if (!txPowerDraft.editing && status.committedWatts !== undefined && status.pendingSettings === 0 && status.phase === "ready") state.txDrive = status.committedWatts;
         const label = $("managed-pcm-status"), result = $("managed-pcm-transaction");
-        if (label) { label.textContent = `${status.phase}: ${status.reason}${status.microphonePreparation === "ready" ? " · mic ready" : status.microphonePreparation === "preparing" ? " · preparing mic" : ""}`; label.dataset.phase = status.phase; }
+        if (label) { label.textContent = `${status.phase}: ${status.reason}${status.microphonePreparation === "ready" ? " · mic ready" : status.microphonePreparation === "preparing" ? " · preparing mic" : ""}${status.audioDroppedFrames ? ` · PCM skips ${status.audioDroppedFrames}` : ""}`; label.dataset.phase = status.phase; }
         if (result) result.textContent = `${status.lastTransaction} · ${status.pendingSettings} pending`;
         if (["disconnected", "disabled"].includes(status.phase) && $("setup-ps-attended")) $("setup-ps-attended").checked = false;
         if ((status.measurementActive || status.twoToneActive) && ["arming", "streaming"].includes(status.phase)) {
@@ -23468,12 +23476,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         sendTci(`tx_monitor_level:0,${level};`);
       });
       $("tx-drive").addEventListener("input", () => {
-        state.txDrive = Math.min(Number($("tx-drive").max), clampTxDriveWatts($("tx-drive").value));
-        $("tx-drive-readout").textContent = `${state.txDrive} W`;
+        const watts = txPowerDraft.preview(clampTxDriveWatts($("tx-drive").value), Number($("tx-drive").max));
+        $("tx-drive-readout").textContent = `${watts} W requested`;
       });
       $("tx-drive").addEventListener("change", () => {
+        const watts = txPowerDraft.commit(clampTxDriveWatts($("tx-drive").value), Number($("tx-drive").max));
+        state.txDrive = watts;
         saveRadioPrefs();
-        sendTci(`tx_drive:0,${state.txDrive};`);
+        sendTci(`tx_drive:0,${watts};`);
       });
       $("tx-mic-gain").addEventListener("input", () => {
         state.txMicGainDb = clampTxMicGainDb($("tx-mic-gain").value);

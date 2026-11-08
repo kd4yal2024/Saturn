@@ -48,6 +48,7 @@ export interface ManagedPcmStatus {
   twoToneResult?: string;
   driveLimitWatts?: number | undefined;
   committedWatts?: number | undefined;
+  audioDroppedFrames?: number;
   canAcknowledgeFault?: boolean;
   faultAcknowledgment?: string;
   generatedTrialsOnly?: boolean;
@@ -105,6 +106,7 @@ function tag(frame: ArrayBuffer, token: string): ArrayBuffer {
   return frame;
 }
 export class ManagedPcmSession {
+  private audioDroppedFrames = 0;
   private selected = false;
   private epoch = 0;
   private version = 0;
@@ -199,6 +201,7 @@ export class ManagedPcmSession {
       twoToneLimitMs: this.twoToneLimits?.maxMs, twoToneFrequencyHz: this.twoToneLimits?.frequencyHz,
       twoToneActive: this.twoTone !== null, twoToneResult: this.twoToneResult,
       driveLimitWatts: this.driveLimit, committedWatts: this.committedDrive,
+      audioDroppedFrames: this.audioDroppedFrames,
       canAcknowledgeFault: this.canAcknowledgeFault(), faultAcknowledgment: this.ackResult,
       generatedTrialsOnly: this.generatedOnly };
   }
@@ -269,6 +272,7 @@ export class ManagedPcmSession {
     this.ackSupported = false; this.ackStop = null; this.ackPending = null; this.driveLimit = undefined;
     this.ackResult = 'No fault acknowledgment requested';
     this.committedDrive = undefined;
+    this.audioDroppedFrames = 0;
     this.generatedOnly = false;
     this.psCapability = 'unavailable'; this.psMode = 'unavailable'; this.psConfig = 0n;
     this.rfPermitted = false; this.diagnostic = null; this.measurement = null; this.timingSupported = false;
@@ -519,6 +523,12 @@ export class ManagedPcmSession {
     if (!this.selected || epoch !== this.epoch || !this.control) return;
     for (const raw of text.split(';')) {
       const c = raw.trim();
+      const skips = /^saturn_tx_audio_drops:0,([0-9]+),([0-9]+),([0-9]+)$/.exec(c);
+      if (skips) {
+        const count = Number(skips[3]);
+        if (this.owner && BigInt(skips[1]!) === this.owner.stop && skips[2] === this.owner.config
+          && Number.isSafeInteger(count) && count >= this.audioDroppedFrames) this.audioDroppedFrames = count;
+      }
       if (c.startsWith('saturn_ps_auto_att_caps:')) this.autoAttenuationSupported=c==='saturn_ps_auto_att_caps:0,start31-owner-v1';
       const autoEnabled=/^tx_puresignal_auto_attenuate:0,(true|false)$/.exec(c);
       if (autoEnabled && this.autoAttenuationSupported) this.autoAttenuationEnabled=autoEnabled[1]==='true';

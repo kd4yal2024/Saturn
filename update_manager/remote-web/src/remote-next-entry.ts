@@ -1,4 +1,5 @@
 import { PaCalibrationPanel, paCalibrationCommand } from './settings/pa-calibration';
+import { TxPowerDraft } from './settings/tx-power';
 import { DisplayFftProducer } from './display/fft-producer';
 import { planDisplayIqWindow } from './display/iq-window';
 import { SettingsWorkbench } from './settings/workbench';
@@ -435,7 +436,7 @@ const api = {
   sanitizePhonePanels,
   normalizeBandMemory,
 
-  PaCalibrationPanel, paCalibrationCommand,
+  PaCalibrationPanel, paCalibrationCommand, TxPowerDraft,
 
   // Audio
   volumeAmplitudeFromDb,

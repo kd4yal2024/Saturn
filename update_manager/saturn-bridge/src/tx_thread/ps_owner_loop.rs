@@ -187,6 +187,15 @@ impl Audio {
     pub(crate) fn at_ingress(stamp: IngressStamp, message: TxAudioMessage) -> Self {
         Self { stamp, message }
     }
+    pub(super) fn replaces_pcm(old: &Self, new: &Self) -> bool {
+        old.stamp.output.is_some()
+            && old.stamp.output == new.stamp.output
+            && old.stamp.revision == new.stamp.revision
+            && old.stamp.fence.config == new.stamp.fence.config
+            && matches!((&old.message, &new.message),
+                (TxAudioMessage::Frames(a), TxAudioMessage::Frames(b))
+                if a.source == TxAudioSource::Tci && b.source == TxAudioSource::Tci)
+    }
 }
 #[derive(Clone)]
 pub(crate) struct Cancel {
@@ -343,6 +352,7 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     seen_stop: u64,
     command_closed: bool,
     audio_closed: bool,
+    seen_audio_drops: u64,
     feedback_closed: bool,
     shutdown: bool,
     pub(crate) counters: Counters,
@@ -416,6 +426,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             seen_stop,
             command_closed: false,
             audio_closed: false,
+            seen_audio_drops: 0,
             feedback_closed: false,
             shutdown: false,
             counters: Counters::default(),
@@ -1404,6 +1415,17 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 Err(TryRecvError::Empty) => {}
             }
         }
+        if let Some(ingress) = &self.ingress {
+            let drops = ingress.audio_drop_count();
+            if drops != self.seen_audio_drops {
+                // A live-PCM skip is an audible discontinuity, not new source
+                // authority. Remove the older staged tail, retain ingress ages
+                // on every remaining block, and keep all watchdog anchors.
+                self.mic.clear();
+                self.mic_stamp = None;
+                self.seen_audio_drops = drops;
+            }
+        }
         for _ in 0..4 {
             if self.audio_closed {
                 break;
@@ -1414,9 +1436,9 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             {
                 // Leave the next sealed frame in the existing bounded FIFO
                 // until a render frees room for its largest permitted size.
-                // Never drop/restamp it or enlarge either buffer. Ingress-full
-                // faults, original-age checks, watchdogs and out-of-band
-                // release remain independent and continue to run first.
+                // The bounded live-PCM mailbox can skip its oldest same-output
+                // block if full. It never retimes samples or grows. Original
+                // age, watchdogs and out-of-band release still run first.
                 break;
             }
             match self.audio.try_recv() {

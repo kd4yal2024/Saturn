@@ -1,5 +1,7 @@
 //! Exercise the scheduling driver and migrated consumer, not direct lifecycle
 //! stepping. Both adapters are actual loopback/file owners. No hardware exists.
+#[path = "live_pcm_pressure.rs"]
+mod live_pcm_pressure;
 #[cfg(all(
     feature = "offline-puresignal-owner-native",
     not(saturn_bridge_stub_native)

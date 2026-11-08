@@ -33,13 +33,18 @@ use std::{
 
 // Capture occurrence before notification/formatting. Journald's receive time
 // can follow a blocked notifier and must not be mistaken for detection time.
-fn queue_fault_report(boundary: &str, detected: SystemTime, notification_started: Instant) {
+fn queue_fault_report(
+    boundary: &str,
+    detected: SystemTime,
+    notification_started: Instant,
+    fault: Fault,
+) {
     let detected_epoch_ns = detected
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|d| d.as_nanos());
     let notification_ns = notification_started.elapsed().as_nanos();
-    eprintln!("shared TX queue fault boundary={boundary} fault=QueueOverrun detected_epoch_ns={detected_epoch_ns:?} notification_ns={notification_ns}");
+    eprintln!("shared TX queue fault boundary={boundary} fault={fault:?} detected_epoch_ns={detected_epoch_ns:?} notification_ns={notification_ns}");
 }
 
 // Finite burst reserve, not a replacement for the controller's freshness
@@ -54,6 +59,7 @@ pub(crate) const FEEDBACK_POOL_BLOCKS: usize = FEEDBACK_QUEUE_BLOCKS + 2 + 1 + 1
 
 #[derive(Clone, Debug)]
 pub(crate) struct Capture {
+    measurement_only: bool,
     pub(crate) stamp: IngressStamp,
     model: RadioModel,
     config: Config,
@@ -220,6 +226,7 @@ struct SettingsTail {
 }
 #[derive(Clone)]
 pub(crate) struct SharedIngress {
+    audio_drops: Arc<AtomicU64>,
     pub(crate) signal_capture: Arc<OnceLock<crate::tx_signal_capture::shared::Producer>>,
     two_tone_limits: Arc<OnceLock<TwoToneLimits>>,
     generated_trials_only: Arc<AtomicBool>,
@@ -1973,6 +1980,7 @@ impl SharedIngress {
         let (feedback, frx) = super::owner_mailbox::sync_channel(FEEDBACK_QUEUE_BLOCKS);
         (
             Self {
+                audio_drops: Arc::new(AtomicU64::new(0)),
                 signal_capture: Arc::new(OnceLock::new()),
                 commands,
                 audio,
@@ -2045,13 +2053,14 @@ impl SharedIngress {
         );
         let owner_reply = {
             let mut published = self.owner_status.lock_unpoisoned();
-            if published.1 == fields {
+            let publication_key = format!("{fields},audio_drops={}", self.audio_drop_count());
+            if published.1 == publication_key {
                 None
             } else {
                 if let Some(serial) = published.0.checked_add(1) {
                     *published = (
                         serial,
-                        fields.clone(),
+                        publication_key,
                         format!("saturn_tx_owner:shared,{serial},{fields};"),
                     );
                     Some(published.2.clone())
@@ -2206,8 +2215,8 @@ impl SharedIngress {
         } else {
             String::new()
         };
-        Some(format!("saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1;saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};{extra}",
-            config.id, mode, status.stop_id, ack_eligible(status), config.id, model.desired.tx_drive, model.desired.pure_signal_attenuation_db))
+        Some(format!("saturn_rx_tuning_caps:0,fault-latched-v1;saturn_ps_fault_attenuation_caps:0,latched-rx-off-v1;saturn_ps_mode:0,{},{};saturn_tx_fault_ack_state:0,{},{};saturn_tx_committed_drive:0,{},{};tx_puresignal_attenuation:0,{};saturn_tx_audio_drops:0,{},{},{};{extra}",
+            config.id, mode, status.stop_id, ack_eligible(status), config.id, model.desired.tx_drive, model.desired.pure_signal_attenuation_db, status.stop_id, config.id, self.audio_drop_count()))
     }
     pub(crate) fn ps_control_caps(&self) -> String {
         format!(
@@ -2329,6 +2338,8 @@ impl SharedIngress {
         let v = guard.as_ref()?;
         let (model, config) = v.installed.as_ref()?;
         Some(Capture {
+            measurement_only: v.status.mode
+                == saturn_bridge::puresignal::tx_lifecycle::RunMode::MeasurementOnly,
             stamp: v.stamp,
             model: model.clone(),
             config: *config,
@@ -2437,7 +2448,12 @@ impl SharedIngress {
             let detected = SystemTime::now();
             let notification_started = Instant::now();
             self.stop(Fault::QueueOverrun);
-            queue_fault_report("command-ingress", detected, notification_started);
+            queue_fault_report(
+                "command-ingress",
+                detected,
+                notification_started,
+                Fault::QueueOverrun,
+            );
             Fault::QueueOverrun
         })
     }
@@ -2456,21 +2472,81 @@ impl SharedIngress {
                 "wrong TX source",
             ));
         }
-        self.audio
-            .try_send(Audio::at_ingress(
-                capture.stamp,
-                TxAudioMessage::Frames(frame),
-            ))
-            .map_err(|_| {
+        // A decoder/callback can finish after its captured generation retired.
+        // It may not evict current speech or fault a later operator action.
+        {
+            let view = self.view.lock_unpoisoned();
+            if view.as_ref().is_none_or(|v| {
+                v.stamp.output != capture.stamp.output
+                    || !matches!(v.phase, Phase::AwaitingKey | Phase::Active)
+            }) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "retired TX audio generation",
+                ));
+            }
+        }
+        let age = Instant::now().checked_duration_since(frame.enqueued_at);
+        let pcm = frame.source == TxAudioSource::Tci;
+        if pcm
+            && (frame.sample_rate_hz != 48000
+                || !(1..=2).contains(&frame.channels)
+                || frame.samples.as_slice().is_empty()
+                || frame.samples.as_slice().len() > 1024
+                || !frame
+                    .samples
+                    .as_slice()
+                    .len()
+                    .is_multiple_of(frame.channels as usize)
+                || frame.samples.as_slice().iter().any(|v| !v.is_finite()))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid live PCM",
+            ));
+        }
+        let message = Audio::at_ingress(capture.stamp, TxAudioMessage::Frames(frame));
+        // Keep at most four live voice blocks queued (42.7 ms for normal
+        // 512-sample PCM), in addition to bounded local staging. A 16-block
+        // source burst cannot all render within the unchanged 150 ms deadline.
+        // Diagnostic stimuli and SATP keep their strict evidence/continuity
+        // contracts and are never silently thinned here.
+        let live_voice = pcm
+            && !capture.measurement_only
+            && !self.two_tone_pending.load(Ordering::Acquire)
+            && (!self.media.enabled() || self.media.pcm_only());
+        let sent = if live_voice && age.is_some_and(|a| a <= std::time::Duration::from_millis(150))
+        {
+            self.audio.try_send_latest(message, 4, Audio::replaces_pcm)
+        } else {
+            self.audio.try_send(message).map(|_| None)
+        };
+        sent.map(|skipped| {
+            if skipped.is_some() {
+                let count = self.audio_drops.fetch_add(1, Ordering::AcqRel) + 1;
+                if count.is_power_of_two() {
+                    eprintln!("shared TX live PCM skipped oldest same-generation block total_skipped={count} incoming_age_us={:?} live_queue_limit=4 capacity=16", age.map(|a| a.as_micros()));
+                }
+            }
+            // skipped payload is destroyed here, outside the mailbox lock.
+        }).map_err(|error| {
                 let detected = SystemTime::now();
                 let notification_started = Instant::now();
-                self.stop(Fault::QueueOverrun);
-                queue_fault_report("audio-ingress", detected, notification_started);
+                let (fault, boundary) = if matches!(error, mpsc::TrySendError::Disconnected(_)) {
+                    (Fault::TxAuthority, "audio-ingress-disconnected")
+                } else {
+                    (Fault::QueueOverrun, "audio-ingress")
+                };
+                self.stop_remote(capture, fault);
+                queue_fault_report(boundary, detected, notification_started, fault);
                 io::Error::new(
                     io::ErrorKind::WouldBlock,
                     "shared TX audio queue unavailable",
                 )
             })
+    }
+    pub(crate) fn audio_drop_count(&self) -> u64 {
+        self.audio_drops.load(Ordering::Acquire)
     }
     pub(crate) fn satp_packet(
         &self,
@@ -2512,7 +2588,12 @@ impl SharedIngress {
                 }) {
                     self.stop_feedback(output, Fault::QueueOverrun);
                 }
-                queue_fault_report("feedback-ingress", detected, notification_started);
+                queue_fault_report(
+                    "feedback-ingress",
+                    detected,
+                    notification_started,
+                    Fault::QueueOverrun,
+                );
                 self.recycle_feedback_buffer(block);
                 Err(Fault::QueueOverrun)
             }

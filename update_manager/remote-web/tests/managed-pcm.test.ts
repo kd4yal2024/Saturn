@@ -23,6 +23,15 @@ function setup(capture?: ManagedCaptureFactory) {
 }
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
+  it('reports host PCM skips without retiring authority and rejects old scoped counters',()=>{
+    const h=setup();h.ready();
+    h.session.text('saturn_tx_audio_drops:0,2,11,3;',h.epoch);
+    expect(h.session.status().audioDroppedFrames).toBe(3);
+    expect(h.session.status().phase).toBe('ready');
+    h.session.text('saturn_tx_audio_drops:0,1,10,100;saturn_tx_audio_drops:0,2,11,2;',h.epoch);
+    expect(h.session.status().audioDroppedFrames).toBe(3);
+    h.session.disconnect();expect(h.session.status().audioDroppedFrames).toBe(0);
+  });
   it('negotiates actual Auto ATT separately from WDSP Auto, retaining the saved manual preset',()=>{
     const h=setup();h.ready();
     expect(h.session.status().autoAttenuationSupported).toBe(false);

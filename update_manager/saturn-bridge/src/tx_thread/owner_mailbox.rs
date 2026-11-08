@@ -1,6 +1,7 @@
 //! Fixed-capacity owner ingress. The active consumer never waits for a producer.
-//! Producers serialize only a preallocated deque move. No callback, sample
+//! Producers serialize only a preallocated deque move. No sample
 //! processing, formatting, I/O or payload destruction occurs under that lock.
+//! The PCM-only overflow path uses a constant-time envelope comparison.
 //! A contended receive is temporarily Empty, not overflow or disconnection.
 //! Original envelopes/ages remain queued; lifecycle deadlines still run first.
 use std::{
@@ -66,6 +67,34 @@ pub(crate) fn sync_channel<T>(capacity: usize) -> (SyncSender<T>, Receiver<T>) {
     )
 }
 impl<T> SyncSender<T> {
+    /// Live stateless PCM may skip its oldest queued block under pressure.
+    /// The caller must compare only envelope metadata, and may not replace a
+    /// control barrier, another source or another output generation. Return the
+    /// skipped payload so its destruction/counters happen AFTER releasing the
+    /// queue lock. All other mailboxes retain strict FIFO/full behavior.
+    pub(crate) fn try_send_latest(
+        &self,
+        message: T,
+        live_limit: usize,
+        replaces: fn(&T, &T) -> bool,
+    ) -> Result<Option<T>, TrySendError<T>> {
+        let mut queue = self.inner.queue.lock().unwrap_or_else(|e| e.into_inner());
+        if !self.inner.receiver_alive.load(Ordering::Acquire) {
+            return Err(TrySendError::Disconnected(message));
+        }
+        let limit = live_limit.clamp(1, self.inner.capacity);
+        let skipped = if queue.len() >= limit {
+            if !queue.front().is_some_and(|old| replaces(old, &message)) {
+                return Err(TrySendError::Full(message));
+            }
+            queue.pop_front()
+        } else {
+            None
+        };
+        queue.push_back(message);
+        drop(queue);
+        Ok(skipped)
+    }
     pub(crate) fn try_send(&self, message: T) -> Result<(), TrySendError<T>> {
         self.send_inner(message, || {})
     }
@@ -134,6 +163,26 @@ impl<T> From<std::sync::mpsc::Receiver<T>> for Receiver<T> {
 mod tests {
     use super::*;
     use std::{sync::mpsc, thread, time::Duration};
+
+    #[test]
+    fn latest_pcm_retains_bounds_original_ages_and_generation_barriers() {
+        let (tx, rx) = sync_channel(2);
+        let same = |a: &(u64, u64), b: &(u64, u64)| a.0 == b.0;
+        tx.try_send((7, 10)).unwrap();
+        tx.try_send((7, 20)).unwrap();
+        assert_eq!(tx.try_send_latest((7, 30), 2, same), Ok(Some((7, 10))));
+        assert_eq!(
+            tx.try_send_latest((8, 40), 2, same),
+            Err(TrySendError::Full((8, 40)))
+        );
+        assert_eq!(rx.try_recv(), Ok((7, 20)));
+        assert_eq!(rx.try_recv(), Ok((7, 30)));
+        drop(rx);
+        assert_eq!(
+            tx.try_send_latest((7, 50), 2, same),
+            Err(TrySendError::Disconnected((7, 50)))
+        );
+    }
 
     #[test]
     fn capacity_fifo_and_disconnect_preserve_every_envelope() {

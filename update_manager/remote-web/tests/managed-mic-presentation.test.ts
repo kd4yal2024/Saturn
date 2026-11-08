@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
+import { TxPowerDraft } from '../src/settings/tx-power';
 
 const template = readFileSync(new URL('../../templates/saturn-remote-next.html', import.meta.url), 'utf8');
 const start = template.indexOf('      changed: status => {', template.indexOf('    const managedPcm ='));
@@ -12,7 +13,7 @@ function fixture() {
   const state = { micCapturing: false, txMicLevel: 0.3, txMicLevelVisual: 0.3,
     txMicLevelAt: 100, moxRequested: false, psMeasurementOwned: false };
   const changed = runInNewContext(`(${callback}\n})`, {
-    state, $: () => null, scheduleUiRefresh() {}, setPtt() {},
+    state, txPowerDraft: new TxPowerDraft(), $: () => null, scheduleUiRefresh() {}, setPtt() {},
     setTxMediaPriority() {}, recoverRxAfterMox() {},
   }) as (status: Record<string, unknown>) => void;
   return { state, changed };

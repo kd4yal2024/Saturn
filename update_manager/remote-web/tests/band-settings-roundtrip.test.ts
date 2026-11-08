@@ -11,6 +11,7 @@ import { bandKeyForFrequency } from '../src/radio/band';
 import { PureSignalReports, pureSignalTestView } from '../src/puresignal/test-view';
 import type { ManagedPcmStatus } from '../src/transport/managed-pcm';
 import { clampPureSignalAttenuationDb } from '../src/settings/normalize';
+import { TxPowerDraft } from '../src/settings/tx-power';
 
 const template = readFileSync(new URL('../../templates/saturn-remote-next.html', import.meta.url), 'utf8');
 function source(name: string) {
@@ -30,7 +31,7 @@ function fixture() {
     'setFrequency', 'recallFrequencyEntryBand', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
     'sendCurrentRadioPrefsToBridge'];
   const context = {
-    state, console, receiveOnlyValidationSession: false, REMOTE_FIXED_RX_ADC: 0,
+    state, console, txPowerDraft: new TxPowerDraft(), receiveOnlyValidationSession: false, REMOTE_FIXED_RX_ADC: 0,
     BAND_MEMORY_KEY: 'bandMemory', RADIO_PREFS_KEY: 'radioPrefs', REMOTE_SETTINGS_SAVE_DEBOUNCE_MS: 750,
     remoteSettingsSaveTimer: null,
     localStorage: { setItem: (k: string, v: string) => storage.set(k, v) },
@@ -54,6 +55,14 @@ function fixture() {
 }
 
 describe('automatic band operating settings', () => {
+  it('does not carry an uncommitted power drag into another band or loaded profile',()=>{
+    const f=fixture();f.context.txPowerDraft.preview(100);
+    f.api.applyRadioPrefsObject({txDrive:20});
+    expect(f.context.txPowerDraft.displayed(f.state.txDrive)).toBe(20);
+    f.context.txPowerDraft.preview(50);
+    f.api.setFrequency(14_200_000);
+    expect(f.context.txPowerDraft.editing).toBe(false);
+  });
   it('renders actual Auto ATT state, restores the manual preset and preserves an active slider edit',()=>{
     const f=fixture();f.state.pureSignalAttenuationDb=18;
     const m:ManagedPcmStatus={selected:true,phase:'ready',reason:'ready',pendingSettings:0,lastTransaction:'applied',

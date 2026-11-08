@@ -103,6 +103,10 @@ fn key(life: &mut Life<'_>, now: &mut u64) {
         *now += 1_000_000;
         life.tick(*now).unwrap();
         assert!(Instant::now() < end, "key failed {:?}", life.status());
+        // Direct prefill is paced by the adapter's real clock. Keep this
+        // fixture's millisecond clock in step rather than aging a queued
+        // block by seconds while only microseconds elapse at the adapter.
+        std::thread::sleep(Duration::from_millis(1)); // harness only
     }
     assert_eq!(life.status().phase, Phase::Active);
     let stamp = life.offline_owner().output_stamp().unwrap();
