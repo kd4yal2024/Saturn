@@ -55,6 +55,9 @@ impl Config {
 /// quantized value. reset must quiesce native asynchronous work/old curves before
 /// admitting a new epoch; a mock implementation does NOT prove that contract.
 pub trait NativePs {
+    fn status_contract(&self) -> super::native_status::NativeStatusContract {
+        super::native_status::NativeStatusContract::LegacyFaultBits
+    }
     /// Ordinary uncorrected TX verifies fitting/correction off while retaining
     /// the operator's microphone profile. Unknown ports retain the stricter
     /// measurement check until they implement a matching native readback.
@@ -110,6 +113,7 @@ pub struct Status {
     pub fault: Option<Fault>,
     pub keyed: bool,
     pub info_raw: [i32; 16],
+    pub calibration_notice: Option<super::native_status::CalibrationNotice>,
     pub overdrive_evidence: Option<OverdriveEvidence>,
     pub correction_applied_reported: bool,
     pub actual_delay_seconds: Option<f64>,
@@ -120,6 +124,8 @@ pub struct Status {
 }
 
 pub struct Controller<N: NativePs> {
+    adaptation_suspended: bool,
+    runtime_observation_floor: Option<u64>,
     measurement_only: bool,
     #[cfg(feature = "offline-puresignal-tx-lifecycle")]
     lifecycle_deferred: bool,
@@ -178,6 +184,8 @@ impl<N: NativePs> Controller<N> {
     ) -> Self {
         assert!((1..=64).contains(&capacity));
         Self {
+            adaptation_suspended: false,
+            runtime_observation_floor: None,
             measurement_only: false,
             #[cfg(feature = "offline-puresignal-tx-lifecycle")]
             lifecycle_deferred: false,
@@ -348,8 +356,15 @@ impl<N: NativePs> Controller<N> {
             fault: self.fault,
             keyed: self.keyed,
             info_raw: self.info,
+            calibration_notice: self
+                .native
+                .status_contract()
+                .interpret(self.info[6])
+                .ok()
+                .flatten(),
             overdrive_evidence: self.overdrive_evidence,
             correction_applied_reported: self.state == State::Correcting
+                && !self.adaptation_suspended
                 && self.fault.is_none()
                 && self.info[14] != 0,
             actual_delay_seconds: self.actual_delay,
@@ -486,6 +501,8 @@ impl<N: NativePs> Controller<N> {
         self.owner == Owner::Bridge && self.qualification.native_abi_verified
     }
     fn clear_buffers(&mut self) {
+        self.adaptation_suspended = false;
+        self.runtime_observation_floor = None;
         #[cfg(feature = "offline-puresignal-policy-proposal")]
         {
             self.partial_qualification = Ok(());
@@ -503,6 +520,55 @@ impl<N: NativePs> Controller<N> {
         self.next_p2_sequence = None;
         self.last_observed_ns = None;
         self.info = [0; 16];
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(super) fn runtime_gain_suspend(&mut self) -> Result<(), Fault> {
+        if self.native.status_contract()
+            != super::native_status::NativeStatusContract::ReviewedWdsp210
+            || self.measurement_only
+            || !self.keyed
+            || !self.config.is_some_and(|c| c.enabled)
+        {
+            return Err(Fault::NativeUnverified);
+        }
+        self.adaptation_suspended = true;
+        self.state = State::Collecting;
+        Ok(())
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(super) fn runtime_gain_boundary(&mut self, ready_ns: u64) -> Result<(), Fault> {
+        if !self.adaptation_suspended {
+            return Err(Fault::InvalidConfig);
+        }
+        // Discard the previous gain's entire queue and partial native window.
+        // Keep the LAST ORIGINAL observation as the watchdog anchor; a gain
+        // command or acknowledgment cannot manufacture fresh feedback.
+        self.head = 0;
+        self.queued = 0;
+        self.partial_pairs = 0;
+        self.partial_first = None;
+        self.partial_observed_ns = None;
+        self.next_pair = None;
+        self.next_p2_sequence = None;
+        self.raw_interval = None;
+        self.raw_observed_ns = None;
+        #[cfg(feature = "offline-puresignal-policy-proposal")]
+        {
+            self.partial_qualification = Ok(());
+            self.raw_qualification = None;
+        }
+        self.runtime_observation_floor = Some(ready_ns);
+        Ok(())
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub(super) fn runtime_gain_resume(&mut self) -> Result<(), Fault> {
+        if !self.adaptation_suspended {
+            return Err(Fault::InvalidConfig);
+        }
+        self.calibration_baseline = self.info[5];
+        self.adaptation_suspended = false;
+        self.state = State::Collecting;
+        Ok(())
     }
     fn retire(&mut self) -> Result<(), Fault> {
         #[cfg(feature = "offline-puresignal-tx-lifecycle")]
@@ -597,7 +663,11 @@ impl<N: NativePs> Controller<N> {
         if meta.observed_ns < self.keyed_at_ns {
             return Err(Fault::NotKeyed);
         }
-        if meta.observed_ns < self.feedback_ready_at_ns.saturating_add(config.settling_ns) {
+        if meta.observed_ns < self.feedback_ready_at_ns.saturating_add(config.settling_ns)
+            || self
+                .runtime_observation_floor
+                .is_some_and(|floor| meta.observed_ns < floor)
+        {
             return Err(Fault::Settling);
         }
         if now_ns - meta.observed_ns > config.stale_after_ns {
@@ -877,7 +947,8 @@ impl<N: NativePs> Controller<N> {
                         Ok(info) => info,
                         Err(_) => return self.reject(Fault::NativeFailure, true).map(|_| 0),
                     };
-                    if self.info[6] & 2 != 0 {
+                    let notice = self.native.status_contract().interpret(self.info[6]);
+                    if notice == Err(Fault::SevereOverdrive) {
                         self.overdrive_evidence = Some(OverdriveEvidence {
                             origin: OverdriveOrigin::NativeStatusFlag2,
                             // Observation block, not a sample-aligned link to
@@ -893,10 +964,21 @@ impl<N: NativePs> Controller<N> {
                         });
                         return self.reject(Fault::SevereOverdrive, true).map(|_| 0);
                     }
-                    if self.info[6] & 1 != 0 {
-                        return self.reject(Fault::SolutionRejected, true).map(|_| 0);
-                    }
-                    self.state = if self.info[14] != 0 && self.info[5] > self.calibration_baseline {
+                    let notice = match notice {
+                        Ok(notice) => notice,
+                        Err(fault) => return self.reject(fault, true).map(|_| 0),
+                    };
+                    // A reviewed collector reset or rejected candidate is a
+                    // native calibration result. The WDSP Auto state machine
+                    // may recover on later paired input. Physical/component
+                    // overload is checked independently before native fitting.
+                    // A rejected new candidate may retain an older running
+                    // correction; collector reset cannot certify one.
+                    self.state = if !self.adaptation_suspended
+                        && notice != Some(super::native_status::CalibrationNotice::CollectorReset)
+                        && self.info[14] != 0
+                        && self.info[5] > self.calibration_baseline
+                    {
                         State::Correcting
                     } else {
                         State::Collecting

@@ -35,6 +35,10 @@ enum Case {
     AutoAttReconfigure,
     AutoAttDisconnect,
     AutoAttRange,
+    AutoAttRuntime,
+    AutoAttRuntimeRelease,
+    AutoAttRuntimeMissing,
+    AutoAttRuntimeReconfigure,
     AutoSustained,
     ReceiveMeter,
     BandRecall,
@@ -65,6 +69,19 @@ impl Case {
                 | Self::AutoAttReconfigure
                 | Self::AutoAttDisconnect
                 | Self::AutoAttRange
+                | Self::AutoAttRuntime
+                | Self::AutoAttRuntimeRelease
+                | Self::AutoAttRuntimeMissing
+                | Self::AutoAttRuntimeReconfigure
+        )
+    }
+    fn runtime_auto_attenuation(self) -> bool {
+        matches!(
+            self,
+            Self::AutoAttRuntime
+                | Self::AutoAttRuntimeRelease
+                | Self::AutoAttRuntimeMissing
+                | Self::AutoAttRuntimeReconfigure
         )
     }
     fn rear_ptt(self) -> bool {
@@ -128,6 +145,7 @@ struct Io {
     hardware_down: Arc<AtomicBool>,
     hardware_sent: Instant,
     auto_drop_feedback: Arc<AtomicBool>,
+    runtime_feedback_gain: Arc<AtomicU64>,
 }
 fn options() -> Options {
     Options {
@@ -258,6 +276,7 @@ impl RuntimeIo for Io {
             self.case,
         );
         let drop_feedback = self.auto_drop_feedback.clone();
+        let runtime_feedback_gain = self.runtime_feedback_gain.clone();
         self.driver = Some(thread::spawn(move || {
             struct StopOnExit(Arc<AtomicBool>);
             impl Drop for StopOnExit {
@@ -406,6 +425,10 @@ impl RuntimeIo for Io {
             let mut auto_generations = std::collections::BTreeSet::new();
             let mut leveling_since = None;
             let mut negative_started = false;
+            let mut runtime_stage = 0;
+            let mut runtime_count = 0;
+            let mut runtime_db = 0;
+            let mut runtime_stop = None;
             while !joined.load(Ordering::Acquire) {
                 assert!(
                     Instant::now() < end,
@@ -442,7 +465,13 @@ impl RuntimeIo for Io {
                                 scope.attenuation_db < 31,
                                 "servo must actually adjust, not pass vacuously at its start value"
                             );
-                            assert!(link.prepared(scope.output).unwrap());
+                            // Runtime gain changes deliberately create a new
+                            // acquisition request while TX remains active.
+                            // That case checks each completion below; startup
+                            // cases must always retain their prepared scope.
+                            if !case.runtime_auto_attenuation() {
+                                assert!(link.prepared(scope.output).unwrap());
+                            }
                         }
                     }
                 }
@@ -577,6 +606,117 @@ impl RuntimeIo for Io {
                 }
                 if case == Case::AutoSustained && status.phase == Phase::Active {
                     auto_active_since.get_or_insert_with(Instant::now);
+                }
+                if case.runtime_auto_attenuation()
+                    && stage == 3
+                    && status.correction_applied == Some(true)
+                {
+                    let count = client
+                        .as_ref()
+                        .unwrap()
+                        .native_calibrations
+                        .iter()
+                        .copied()
+                        .max()
+                        .unwrap_or(0);
+                    let request = link.desired();
+                    let db = request.scope.unwrap().attenuation_db;
+                    match runtime_stage {
+                        0 if count > 0 => {
+                            runtime_stop = Some(status.stop_id);
+                            runtime_count = count;
+                            runtime_db = db;
+                            runtime_feedback_gain.store(1.6f64.to_bits(), Ordering::Release);
+                            runtime_stage = 1;
+                            eprintln!("runtime ATT fixture high gain from db={db} count={count}");
+                        }
+                        1 if case == Case::AutoAttRuntime
+                            && db > runtime_db
+                            && count > runtime_count =>
+                        {
+                            assert_eq!(
+                                Some(status.stop_id),
+                                runtime_stop,
+                                "gain increase must not unkey/rearm"
+                            );
+                            assert!(link.prepared(request.scope.unwrap().output).unwrap());
+                            runtime_count = count;
+                            runtime_db = db;
+                            runtime_feedback_gain.store(0.5f64.to_bits(), Ordering::Release);
+                            runtime_stage = 2;
+                            eprintln!("runtime ATT fixture low gain from db={db} count={count}");
+                        }
+                        2 if case == Case::AutoAttRuntime
+                            && db < runtime_db
+                            && count > runtime_count =>
+                        {
+                            assert_eq!(
+                                Some(status.stop_id),
+                                runtime_stop,
+                                "gain decrease must not unkey/rearm"
+                            );
+                            assert!(link.prepared(request.scope.unwrap().output).unwrap());
+                            runtime_stage = 3;
+                            eprintln!("runtime Auto ATT {direct}: native gain up/down refits complete; final_att={db} calibration_count={count} output_generation_stop_id={}",status.stop_id);
+                        }
+                        _ => {}
+                    }
+                }
+                if case.runtime_auto_attenuation()
+                    && case != Case::AutoAttRuntime
+                    && runtime_stage == 1
+                {
+                    // Wait for the actual gain request after reset proof.
+                    // Cancellation/loss must be serviced while its completion
+                    // is still pending, without another operator arm.
+                    // Published UI snapshots are deliberately rate limited;
+                    // use the acquisition request itself to observe this
+                    // short transition rather than waiting for its display.
+                    let changing = link
+                        .desired()
+                        .scope
+                        .is_some_and(|scope| scope.attenuation_db != runtime_db);
+                    if changing && !negative_started {
+                        assert_eq!(Some(status.stop_id), runtime_stop);
+                        match case {
+                            Case::AutoAttRuntimeRelease => {
+                                client.as_mut().unwrap().text("trx:0,false;")
+                            }
+                            Case::AutoAttRuntimeReconfigure => {
+                                client.as_mut().unwrap().text("tx_mic_gain:0,1;")
+                            }
+                            Case::AutoAttRuntimeMissing => {
+                                drop_feedback.store(true, Ordering::Release);
+                            }
+                            _ => unreachable!(),
+                        }
+                        negative_started = true;
+                        stage = 12;
+                    }
+                    if negative_started
+                        && status.phase == Phase::ReadyOff
+                        && (case != Case::AutoAttRuntimeReconfigure
+                            || (ingress.startup_ready()
+                                && state_model.lock_unpoisoned().desired.tx_mic_gain_db == 1.))
+                    {
+                        assert_eq!(
+                            status.primary_fault,
+                            if case == Case::AutoAttRuntimeMissing {
+                                Some(Fault::Stale)
+                            } else {
+                                None
+                            }
+                        );
+                        assert!(status.authority_completed_ns.is_some());
+                        assert!(status.cleanup_completed_ns.is_some());
+                        assert!(status.stop_id > runtime_stop.unwrap());
+                        stop.store(true, Ordering::Release);
+                        while !joined.load(Ordering::Acquire) {
+                            assert!(Instant::now() < end);
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        return 0;
+                    }
                 }
                 match stage {
                     0 if ingress.startup_ready()
@@ -937,7 +1077,15 @@ impl RuntimeIo for Io {
                                 .as_mut()
                                 .unwrap()
                                 .text("tx_mic_gain:0,-12;tx_puresignal:0,false;");
-                        } else if matches!(case, Case::AutoCorrection | Case::AutoSustained) {
+                        } else if matches!(
+                            case,
+                            Case::AutoCorrection
+                                | Case::AutoSustained
+                                | Case::AutoAttRuntime
+                                | Case::AutoAttRuntimeRelease
+                                | Case::AutoAttRuntimeMissing
+                                | Case::AutoAttRuntimeReconfigure
+                        ) {
                             assert!(ingress.auto_mode_caps().is_some());
                             client.as_mut().unwrap().text(if case.auto_attenuation() {
                                 "tx_puresignal_auto_attenuate:0,true;tx_puresignal_mode:0,auto;"
@@ -974,7 +1122,8 @@ impl RuntimeIo for Io {
                         stage = 3;
                     }
                     3 | 5
-                        if status.phase == Phase::Active
+                        if (!case.runtime_auto_attenuation() || runtime_stage == 3)
+                            && status.phase == Phase::Active
                             && if case.microphone_bypass() {
                                 // Real tagged microphone input and completed backend
                                 // output must continue through this generation.
@@ -999,7 +1148,10 @@ impl RuntimeIo for Io {
                             );
                         }
                         corrected += 1;
-                        if matches!(case, Case::AutoCorrection | Case::AutoSustained) {
+                        if matches!(
+                            case,
+                            Case::AutoCorrection | Case::AutoSustained | Case::AutoAttRuntime
+                        ) {
                             assert!(ingress.owner_status_message().unwrap().contains(",auto;"));
                         }
                         if case == Case::AutoSustained {
@@ -1110,6 +1262,11 @@ impl RuntimeIo for Io {
                             if case.auto_attenuation() {
                                 if let Some(scope) = link.desired().scope {
                                     wave.attenuation(scope.attenuation_db);
+                                    if case.runtime_auto_attenuation() {
+                                        wave.amplify_feedback(f64::from_bits(
+                                            runtime_feedback_gain.load(Ordering::Acquire),
+                                        ));
+                                    }
                                     if case == Case::AutoAttRange {
                                         wave.amplify_feedback(1000.);
                                     }
@@ -1336,6 +1493,11 @@ impl RuntimeIo for Io {
                             u32::from(scope.attenuation_db)
                         );
                         self.wave.attenuation(scope.attenuation_db);
+                        if self.case.runtime_auto_attenuation() {
+                            self.wave.amplify_feedback(f64::from_bits(
+                                self.runtime_feedback_gain.load(Ordering::Acquire),
+                            ));
+                        }
                         if self.case == Case::AutoAttRange {
                             self.wave.amplify_feedback(1000.);
                         }
@@ -1433,6 +1595,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         hardware_down: Arc::new(AtomicBool::new(false)),
         hardware_sent: Instant::now() - Duration::from_secs(1),
         auto_drop_feedback: Arc::new(AtomicBool::new(false)),
+        runtime_feedback_gain: Arc::new(AtomicU64::new(1.0f64.to_bits())),
     };
     let directory = std::env::temp_dir().join(format!(
         "saturn-runtime-{}-{}",
@@ -1556,6 +1719,9 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::RearPttBypass
                 | Case::MicrophoneBypass
                 | Case::AutoCorrection
+                | Case::AutoAttRuntime
+                | Case::AutoAttRuntimeRelease
+                | Case::AutoAttRuntimeReconfigure
                 | Case::AutoAttSingle
                 | Case::AutoAttRelease
                 | Case::AutoAttReconfigure
@@ -1617,6 +1783,9 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::AutoAttReconfigure
                 | Case::AutoAttDisconnect
                 | Case::AutoAttRange
+                | Case::AutoAttRuntimeRelease
+                | Case::AutoAttRuntimeMissing
+                | Case::AutoAttRuntimeReconfigure
         ) {
             assert!(io.held_turns > 2 && io.received_turns > 10);
             assert!(
@@ -2084,4 +2253,42 @@ fn actual_run_inner_band_recall_80m_40m_roundtrip_both_backends() {
 #[test]
 fn actual_run_inner_faulted_receive_tuning_programs_ddc6() {
     exercise(true, Case::FaultedReceiveTune);
+}
+
+#[test]
+#[ignore = "serial real WDSP runtime Auto ATT, low/high feedback steps through actual run_inner; loopback/files only"]
+fn actual_run_inner_runtime_auto_att_gain_up_down_both_backends() {
+    // Progress is observed through the real correction-monitor wire report.
+    // Without its opt-in there are no counts to drive the fixture's ramps.
+    let previous = std::env::var_os("SATURN_PS_CORRECTION_MONITOR");
+    std::env::set_var("SATURN_PS_CORRECTION_MONITOR", "1");
+    for direct in [false, true] {
+        exercise(direct, Case::AutoAttRuntime);
+    }
+    if let Some(value) = previous {
+        std::env::set_var("SATURN_PS_CORRECTION_MONITOR", value);
+    } else {
+        std::env::remove_var("SATURN_PS_CORRECTION_MONITOR");
+    }
+}
+
+#[test]
+#[ignore = "serial actual-runtime gain-transition cancellation/loss/reconfiguration; loopback/files only"]
+fn actual_run_inner_runtime_auto_att_cancellation_and_feedback_deadline() {
+    let previous = std::env::var_os("SATURN_PS_CORRECTION_MONITOR");
+    std::env::set_var("SATURN_PS_CORRECTION_MONITOR", "1");
+    for direct in [false, true] {
+        for case in [
+            Case::AutoAttRuntimeRelease,
+            Case::AutoAttRuntimeMissing,
+            Case::AutoAttRuntimeReconfigure,
+        ] {
+            exercise(direct, case);
+        }
+    }
+    if let Some(value) = previous {
+        std::env::set_var("SATURN_PS_CORRECTION_MONITOR", value);
+    } else {
+        std::env::remove_var("SATURN_PS_CORRECTION_MONITOR");
+    }
 }

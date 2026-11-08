@@ -347,6 +347,39 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
     pub fn feedback_status(&self) -> Status {
         self.c().status()
     }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    fn runtime_gain_change(
+        &mut self,
+        now: u64,
+        step: impl FnOnce(&mut Controller<N>) -> Result<(), Fault>,
+    ) -> Result<(), Fault> {
+        self.clock(now)?;
+        self.service_release()?;
+        if self.status.phase != Phase::Active || self.status.mode != RunMode::Correction {
+            return Err(Fault::CleanupPending);
+        }
+        if let Err(fault) = step(self.c_mut()) {
+            self.stop(StopCause::Fault(fault))?;
+            return Err(fault);
+        }
+        self.service_release()?;
+        if self.status.phase != Phase::Active {
+            return Err(Fault::CleanupPending);
+        }
+        Ok(())
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub fn offline_runtime_gain_suspend(&mut self, now: u64) -> Result<(), Fault> {
+        self.runtime_gain_change(now, |c| c.runtime_gain_suspend())
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub fn offline_runtime_gain_boundary(&mut self, now: u64, ready_ns: u64) -> Result<(), Fault> {
+        self.runtime_gain_change(now, |c| c.runtime_gain_boundary(ready_ns))
+    }
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    pub fn offline_runtime_gain_resume(&mut self, now: u64) -> Result<(), Fault> {
+        self.runtime_gain_change(now, |c| c.runtime_gain_resume())
+    }
     pub fn status(&self) -> LifecycleStatus {
         let mut s = self.status;
         s.correction_applied = if s.phase == Phase::Active {

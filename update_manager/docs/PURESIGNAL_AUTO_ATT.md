@@ -1,4 +1,4 @@
-# Shared-owner PureSignal startup Auto ATT
+# Shared-owner PureSignal Auto ATT
 
 The `start31-owner-v1` capability implements startup feedback leveling on P2
 and Direct XDMA. It does not change firmware, the XDMA driver or RXC1 polling.
@@ -36,8 +36,8 @@ For each fresh authorized PS transmission with Auto ATT enabled:
    adjustment steps are permitted.
 5. Require two in-range windows. Return the original key receipt and admit only
    observations after the new feedback-ready boundary plus ordinary settling.
-   WDSP Single/Auto fitting may then begin. Hold gain for the rest of this TX;
-   this version is not a continuous mid-correction attenuator servo.
+   WDSP Single/Auto fitting may then begin. The build-matched WDSP 2.10 owner
+   subsequently services runtime leveling as described below.
 
 All gain changes preserve original sample timestamps. Each pair block carries
 its acquisition-request revision, stamped before enqueue. Old-gain queued
@@ -54,6 +54,43 @@ with SevereOverdrive. Unknown overload coverage stays unknown. Release,
 disconnect and configuration changes use the existing stop receipt, acquisition
 restoration and native cleanup; no failure or settings completion auto-rekeys.
 Manual operation and PS bypass do not run this servo.
+
+## Runtime leveling within the same transmission
+
+After startup, the existing sole native owner watches fresh WDSP fit attempts
+(`info[7]`, distinct from accepted fits in `info[5]`). A valid extrapolation
+(`info[0] == 0`) with a nonzero level (`info[4]`) supplies a runtime decision.
+Repeated reports, silence, failed extrapolation and old gain reports cannot
+cause another gain step. The target is 152.293. The inspected Thetis source
+accepts 129–181; piHPSDR uses 140–165. This implementation uses Thetis's band,
+rounded `20 log10(level / 152.293)` and hardware limits 0–31 dB. Above 256 it
+requests maximum attenuation. It does not change RF drive or saved manual ATT.
+
+A gain transition is serialized with all other work in that owner:
+
+1. Request native PS reset nonblockingly. Continue one DSP exchange per render
+   turn and paired `pscc` input so fitter/IQC transitions can finish.
+2. Prove the reset completed and fitter/IQC are quiescent using the matched
+   observer. A request or cleared control bit alone is not completion.
+3. Request the new gain from the existing acquisition owner. Discard old partial
+   pairs and queued controller evidence. Wait for the matching acquisition
+   revision's completion, then 30 ms of original observation-time settling.
+4. Resume the selected Single/Auto mode nonblockingly. Require a newly accepted
+   fit before reporting correction applied again. No RF unkey/re-arm is implied.
+
+The transition has a three-second ceiling, while existing shorter feedback,
+source and output watchdogs remain active. Neither gain acknowledgment nor its
+settling boundary manufactures a new observation or extends the freshness
+deadline. Release, disconnect and reconfiguration discard the transition and
+continue the ordinary complete-stop/native-cleanup sequence. Unknown native
+ports cannot use these controls. The capability and phase vocabulary remain
+compatible with existing clients; runtime status uses native level reports,
+whereas startup uses its explicitly estimated ratio.
+
+This slice does **not** retain a correction curve or the last good gain across
+normal release. The existing cleanup still recreates WDSP. Curve retention and
+context-bound gain reuse are separate required fixes; see the
+[review disposition](puresignal/DEEPSEEK_REVIEW_DISPOSITION_20261108.md).
 
 ## Wire and capture provenance
 
@@ -75,6 +112,9 @@ use that applied gain rather than the saved manual preset. Raw paired captures
 include `acquisitionRevision`; original samples, scaling and arrival ages are
 unchanged. Frozen startup fault evidence retains the requested/applied gain,
 ratio estimate and reference/RF component peaks through completed cleanup.
+The status value's origin depends on phase: startup ratio estimate before native
+admission, latest valid native feedback level during runtime monitoring; -1 means
+no valid level for the current gain yet. It is never a measured RF power.
 
 ## Validation and limits
 

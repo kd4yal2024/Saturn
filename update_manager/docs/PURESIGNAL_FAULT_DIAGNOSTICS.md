@@ -200,3 +200,27 @@ startup servo. See [PureSignal startup Auto ATT](PURESIGNAL_AUTO_ATT.md) for the
 31 dB initial setting, native-disabled leveling, acquisition revision fencing,
 per-band controls, wire contract and measurement limits. Earlier manual-only
 statements above describe the preserved investigation and its original release.
+
+## Reviewed WDSP 2.10 status semantics — 8 November
+
+The matched `calcc.c` source (SHA-256
+`1aa8470294640e7109824db7cc41786a02e21a5f0b9cf54bbbcfaf2df190ab66`)
+uses `info[6] & 1` for a rejected solution and `info[6] & 2` for the collector's
+insufficient useful upper-envelope range. The latter corresponds to the guide's
+probable-severe-overdrive warning; it is not an ADC rail counter. In the reviewed
+2.10 port these are calibration notices, not RF-stop requests. Unknown bits
+remain an incompatible-native fault. Unreviewed ports retain their previous
+contract until their source semantics are identified.
+
+Actual nonfinite samples, component-limit trips and valid positive overload
+evidence retain their independent guards. The historical RF-peak-1.0 events
+recorded above were genuine sample-limit trips, with native flags zero; changing
+fit-notice handling does not explain them away. A collector notice alone also
+does not justify raising RX attenuation: reference scaling/drive and calibration
+quality need examination. The controller exposes the notice with its raw native
+status while later paired input can let WDSP recover.
+
+The corresponding runtime Auto ATT uses a fresh valid native feedback-level
+report rather than the notice bit as its gain error. See the
+[review disposition](puresignal/DEEPSEEK_REVIEW_DISPOSITION_20261108.md) for
+remaining curve-lifetime, gain-history, measurement and deployment limits.

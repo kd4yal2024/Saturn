@@ -27,6 +27,8 @@ pub(crate) struct Audit {
     pub(crate) recreations: u64,
     pub(crate) cleanup_steps: u64,
     pub(crate) dexp_exchanges: u64,
+    pub(crate) runtime_resets: u64,
+    pub(crate) runtime_resumes: u64,
 }
 pub(crate) struct FullNative {
     engine: Option<WdspTxEngine>,
@@ -41,6 +43,7 @@ pub(crate) struct FullNative {
     quiescent: bool,
     measurement_gain: bool,
     diagnostic_source: crate::tx_thread::feedback_owner::Stimulus,
+    runtime_gain_reset: bool,
     audit: Audit,
     _single_owner: PhantomData<Rc<()>>, // !Send / !Sync
 }
@@ -148,6 +151,7 @@ impl FullNative {
             quiescent: true,
             measurement_gain: false,
             diagnostic_source: Default::default(),
+            runtime_gain_reset: false,
             audit: Audit::default(),
             _single_owner: PhantomData,
         })
@@ -245,6 +249,10 @@ impl FullNative {
     }
 }
 impl NativePs for FullNative {
+    fn status_contract(&self) -> saturn_bridge::puresignal::native_status::NativeStatusContract {
+        // Construction rejects any library other than the matched 2.10 build.
+        saturn_bridge::puresignal::native_status::NativeStatusContract::ReviewedWdsp210
+    }
     fn bypass_tx_guard(&mut self) -> Result<(), Fault> {
         #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
         {
@@ -322,6 +330,58 @@ impl NativePs for FullNative {
     }
 }
 impl ScheduledNative for FullNative {
+    fn runtime_gain_control(&mut self, reset: bool) -> Result<bool, Fault> {
+        #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+        {
+            unsafe extern "C" {
+                fn saturn_try_shared_ps_runtime_control(reset: i32, automatic: i32) -> i32;
+            }
+            if self.cleanup.is_some()
+                || !self.config.is_some_and(|(c, _)| c.enabled)
+                || (!reset && !self.runtime_gain_reset)
+            {
+                return Err(Fault::CleanupPending);
+            }
+            match unsafe {
+                saturn_try_shared_ps_runtime_control(i32::from(reset), i32::from(self.automatic))
+            } {
+                0 => Ok(false),
+                1 => {
+                    self.runtime_gain_reset = reset;
+                    if reset {
+                        self.audit.runtime_resets += 1;
+                    } else {
+                        self.audit.runtime_resumes += 1;
+                    }
+                    Ok(true)
+                }
+                _ => Err(Fault::NativeUnverified),
+            }
+        }
+        #[cfg(any(not(feature = "managed-puresignal"), saturn_bridge_stub_native))]
+        {
+            let _ = reset;
+            Err(Fault::NativeUnverified)
+        }
+    }
+    fn runtime_gain_reset_ready(&mut self) -> Result<bool, Fault> {
+        #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+        {
+            unsafe extern "C" {
+                fn saturn_try_shared_ps_runtime_reset_ready() -> i32;
+            }
+            if self.cleanup.is_some() || !self.runtime_gain_reset {
+                return Err(Fault::CleanupPending);
+            }
+            match unsafe { saturn_try_shared_ps_runtime_reset_ready() } {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(Fault::NativeUnverified),
+            }
+        }
+        #[cfg(any(not(feature = "managed-puresignal"), saturn_bridge_stub_native))]
+        Err(Fault::NativeUnverified)
+    }
     fn startup_leveling_guard(&mut self) -> Result<bool, Fault> {
         #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
         {
@@ -441,6 +501,7 @@ impl CooperativeNative for FullNative {
         self.exchange(&[0.; 512]).map(|_| ())
     }
     fn begin_cleanup(&mut self) -> Result<(), Fault> {
+        self.runtime_gain_reset = false;
         self.mox(false);
         // Authority stop receipt already completed. Never run the generator
         // through cleanup or allow recreation to retain its action identity.

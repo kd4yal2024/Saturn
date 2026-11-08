@@ -32,6 +32,14 @@ const MAX_TCI_MONO_FRAME_SAMPLES: usize = 1024;
 /// process() admits pscc only (ZERO exchanges); render() performs one exchange.
 /// Feedback fitting, mic rendering, stop progress and cleanup own the SAME N.
 pub(crate) trait ScheduledNative: CooperativeNative {
+    /// Operational feedback gain changes, serialized with this same native
+    /// owner. These controls perform zero DSP exchanges and never wait.
+    fn runtime_gain_control(&mut self, _reset: bool) -> Result<bool, Fault> {
+        Err(Fault::NativeUnverified)
+    }
+    fn runtime_gain_reset_ready(&mut self) -> Result<bool, Fault> {
+        Err(Fault::NativeUnverified)
+    }
     fn configure_model(&mut self, model: &RadioModel) -> Result<(), Fault>;
     fn startup_leveling_guard(&mut self) -> Result<bool, Fault> {
         Err(Fault::NativeUnverified)
@@ -354,6 +362,7 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     two_tone_deadline: Option<u64>,
     reported_lifecycle: Option<(Phase, u64)>,
     last_signal_report: Instant,
+    runtime_att: Option<(OutputStamp, super::ps_runtime_auto_att::Runtime)>,
     #[cfg(test)]
     before_audio_check: Option<fn(&mut Self)>,
 }
@@ -427,6 +436,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             two_tone_deadline: None,
             reported_lifecycle: None,
             last_signal_report: Instant::now(),
+            runtime_att: None,
             #[cfg(test)]
             before_audio_check: None,
         })
@@ -581,6 +591,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         audio_permit_matches(stamp, current, self.life.status().phase)
     }
     fn discard_local(&mut self) {
+        self.runtime_att = None;
         self.satp_started = false;
         self.mic.clear();
         self.mic_stamp = None;
@@ -654,6 +665,109 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
     }
     fn output_error(&mut self, fault: Fault, now: u64) {
         self.output_error_observed(fault, now, StaleOrigin::Output, None);
+    }
+    fn service_runtime_attenuation(&mut self, now: u64) -> Result<(), Fault> {
+        use super::ps_runtime_auto_att::{Phase as AttPhase, Runtime, SETTLE_NS};
+        use saturn_bridge::puresignal::native_status::NativeStatusContract;
+        if self.life.status().phase != Phase::Active {
+            return Ok(());
+        }
+        if self.runtime_att.is_none() {
+            if !self.installed.as_ref().is_some_and(|(_, c)| c.enabled)
+                || self.life.offline_native_snapshot(|n| n.status_contract())
+                    != NativeStatusContract::ReviewedWdsp210
+            {
+                return Ok(());
+            }
+            let Some(s) = self.life.offline_owner().runtime_attenuation() else {
+                return Ok(());
+            };
+            if s.applied_db != Some(s.db) {
+                return Err(Fault::InvalidConfig);
+            }
+            let stamp = self.life.offline_owner().output_stamp()?;
+            let age = self
+                .installed
+                .as_ref()
+                .unwrap()
+                .1
+                .stale_after_ns
+                .min(self.timing.mic_age_ns);
+            self.runtime_att = Some((stamp, Runtime::new(s.db, s.revision, age)?));
+        }
+        let (stamp, mut runtime) = self.runtime_att.take().unwrap();
+        let result = (|| {
+            runtime.check_deadline(now)?;
+            if self.life.offline_owner().output_stamp()? != stamp {
+                return Err(Fault::TxAuthority);
+            }
+            match runtime.phase {
+                AttPhase::Monitoring | AttPhase::Settling => {}
+                AttPhase::RequestReset => {
+                    if self
+                        .life
+                        .offline_tx_exchange(now, |n| n.runtime_gain_control(true))?
+                    {
+                        self.life.offline_runtime_gain_suspend(now)?;
+                        runtime.reset_issued()?;
+                    }
+                }
+                AttPhase::Resetting => {
+                    if self
+                        .life
+                        .offline_tx_exchange(now, |n| n.runtime_gain_reset_ready())?
+                    {
+                        runtime.reset_complete()?;
+                    }
+                }
+                AttPhase::RequestGain => {
+                    let serial = self
+                        .life
+                        .offline_owner()
+                        .request_runtime_attenuation(runtime.wanted, now)?;
+                    self.life.offline_runtime_gain_boundary(now, now)?;
+                    runtime.gain_requested(serial)?;
+                }
+                AttPhase::Applying => {
+                    if self
+                        .life
+                        .offline_owner()
+                        .runtime_attenuation_prepared(now)?
+                    {
+                        runtime.gain_applied(now)?;
+                        let floor = now.checked_add(SETTLE_NS).ok_or(Fault::FutureObservation)?;
+                        self.life.offline_runtime_gain_boundary(now, floor)?;
+                    }
+                }
+                AttPhase::Resume => {
+                    if self
+                        .life
+                        .offline_tx_exchange(now, |n| n.runtime_gain_control(false))?
+                    {
+                        self.life.offline_runtime_gain_resume(now)?;
+                        runtime.resumed(self.life.feedback_status().info_raw)?;
+                    }
+                }
+            }
+            self.life
+                .offline_owner()
+                .runtime_attenuation_progress(runtime.phase.label(), runtime.info);
+            Ok(())
+        })();
+        if self.life.status().phase == Phase::Active {
+            self.runtime_att = Some((stamp, runtime));
+        }
+        result
+    }
+    fn observe_runtime_attenuation(&mut self, now: u64) -> Result<(), Fault> {
+        let info = self.life.feedback_status().info_raw;
+        if let Some((_, r)) = self.runtime_att.as_mut() {
+            r.observe(info, now)?;
+            self.life
+                .offline_owner()
+                .runtime_attenuation_progress(r.phase.label(), r.info);
+        }
+        Ok(())
     }
     fn output_error_observed(
         &mut self,
@@ -1450,6 +1564,9 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 Err(TryRecvError::Empty) => break,
             }
         }
+        if let Err(fault) = self.service_runtime_attenuation(now) {
+            self.output_error(fault, now);
+        }
         if !self.feedback_closed {
             match self.feedback.try_recv() {
                 Ok(block) => {
@@ -1487,8 +1604,23 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                     }) {
                         Ok(true) => {}
                         Ok(false) => {
-                            if self.life.submit(&block, now).is_err() {
-                                self.counters.rejected += 1;
+                            let admission = if let Some((_, runtime)) = self.runtime_att.as_mut() {
+                                runtime.feedback(
+                                    block.acquisition_revision,
+                                    block.meta.observed_ns,
+                                    now,
+                                )
+                            } else {
+                                Ok(true)
+                            };
+                            match admission {
+                                Ok(true) => {
+                                    if self.life.submit(&block, now).is_err() {
+                                        self.counters.rejected += 1;
+                                    }
+                                }
+                                Ok(false) => self.counters.rejected += 1, // explicitly skipped old-gain/settling evidence
+                                Err(fault) => self.output_error(fault, now),
                             }
                         }
                         Err(fault) => self.output_error(fault, now),
@@ -1533,6 +1665,12 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             if !matches!(self.life.status().phase, Phase::AwaitingKey | Phase::Active) {
                 self.discard_local();
                 return self.finish_turn(worked);
+            }
+            if self.life.status().phase == Phase::Active {
+                if let Err(fault) = self.observe_runtime_attenuation(now) {
+                    self.output_error(fault, now);
+                    return self.finish_turn(worked);
+                }
             }
             if self.snapshot().output.is_none() {
                 // Retained mic stamps cannot stand in for current output

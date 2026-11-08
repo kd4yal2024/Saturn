@@ -36,6 +36,8 @@ pub(super) struct Rearm {
     auto_selected: bool,
     pub(super) auto_att: Option<super::auto_attenuation::Servo>,
     pub(super) held_key: Option<KeyReceipt>,
+    runtime_att_phase: Option<&'static str>,
+    runtime_att_info: Option<u32>,
 }
 impl Rearm {
     pub(super) fn installed_model(&self) -> Option<&RadioModel> {
@@ -59,6 +61,8 @@ impl Rearm {
         self.auto_att = None;
         self.auto_selected = false;
         self.held_key = None;
+        self.runtime_att_phase = None;
+        self.runtime_att_info = None;
     }
     fn consume_iq(&mut self, mut count: usize) {
         while count > 0 {
@@ -105,10 +109,14 @@ impl OwnerStopAdapter<'_> {
         }
         if let Some(a) = &self.rearm.auto_att {
             super::AutoAttStatus {
-                phase: a.phase.label(),
+                phase: self.rearm.runtime_att_phase.unwrap_or(a.phase.label()),
                 db: a.db,
                 applied_db: a.applied_db,
-                info: a.info,
+                info: if self.rearm.runtime_att_phase.is_some() {
+                    self.rearm.runtime_att_info
+                } else {
+                    a.info
+                },
                 revision: a.revision,
                 keyed: self.rearm.keyed,
             }
@@ -125,6 +133,68 @@ impl OwnerStopAdapter<'_> {
     }
     pub(crate) fn startup_leveling_active(&self) -> bool {
         self.rearm.held_key.is_some()
+    }
+    pub(crate) fn runtime_attenuation(&self) -> Option<super::AutoAttStatus> {
+        (self.rearm.keyed && self.rearm.held_key.is_none() && self.rearm.auto_att.is_some())
+            .then(|| self.auto_attenuation_status(false))
+    }
+    pub(crate) fn runtime_attenuation_progress(&mut self, phase: &'static str, info: Option<u32>) {
+        self.rearm.runtime_att_phase = Some(phase);
+        self.rearm.runtime_att_info = info;
+    }
+    pub(crate) fn request_runtime_attenuation(&mut self, db: u8, now: u64) -> Result<u64, Fault> {
+        if !self.rearm.keyed || self.rearm.held_key.is_some() || db > 31 {
+            return Err(Fault::InvalidConfig);
+        }
+        self.request_feedback_attenuation(db, now)
+    }
+    pub(crate) fn runtime_attenuation_prepared(&mut self, now: u64) -> Result<bool, Fault> {
+        let stamp = self.output_stamp()?;
+        self.validate_stamp(stamp)?;
+        let prepared = self
+            .feedback
+            .as_ref()
+            .ok_or(Fault::InvalidConfig)?
+            .0
+            .prepared(stamp)?;
+        if prepared {
+            self.rearm
+                .auto_att
+                .as_mut()
+                .ok_or(Fault::InvalidConfig)?
+                .applied(now);
+        }
+        Ok(prepared)
+    }
+    fn request_feedback_attenuation(&mut self, db: u8, now: u64) -> Result<u64, Fault> {
+        let mut scope = self.rearm.capture_scope.ok_or(Fault::InvalidConfig)?;
+        self.validate_stamp(scope.output)?;
+        if db > 31 || self.rearm.auto_att.is_none() {
+            return Err(Fault::InvalidConfig);
+        }
+        scope.attenuation_db = db;
+        let serial = self
+            .feedback
+            .as_ref()
+            .ok_or(Fault::InvalidConfig)?
+            .0
+            .request(Some(scope))?
+            .serial;
+        self.rearm
+            .auto_att
+            .as_mut()
+            .unwrap()
+            .requested(db, serial, now);
+        self.rearm.capture_scope = Some(scope);
+        // Ephemeral owner setting only. Never change RF drive or overwrite
+        // the operator's saved per-band manual attenuation/profile.
+        self.rearm
+            .model
+            .as_mut()
+            .ok_or(Fault::InvalidConfig)?
+            .desired
+            .pure_signal_attenuation_db = db;
+        Ok(serial)
     }
     pub(crate) fn auto_attenuation_fault(&self) -> Option<(Fault, super::AutoAttStatus, f64, f64)> {
         self.last_auto_att_fault
@@ -160,31 +230,7 @@ impl OwnerStopAdapter<'_> {
             .ok_or(Fault::InvalidConfig)?
             .observe(b, now)?;
         if let Some(db) = level {
-            let scope = crate::tx_thread::feedback_owner::Scope {
-                attenuation_db: db,
-                ..scope
-            };
-            let serial = self
-                .feedback
-                .as_ref()
-                .ok_or(Fault::InvalidConfig)?
-                .0
-                .request(Some(scope))?
-                .serial;
-            self.rearm
-                .auto_att
-                .as_mut()
-                .unwrap()
-                .requested(db, serial, now);
-            self.rearm.capture_scope = Some(scope);
-            // Private TX-owner snapshot drives P2 keepalive too. The saved
-            // manual preference in installed/global configuration is untouched.
-            self.rearm
-                .model
-                .as_mut()
-                .ok_or(Fault::InvalidConfig)?
-                .desired
-                .pure_signal_attenuation_db = db;
+            self.request_feedback_attenuation(db, now)?;
         }
         Ok(true)
     }

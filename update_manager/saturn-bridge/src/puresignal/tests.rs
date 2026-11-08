@@ -174,6 +174,28 @@ mod proposal_tests {
         }
     }
     #[test]
+    fn reviewed_wdsp210_status_does_not_bypass_sample_or_adc_overload() {
+        for backend in [Backend::P2, Backend::DirectXdma] {
+            for adc in [false, true] {
+                let (mut c, t) = draft(backend);
+                t.borrow_mut().wdsp210 = true;
+                t.borrow_mut().info[6] = 2;
+                let mut b = block(&c, 0, 1024, 0, 1);
+                if adc {
+                    b.meta.overload[0].as_mut().unwrap().end_count += 1;
+                    assert_eq!(c.submit(&b, 1), Err(Fault::AdcOverrange));
+                } else {
+                    b.rf[0] = 1.0;
+                    c.submit(&b, 1).unwrap();
+                    assert_eq!(c.pump(1), Err(Fault::SevereOverdrive));
+                }
+                assert_eq!(t.borrow().processed, 0);
+                assert!(c.status().fault.is_some());
+                assert!(!c.status().correction_applied_reported);
+            }
+        }
+    }
+    #[test]
     fn no_excitation_does_not_mean_transport_stale_and_bad_limits_are_rejected() {
         let (mut c, t) = draft(Backend::P2);
         let mut b = block(&c, 0, 1024, 0, 1);
@@ -212,9 +234,17 @@ struct Trace {
     processed: usize,
     info: [i32; 16],
     fail_reset: bool,
+    wdsp210: bool,
 }
 struct FakeNative(Rc<RefCell<Trace>>);
 impl NativePs for FakeNative {
+    fn status_contract(&self) -> native_status::NativeStatusContract {
+        if self.0.borrow().wdsp210 {
+            native_status::NativeStatusContract::ReviewedWdsp210
+        } else {
+            native_status::NativeStatusContract::LegacyFaultBits
+        }
+    }
     fn configure(&mut self, _: Config) -> Result<f64, Fault> {
         self.0.borrow_mut().events.push("configure");
         Ok(140.224e-9)
@@ -631,6 +661,100 @@ fn severe_overdrive_bitmask_fault_is_not_cleared_by_unkey_rekey() {
         c.on_tx_state(3, true, 3).unwrap();
         assert_eq!(c.status().state, State::Fault);
         assert_eq!(c.status().overdrive_evidence.unwrap().native_info[6], code);
+    }
+}
+
+#[test]
+fn reviewed_wdsp210_fit_status_keeps_tx_usable_and_accepts_later_correction() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        for code in [1, 2, 3] {
+            let (mut c, t) = setup(backend, 2);
+            t.borrow_mut().events.clear();
+            t.borrow_mut().wdsp210 = true;
+            t.borrow_mut().info[6] = code;
+            c.submit(&block(&c, 0, 1024, 0, 1), 1).unwrap();
+            assert_eq!(c.pump(1), Ok(1), "{backend:?} native status {code}");
+            assert_eq!(c.status().fault, None);
+            assert_eq!(
+                c.status().calibration_notice,
+                Some(if code & 2 != 0 {
+                    native_status::CalibrationNotice::CollectorReset
+                } else {
+                    native_status::CalibrationNotice::SolutionRejected
+                })
+            );
+            assert_eq!(c.status().state, State::Collecting);
+            assert!(c.raw_capture().is_some());
+            assert!(!t.borrow().events.contains(&"reset"));
+            t.borrow_mut().info[6] = 0;
+            t.borrow_mut().info[5] = 1;
+            t.borrow_mut().info[14] = 1;
+            c.submit(&block(&c, 1024, 1024, 1, 2), 2).unwrap();
+            assert_eq!(c.pump(2), Ok(1));
+            assert!(c.status().correction_applied_reported);
+        }
+    }
+}
+
+#[test]
+fn reviewed_wdsp210_unknown_status_bits_are_not_silently_accepted() {
+    for code in [-1, 4, 8, 10] {
+        let (mut c, t) = setup(Backend::DirectXdma, 2);
+        t.borrow_mut().wdsp210 = true;
+        t.borrow_mut().info[6] = code;
+        c.submit(&block(&c, 0, 1024, 0, 1), 1).unwrap();
+        assert_eq!(c.pump(1), Err(Fault::NativeUnverified));
+    }
+}
+
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+#[test]
+fn runtime_gain_settling_never_extends_the_original_feedback_watchdog() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        let (mut c, t) = setup(backend, 2);
+        t.borrow_mut().wdsp210 = true;
+        c.submit(&block(&c, 0, 1024, 0, 1), 1).unwrap();
+        c.pump(1).unwrap();
+        let fence = c.fence();
+        c.runtime_gain_suspend().unwrap();
+        c.runtime_gain_boundary(270_000_000).unwrap();
+        assert_eq!(c.fence(), fence);
+        assert_eq!(c.check_deadline(250_000_002), Err(Fault::Stale));
+        let delayed = block(&c, 0, 1024, 1, 240_000_000);
+        assert_eq!(c.submit(&delayed, 270_000_000), Err(Fault::Settling));
+        assert_eq!(c.status().fault, None);
+    }
+}
+
+#[cfg(feature = "offline-puresignal-owner-adapters")]
+#[test]
+fn runtime_gain_discards_old_partial_pairs_and_requires_a_new_correcting_fit() {
+    for backend in [Backend::P2, Backend::DirectXdma] {
+        let (mut c, t) = setup(backend, 4);
+        t.borrow_mut().wdsp210 = true;
+        t.borrow_mut().info[5] = 1;
+        t.borrow_mut().info[14] = 1;
+        c.submit(&block(&c, 0, 1024, 0, 1), 1).unwrap();
+        c.pump(1).unwrap();
+        assert!(c.status().correction_applied_reported);
+        c.submit(&block(&c, 1024, 512, 1, 2), 2).unwrap();
+        assert_eq!(c.pump(2), Ok(0));
+        c.runtime_gain_suspend().unwrap();
+        assert!(!c.status().correction_applied_reported);
+        c.runtime_gain_boundary(30_000_000).unwrap();
+        c.runtime_gain_resume().unwrap();
+        c.submit(&block(&c, 0, 512, 0, 31_000_000), 31_000_000)
+            .unwrap();
+        assert_eq!(c.pump(31_000_000), Ok(0));
+        c.submit(&block(&c, 512, 512, 1, 32_000_000), 32_000_000)
+            .unwrap();
+        assert_eq!(c.pump(32_000_000), Ok(1));
+        assert!(!c.status().correction_applied_reported);
+        t.borrow_mut().info[5] = 2;
+        c.submit(&block(&c, 1024, 1024, 2, 33_000_000), 33_000_000)
+            .unwrap();
+        c.pump(33_000_000).unwrap();
+        assert!(c.status().correction_applied_reported);
     }
 }
 #[test]

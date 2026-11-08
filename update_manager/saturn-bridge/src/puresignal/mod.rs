@@ -5,6 +5,7 @@ pub mod adapters;
 pub mod admission_proposal;
 pub mod controller;
 pub mod measurement;
+pub mod native_status;
 #[cfg(feature = "offline-puresignal-tx-lifecycle")]
 pub mod tx_lifecycle;
 

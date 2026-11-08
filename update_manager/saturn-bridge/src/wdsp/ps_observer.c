@@ -1,4 +1,4 @@
-/* Build-matched observation only. No radio access or WDSP state mutation.
+/* Build-matched observation and sole-owner, nonblocking PS control. No radio access.
  * build.rs rejects archives/headers other than the reviewed native builds.
  * The single TX/native owner must keep channel 1 alive during these calls.
  */
@@ -113,6 +113,45 @@ int saturn_try_shared_leveling_flags(int* flags) {
         (!!a->info[14] << 7);
     LeaveCriticalSection(&txa[1].calcc.cs_update);
     return 1;
+}
+
+/* Operational Auto ATT uses the same four control fields as SetPSControl.
+ * Never wait for the fitter, change MOX/drive, exchange DSP, or close a channel.
+ * Resume is conditional on the matching reset actually becoming quiescent. */
+static int saturn_runtime_ps_quiet(CALCC a, IQC iq) {
+    return !a->ctrl.reset && !a->ctrl.mancal && !a->ctrl.automode &&
+        !a->ctrl.turnon && !a->ctrl.calcinprogress && a->info[15] == 0 &&
+        !a->info[14] && !__atomic_load_n(&iq->run, __ATOMIC_SEQ_CST) &&
+        !__atomic_load_n(&iq->busy, __ATOMIC_SEQ_CST);
+}
+int saturn_try_shared_ps_runtime_control(int reset, int automatic) {
+    if ((reset != 0 && reset != 1) || (automatic != 0 && automatic != 1)) return -1;
+    if (pthread_mutex_trylock(&txa[1].calcc.cs_update)) return 0;
+    CALCC a = txa[1].calcc.p;
+    IQC iq = txa[1].iqc.p;
+    if (!a || !iq || a->rate != 192000) {
+        LeaveCriticalSection(&txa[1].calcc.cs_update); return -1;
+    }
+    if (!reset && !saturn_runtime_ps_quiet(a, iq)) {
+        LeaveCriticalSection(&txa[1].calcc.cs_update); return 0;
+    }
+    a->ctrl.reset = reset;
+    a->ctrl.mancal = !reset && !automatic;
+    a->ctrl.automode = !reset && automatic;
+    a->ctrl.turnon = 0;
+    LeaveCriticalSection(&txa[1].calcc.cs_update);
+    return 1;
+}
+int saturn_try_shared_ps_runtime_reset_ready(void) {
+    if (pthread_mutex_trylock(&txa[1].calcc.cs_update)) return 0;
+    CALCC a = txa[1].calcc.p;
+    IQC iq = txa[1].iqc.p;
+    if (!a || !iq || a->rate != 192000) {
+        LeaveCriticalSection(&txa[1].calcc.cs_update); return -1;
+    }
+    int quiet = saturn_runtime_ps_quiet(a, iq);
+    LeaveCriticalSection(&txa[1].calcc.cs_update);
+    return quiet;
 }
 
 _Static_assert(sizeof(txa[1].iqc.p->run) == sizeof(long), "ported IQC run width");

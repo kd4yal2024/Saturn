@@ -40,6 +40,8 @@ pub(crate) mod ps_owner_loop;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
 pub(crate) mod ps_owner_queue;
 #[cfg(feature = "offline-puresignal-owner-adapters")]
+mod ps_runtime_auto_att;
+#[cfg(feature = "offline-puresignal-owner-adapters")]
 mod satp_provenance;
 mod scheduler;
 

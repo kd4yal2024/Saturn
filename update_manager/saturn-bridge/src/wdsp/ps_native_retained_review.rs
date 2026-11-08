@@ -173,6 +173,78 @@ fn exercise(label: &str, peak: f64, rows: Option<&[[f64; 4]]>) {
 }
 
 #[test]
+#[ignore = "serial pinned WDSP curve-lifetime contract; synthetic input, no RF or hardware"]
+fn reviewed_wdsp_mox_only_retains_curve_and_cold_cleanup_discards_it() {
+    unsafe extern "C" {
+        fn fftw_set_timelimit(seconds: f64);
+    }
+    unsafe { fftw_set_timelimit(0.01) };
+    let model = RadioModel::new(6, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+    let mut native = FullNative::matched(&model).unwrap();
+    let peak = 0.68292;
+    native.configure(config(peak)).unwrap();
+    native.mox(true); // Initial Single calibration request through current port.
+    let mut random = 0x53460004u32;
+    let mut fitted = false;
+    for _ in 0..512 {
+        let mut tx = [0.; 2048];
+        let mut rf = [0.; 2048];
+        for n in 0..1024 {
+            let mut uniform = || {
+                random = random.wrapping_mul(1664525).wrapping_add(1013904223);
+                f64::from(random) / 4294967296.
+            };
+            let radius = 0.001 + 0.999 * uniform();
+            let phase = std::f64::consts::TAU * uniform();
+            let received = 0.5 * radius * (1. - 0.25 * radius * radius);
+            let shifted = phase + 0.18 * radius * radius;
+            tx[2 * n] = peak * radius * phase.cos();
+            tx[2 * n + 1] = peak * radius * phase.sin();
+            rf[2 * n] = received * shifted.cos();
+            rf[2 * n + 1] = received * shifted.sin();
+        }
+        native.process(&mut tx, &mut rf).unwrap();
+        native.render(&[0.; 512]).unwrap();
+        let info = native.info();
+        if info[5] > 0 && info[14] == 1 && info[15] == 8 && (native.flags)() == 1 {
+            fitted = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        fitted,
+        "positive control must reach Single LSTAYON with real IQC"
+    );
+    let count = native.info()[5];
+    // Native contract only: deliberately bypass the port's per-key mode
+    // request. This does NOT assert that production warm release exists.
+    for keyed in [false, true] {
+        unsafe {
+            SetPSMox(WDSP_TX_CHANNEL, i32::from(keyed));
+        }
+        for _ in 0..8 {
+            native.process(&mut [0.; 2048], &mut [0.; 2048]).unwrap();
+            native.render(&[0.; 512]).unwrap();
+            let info = native.info();
+            assert_eq!((info[5], info[14], info[15]), (count, 1, 8));
+            assert_eq!((native.flags)(), 1, "loaded IQC without a pending swap");
+        }
+    }
+    let before = native.audit().recreations;
+    native.begin_cleanup().unwrap();
+    let end = Instant::now() + Duration::from_secs(5);
+    while native.cleanup_step().unwrap() != CleanupProgress::Complete {
+        assert!(Instant::now() < end);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(native.audit().recreations, before + 1);
+    assert_eq!(native.info()[14], 0);
+    assert_eq!((native.flags)(), 0);
+    eprintln!("curve_lifetime native_mox_only_retained=true cold_cleanup_recreated=true production_warm_release=false synthetic=true physical_rf=false");
+}
+
+#[test]
 #[ignore = "explicit pinned retained capture replay and synthetic positive control; no devices, sockets or RF"]
 fn retained_feedback_collection_scaling_real_native() {
     unsafe extern "C" {
