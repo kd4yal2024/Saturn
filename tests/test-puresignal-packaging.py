@@ -21,6 +21,13 @@ class Packaging(unittest.TestCase):
         for key in profile.REQUIRED:
             d=self.environment();del d[key]
             with self.subTest(key=key),self.assertRaises(ValueError):profile.compose(d,'/var/lib/ps')
+    def test_satp_settings_are_owned_by_the_satp_helper_not_the_ps_environment(self):
+        d=self.environment();d.update(SATURN_BRIDGE_SATP_ENABLED='1',SATURN_BRIDGE_SATP_HOST='127.0.0.1',SATURN_BRIDGE_SATP_PORT='50100',SATURN_BRIDGE_SATP_ALLOWED_SOURCE_IP='192.168.0.108',SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES='512',SATURN_BRIDGE_SATP_JITTER_CAPACITY_FRAMES='4096',SATURN_BRIDGE_SATP_AUDIO_LOSS_TIMEOUT_MS='250',SATURN_BRIDGE_TX_AUDIO_SOURCE='tci')
+        env=profile.compose(d,'/var/lib/ps')['puresignal.env']
+        self.assertNotIn('SATURN_BRIDGE_SATP_',env)
+        self.assertNotIn('SATURN_BRIDGE_TX_AUDIO_SOURCE=',env)
+        self.assertIn('SATURN_BRIDGE_TX_OWNER="shared"',env)
+        self.assertIn('SATURN_REMOTE_TX_RF_ENABLED="1"',env)
     def test_injection_and_volatile_paths_rejected(self):
         for val in ['1\nExecStart=/bad','"bad','x%h','x\\n','/run/temporary']:
             d=self.environment();d['SATURN_PS_MEASUREMENT_DIR']=val

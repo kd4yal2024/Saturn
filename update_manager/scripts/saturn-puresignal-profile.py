@@ -11,10 +11,7 @@ from pathlib import Path
 
 RADIO_KEYS = {
     'SATURN_BRIDGE_TX_OWNER', 'SATURN_REMOTE_TX_RF_ENABLED',
-    'SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED', 'SATURN_BRIDGE_TX_AUDIO_SOURCE',
-    'SATURN_BRIDGE_SATP_ENABLED', 'SATURN_BRIDGE_SATP_HOST',
-    'SATURN_BRIDGE_SATP_PORT', 'SATURN_BRIDGE_SATP_JITTER_TARGET_FRAMES',
-    'SATURN_BRIDGE_SATP_JITTER_CAPACITY_FRAMES', 'SATURN_BRIDGE_SATP_AUDIO_LOSS_TIMEOUT_MS',
+    'SATURN_BRIDGE_TX_OPUS_DECODE_ENABLED',
     'SATURN_BRIDGE_DDC0_FREQUENCY_HZ',
 }
 REQUIRED = {
@@ -34,6 +31,8 @@ def compose(environment, state_root):
     state = Path(state_root)
     if not state.is_absolute() or '..' in state.parts or str(state).startswith('/run/'):
         raise ValueError('State root must be persistent and absolute')
+    # satp.conf owns transport and default source settings. EnvironmentFile
+    # assignments would override that drop-in even after Settings saved it.
     result = {k: v for k, v in environment.items() if k.startswith('SATURN_PS_') or k in RADIO_KEYS}
     if REQUIRED - result.keys():
         raise ValueError('Missing native/lifecycle settings: ' + ', '.join(sorted(REQUIRED - result.keys())))
