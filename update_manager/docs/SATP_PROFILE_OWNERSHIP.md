@@ -32,3 +32,26 @@ sender again, verify packet arrival and native readiness, then select Native
 SATP. Binding a socket and restarting successfully do not establish microphone
 audio delivery or RF output. No firmware, driver, PA gain, attenuation or TX
 authority change is part of this repair.
+
+## Shared runtime pairing dispatch
+
+The shared acquisition loop also needs to service the operator's `pair` and
+`renew` commands. Previously they reached the receive-control mailbox but fell
+through its unsupported-control branch; fixing the listener alone therefore
+could not produce a key. The shared and Legacy runtimes now call the same
+operator-checked pairing/renewal handler. Source selection stays on the shared
+owner's ordered configuration path. Pairing neither keys nor arms TX, and no
+Legacy TX worker is introduced.
+
+The combined native runtime replay uses actual control sockets and authenticated
+UDP on both backend fixtures. It checks a key response, lease extension, native
+readiness and source selection, browser-source return and disconnect revocation.
+A second viewer socket sends pair/renew requests followed by a ping; its pong
+confirms processing without receiving a key or changing the operator's pairing
+generation. The replay sends no TX request and keeps native output idle.
+
+The accompanying toolbar repair makes Tune Peak's pressed state a real toggle.
+Enabling it keeps the existing tune-to-peak action. A second click disables the
+assist, clears its marker/readout, updates the Settings checkbox, and persists
+the off choice without another VFO movement. Tests exercise the actual shipped
+click handler with and without a usable peak.

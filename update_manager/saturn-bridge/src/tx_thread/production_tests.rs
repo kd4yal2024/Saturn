@@ -28,6 +28,8 @@ pub(crate) struct Client {
     pub(crate) native_calibrations: Vec<i32>,
     pub(crate) two_tone_results: Vec<String>,
     pub(crate) hardware_ptt: Vec<(bool, u64)>,
+    pub(crate) satp_keys: Vec<String>,
+    pub(crate) satp_errors: Vec<String>,
 }
 impl Client {
     pub(crate) fn open(address: std::net::SocketAddr) -> Self {
@@ -62,6 +64,8 @@ impl Client {
             native_calibrations: Vec::new(),
             two_tone_results: Vec::new(),
             hardware_ptt: Vec::new(),
+            satp_keys: Vec::new(),
+            satp_errors: Vec::new(),
         };
         if control_only {
             client.text("session_open:production-fixture,operator;session_lane:production-fixture,control;tx_codec_caps:pcm;");
@@ -77,6 +81,16 @@ impl Client {
     pub(crate) fn drain(&mut self) {
         for _ in 0..128 {
             match self.ws.read() {
+                Ok(Message::Text(text)) if text.starts_with("saturn_satp_key:") => {
+                    self.satp_keys.push(
+                        text.trim_end_matches(';')
+                            .trim_start_matches("saturn_satp_key:")
+                            .to_owned(),
+                    );
+                }
+                Ok(Message::Text(text)) if text.starts_with("saturn_satp_error:") => {
+                    self.satp_errors.push(text.to_string());
+                }
                 Ok(Message::Text(text)) if text.starts_with("saturn_ptt:") => {
                     let args: Vec<_> = text.trim_end_matches(';').split(',').collect();
                     self.hardware_ptt

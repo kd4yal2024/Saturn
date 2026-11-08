@@ -217,17 +217,19 @@ impl SatpControl {
     }
 }
 
-/// Called by either backend with the model locked; source changes are acknowledged
-/// only by the TX worker after it has flushed/reconfigured the idle pipeline.
-pub fn handle(
+/// Pairing and lease renewal do not select a TX source or grant output authority.
+/// Both runtime owners use this path; secrets are returned only to the operator.
+pub(crate) fn handle_pairing(
     action: &str,
     owner: u64,
     model: &mut crate::radio_model::RadioModel,
     tci: &crate::tci::TciFrontend,
-    tx: &std::sync::mpsc::Sender<crate::tx_thread::TxCommand>,
-) {
+) -> bool {
+    if !matches!(action, "pair" | "renew") {
+        return false;
+    }
     if !tci.is_operator(owner) {
-        return;
+        return true;
     }
     let now = Instant::now();
     let error = if action == "renew" {
@@ -241,7 +243,7 @@ pub fn handle(
         .can_configure(model.desired.tx_phase, model.desired.tx_enabled)
     {
         Some("rx_required")
-    } else if action == "pair" {
+    } else {
         if !model.satp.enabled {
             Some("receiver_disabled")
         } else {
@@ -253,6 +255,32 @@ pub fn handle(
                 Err(_) => Some("pair_failed"),
             }
         }
+    };
+    if let Some(error) = error {
+        tci.publish_satp_reply(owner, format!("saturn_satp_error:{error};"));
+    }
+    tci.publish_satp_reply(owner, model.satp.message(owner, now));
+    true
+}
+
+/// Legacy source changes are acknowledged by its TX worker. The shared owner
+/// continues to handle source selection as an ordered settings transaction.
+pub fn handle(
+    action: &str,
+    owner: u64,
+    model: &mut crate::radio_model::RadioModel,
+    tci: &crate::tci::TciFrontend,
+    tx: &std::sync::mpsc::Sender<crate::tx_thread::TxCommand>,
+) {
+    if handle_pairing(action, owner, model, tci) || !tci.is_operator(owner) {
+        return;
+    }
+    let now = Instant::now();
+    let error = if !model
+        .satp
+        .can_configure(model.desired.tx_phase, model.desired.tx_enabled)
+    {
+        Some("rx_required")
     } else if let Some(source) = TxAudioSource::parse(action) {
         if source == TxAudioSource::Satp
             && (!model.satp.paired(owner, now) || !model.satp.ready(now))

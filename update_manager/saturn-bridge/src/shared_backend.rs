@@ -665,6 +665,9 @@ fn receive_control(
     use TciCommand::*;
     let mut m = model.lock_unpoisoned();
     match command {
+        SatpControl { client_id, action } if matches!(action.as_str(), "pair" | "renew") => {
+            crate::satp_control::handle_pairing(&action, client_id, &mut m, front);
+        }
         RequestRadioState { client_id } => front.publish_standard_radio_state_to(client_id, &m),
         SaturnPing {
             client_id,

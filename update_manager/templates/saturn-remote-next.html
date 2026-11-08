@@ -8279,7 +8279,7 @@
               <span class="display-pill mono" id="zoom-toolbar-readout">ZOOM 1.0x</span>
               <button class="btn eq-enable-btn" id="spectrum-average-toolbar-btn" type="button" title="Cycle spectrum averaging">AVG 1</button>
               <button class="btn eq-enable-btn" id="spectrum-peak-toolbar-btn" type="button" aria-pressed="false" title="Toggle spectrum peak hold">PEAK OFF</button>
-              <button class="btn eq-enable-btn" id="spectrum-tune-peak-btn" type="button" aria-pressed="false" title="Tune the strongest signal inside the RX passband">Tune Peak</button>
+              <button class="btn eq-enable-btn" id="spectrum-tune-peak-btn" type="button" aria-pressed="false" title="Enable and tune to the strongest RX peak; click again to turn peak tuning assist off">Tune Peak</button>
               <span class="display-pill mono" id="peak-tune-readout" hidden>PEAK --</span>
               <button class="btn eq-enable-btn" id="display-center-btn" type="button" title="Reset the display span">Center</button>
               <button class="btn eq-enable-btn compact-control" id="wake-lock-btn" type="button">Stay Awake</button>
@@ -23013,13 +23013,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         checkbox.dispatchEvent(new Event("change", { bubbles: true }));
       });
       $("spectrum-tune-peak-btn").addEventListener("click", () => {
-        if (!state.peakTuneAssistEnabled) {
-          state.peakTuneAssistEnabled = true;
-          $("display-peak-tune-assist").checked = true;
-        }
-        const peak = updatePeakTuneAssist();
+        state.peakTuneAssistEnabled = !state.peakTuneAssistEnabled;
+        $("display-peak-tune-assist").checked = state.peakTuneAssistEnabled;
+        let peak = null;
+        if (state.peakTuneAssistEnabled) peak = updatePeakTuneAssist();
+        else clearPeakTuneAssist();
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
+        if (!state.peakTuneAssistEnabled) {
+          updateUi();
+          return;
+        }
         if (!peak) {
           logEvent("Peak tuning assist: no usable peak inside the RX passband");
           updateUi();

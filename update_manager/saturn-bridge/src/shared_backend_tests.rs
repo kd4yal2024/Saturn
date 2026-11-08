@@ -22,6 +22,8 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     thread,
 };
+#[path = "shared_backend_satp_tests.rs"]
+mod satp_runtime;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Case {
@@ -46,6 +48,7 @@ enum Case {
     MicrophoneBypass,
     AcquisitionFailure,
     SatpBindFailure,
+    SatpPairing,
     AttachmentFailure,
     RestoreFailure,
     MeasurementClient,
@@ -100,6 +103,7 @@ struct Io {
     direct: bool,
     case: Case,
     address: std::net::SocketAddr,
+    satp_address: std::net::SocketAddr,
     perf_path: std::path::PathBuf,
     p2: Option<Arc<P2Fixture>>,
     normal_p2: Option<UdpSocket>,
@@ -258,6 +262,7 @@ impl RuntimeIo for Io {
             self.case,
         );
         let drop_feedback = self.auto_drop_feedback.clone();
+        let satp_address = self.satp_address;
         self.driver = Some(thread::spawn(move || {
             struct StopOnExit(Arc<AtomicBool>);
             impl Drop for StopOnExit {
@@ -280,6 +285,19 @@ impl RuntimeIo for Io {
             let mut wave = Wave::new();
             let mut next_mic = Instant::now();
             let mut next_feedback = Instant::now();
+            if case == Case::SatpPairing {
+                while !ingress.startup_ready() {
+                    assert!(Instant::now() < end, "SATP runtime startup timeout");
+                    thread::sleep(Duration::from_millis(1));
+                }
+                satp_runtime::client(address, satp_address, &state_model, &ingress);
+                stop.store(true, Ordering::Release);
+                while !joined.load(Ordering::Acquire) {
+                    assert!(Instant::now() < end, "SATP runtime shutdown timeout");
+                    thread::sleep(Duration::from_millis(1));
+                }
+                return 0;
+            }
             if case.diagnostic() {
                 while !ingress.startup_ready() || !dma_burst_complete.load(Ordering::Acquire) {
                     assert!(Instant::now() < end, "diagnostic startup timeout");
@@ -1397,14 +1415,21 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         tci_bind_addr: address,
         ddc0_frequency_hz: 7_200_000,
         remote_tx_rf_enabled: true,
-        satp_enabled: case == Case::SatpBindFailure,
+        satp_enabled: matches!(case, Case::SatpBindFailure | Case::SatpPairing),
         satp_bind_addr: occupied.local_addr().unwrap(),
         ..BridgeConfig::default()
+    };
+    let _occupied = if case == Case::SatpPairing {
+        drop(occupied);
+        None
+    } else {
+        Some(occupied)
     };
     let mut io = Io {
         direct,
         case,
         address,
+        satp_address: config.satp_bind_addr,
         perf_path: std::path::PathBuf::new(),
         p2: None,
         normal_p2: None,
@@ -1457,6 +1482,15 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         io.expected_rx = Some(settings);
     }
     let mut selected_options = options();
+    let previous_satp_status = std::env::var_os("SATURN_BRIDGE_SATP_STATUS_PATH");
+    if case == Case::SatpPairing {
+        unsafe {
+            std::env::set_var(
+                "SATURN_BRIDGE_SATP_STATUS_PATH",
+                directory.join("satp-status.json"),
+            );
+        }
+    }
     if std::env::var("SATURN_PS_GENERATED_OPERATIONAL").as_deref() == Ok("1") {
         selected_options.max_watts = 100;
         selected_options.timing.tx_duration_ns = 0;
@@ -1503,6 +1537,15 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         persistent.then(|| store.clone()),
     );
     assert!(io.joined.load(Ordering::Acquire));
+    if case == Case::SatpPairing {
+        unsafe {
+            if let Some(old) = previous_satp_status {
+                std::env::set_var("SATURN_BRIDGE_SATP_STATUS_PATH", old);
+            } else {
+                std::env::remove_var("SATURN_BRIDGE_SATP_STATUS_PATH");
+            }
+        }
+    }
     let corrected = io.driver.take().unwrap().join().unwrap();
     if persistent {
         let restored = store.load().unwrap().unwrap().fields;
@@ -1564,6 +1607,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::BaselineTwoTone
                 | Case::NativeKeepaliveGap
                 | Case::ReceiveMeter
+                | Case::SatpPairing
                 | Case::BandRecall
                 | Case::FaultedReceiveTune
                 | Case::ReceiveSpectrum
@@ -1603,6 +1647,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::NativeKeepaliveGap
                 | Case::NativeKeepaliveMissing
                 | Case::ReceiveMeter
+                | Case::SatpPairing
                 | Case::BandRecall
                 | Case::FaultedReceiveTune
                 | Case::ReceiveSpectrum
