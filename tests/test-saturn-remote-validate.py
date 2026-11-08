@@ -196,7 +196,11 @@ def evaluate(expr):
         return json.dumps({"active": not SC.get("guard_inactive")})
     if "document.readyState" in expr:
         if SC.get("blank_race") and not st["loaded"]:
-            return "undefined"   # the initial about:blank document: complete, and of course without a validation hook
+            # Honor the production expression: about:blank is complete but its
+            # protocol excludes it. Returning undefined unconditionally invents
+            # a result that expression cannot produce and races response events.
+            put("blank_probe.json", {"guarded": "location.protocol !== 'about:'" in expr})
+            return "loading" if "location.protocol !== 'about:'" in expr else "undefined"
         return ("undefined" if SC.get("legacy") else "object") if st["loaded"] else "loading"
     if "saturnValidation.start" in expr or "if (!b) return JSON.stringify" in expr:
         return start()
@@ -217,6 +221,11 @@ def navigate(url):
     else:
         finish_load(status)
 def finish_load(status):
+    if SC.get("blank_race"):
+        st["pending_document_status"] = status
+        return
+    complete_load(status)
+def complete_load(status):
     out({"method": "Network.responseReceived", "params": {"type": "Document", "response": {"status": status, "url": "https://127.0.0.1/remote-next"}}})
     if SC.get("exception_on_load"):
         out({"method": "Runtime.exceptionThrown", "params": {"exceptionDetails": {"text": "Uncaught", "exception": {"description": "TypeError: x is not a function"}}}})
@@ -265,6 +274,11 @@ def handle(message):
         return finish_load(SC.get("doc_status", 200) if ok else 401)
     if method == "Runtime.evaluate":
         value = evaluate(params["expression"])
+        if "document.readyState" in params["expression"] and "pending_document_status" in st:
+            # The old document's evaluation completes before navigation, while
+            # its result reaches the client after the new response event. No
+            # sleeps: always exercise the interleaving that exposed the fake.
+            complete_load(st.pop("pending_document_status"))
         return reply({"result": {"type": "string", "value": value}})
     if method == "Browser.close":
         reply()
@@ -702,6 +716,7 @@ class SuccessTests(RigCase):
         code, ready = rig.wait_ready()
         self.assertEqual((code, ready["state"]), (0, "ready"), ready)
         self.assertEqual(rig.status()["driver"], "native", "about:blank was taken for a legacy page")
+        self.assertEqual(rig.read_world("blank_probe.json"), {"guarded": True})
         rig.stop(); rig.finish()
 
     def test_a_release_page_without_the_validation_hook_is_driven_through_go_live(self):
