@@ -50,6 +50,15 @@ A second viewer socket sends pair/renew requests followed by a ping; its pong
 confirms processing without receiving a key or changing the operator's pairing
 generation. The replay sends no TX request and keeps native output idle.
 
+The runtime replay also holds the acquisition model while requesting a source
+change. It requires an explicit pre-queue `CleanupPending` rejection, verifies
+that RX and the previous source remain intact, then issues a fresh wire request
+after releasing the model. Its bounded client handles only that pre-queue
+response; queued failures, changed stop generations and other rejection reasons
+fail immediately. The four-second deadline is unchanged. This exercises the
+existing settings API's backpressure without changing production admission or
+silently renewing an old command's authority.
+
 The accompanying toolbar repair makes Tune Peak's pressed state a real toggle.
 Enabling it keeps the existing tune-to-peak action. A second click disables the
 assist, clears its marker/readout, updates the Settings checkbox, and persists

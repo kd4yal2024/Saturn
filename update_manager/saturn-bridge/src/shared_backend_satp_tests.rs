@@ -4,12 +4,59 @@ use crate::tx_audio::TxAudioSource;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
+#[track_caller]
 fn wait(mut ready: impl FnMut() -> bool) {
     let end = Instant::now() + Duration::from_secs(4);
     while !ready() {
         assert!(Instant::now() < end, "SATP control/receiver deadline");
         thread::sleep(Duration::from_millis(1));
     }
+}
+
+fn select_source(
+    c: &mut Client,
+    model: &Arc<Mutex<RadioModel>>,
+    ingress: &SharedIngress,
+    source: TxAudioSource,
+) {
+    let action = if source == TxAudioSource::Satp {
+        "satp"
+    } else {
+        "tci"
+    };
+    let command = format!("saturn_satp_control:{action};");
+    let stop_id = ingress.lifecycle_status().unwrap().stop_id;
+    let mut first_reply = c.transactions.len();
+    c.text(&command);
+    wait(|| {
+        c.drain();
+        assert!(
+            c.satp_errors.is_empty(),
+            "SATP source errors: {:?}",
+            c.satp_errors
+        );
+        let replies = &c.transactions[first_reply..];
+        if let Some(rejected) = replies.iter().find(|r| r.contains(",rejected,")) {
+            // A busy model can reject BEFORE queuing. Issue a new wire request
+            // only for this explicit response, while the same stopped owner
+            // remains available. Never restamp or retry queued/stale work.
+            assert!(
+                rejected.ends_with(",rejected,CleanupPending,0;"),
+                "SATP source transaction rejected: {rejected}"
+            );
+            assert!(!replies.iter().any(|r| r.contains(",queued,")));
+            let status = ingress.lifecycle_status().unwrap();
+            assert_eq!(status.phase, Phase::ReadyOff);
+            assert_eq!(status.stop_id, stop_id);
+            assert!(!model.lock_unpoisoned().desired.tx_enabled);
+            first_reply = c.transactions.len();
+            c.text(&command);
+            return false;
+        }
+        model.lock_unpoisoned().satp.source == source
+            && ingress.startup_ready()
+            && replies.iter().any(|r| r.contains(",applied,"))
+    });
 }
 
 pub(super) fn client(
@@ -119,28 +166,30 @@ pub(super) fn client(
         c.drain();
         model.lock_unpoisoned().satp.ready(Instant::now())
     });
+    // Deterministically exercise contention with the acquisition model. The
+    // pre-queue rejection must reach the client, leave RX/source intact, and
+    // permit a genuinely new settings request after the lock is released.
+    let first_reply = c.transactions.len();
+    let guard = model.lock_unpoisoned();
     c.text("saturn_satp_control:satp;");
     wait(|| {
         c.drain();
-        model.lock_unpoisoned().satp.source == TxAudioSource::Satp
-            && ingress.startup_ready()
-            && c.transactions.iter().any(|r| r.contains(",applied,"))
+        c.transactions[first_reply..]
+            .iter()
+            .any(|r| r.ends_with(",rejected,CleanupPending,0;"))
     });
+    assert!(!c.transactions[first_reply..]
+        .iter()
+        .any(|r| r.contains(",queued,")));
+    assert_eq!(guard.satp.source, TxAudioSource::Tci);
+    assert!(!guard.desired.tx_enabled);
+    drop(guard);
+    select_source(&mut c, model, ingress, TxAudioSource::Satp);
     assert!(c.satp_errors.is_empty());
     assert_eq!(ingress.lifecycle_status().unwrap().phase, Phase::ReadyOff);
     assert!(!model.lock_unpoisoned().desired.tx_enabled);
 
-    c.text("saturn_satp_control:tci;");
-    wait(|| {
-        c.drain();
-        model.lock_unpoisoned().satp.source == TxAudioSource::Tci
-            && ingress.startup_ready()
-            && c.transactions
-                .iter()
-                .filter(|r| r.contains(",applied,"))
-                .count()
-                >= 2
-    });
+    select_source(&mut c, model, ingress, TxAudioSource::Tci);
     drop(audio);
     drop(c);
     wait(|| !model.lock_unpoisoned().satp.live(Instant::now()));
