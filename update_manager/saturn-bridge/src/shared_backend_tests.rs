@@ -32,6 +32,7 @@ enum Case {
     NativeKeepaliveMissing,
     AutoCorrection,
     AutoAttSingle,
+    AutoAttLimit,
     AutoAttRelease,
     AutoAttMissing,
     AutoAttReconfigure,
@@ -63,6 +64,7 @@ impl Case {
             self,
             Self::AutoCorrection
                 | Self::AutoAttSingle
+                | Self::AutoAttLimit
                 | Self::AutoAttRelease
                 | Self::AutoAttMissing
                 | Self::AutoAttReconfigure
@@ -456,10 +458,14 @@ impl RuntimeIo for Io {
                         }
                         if status.phase == Phase::Active {
                             assert!(ingress.leveling_verified.load(Ordering::Acquire) > 0);
-                            assert!(
-                                scope.attenuation_db < 31,
-                                "servo must actually adjust, not pass vacuously at its start value"
-                            );
+                            if case == Case::AutoAttLimit {
+                                let att = ingress.auto_leveling_snapshot().unwrap();
+                                assert_eq!(scope.attenuation_db, 31);
+                                assert_eq!(att.phase, "limited");
+                                assert!(att.info.is_some_and(|level| level > 165));
+                            } else {
+                                assert!(scope.attenuation_db < 31, "servo must actually adjust");
+                            }
                             assert!(link.prepared(scope.output).unwrap());
                         }
                     }
@@ -1043,6 +1049,7 @@ impl RuntimeIo for Io {
                                     | Case::MicrophoneBypass
                                     | Case::AutoCorrection
                                     | Case::AutoAttSingle
+                                    | Case::AutoAttLimit
                                     | Case::AutoSustained
                             )
                         {
@@ -1130,6 +1137,8 @@ impl RuntimeIo for Io {
                                     wave.attenuation(scope.attenuation_db);
                                     if case == Case::AutoAttRange {
                                         wave.amplify_feedback(1000.);
+                                    } else if case == Case::AutoAttLimit {
+                                        wave.amplify_feedback(18.);
                                     }
                                 }
                             }
@@ -1175,6 +1184,7 @@ impl RuntimeIo for Io {
                         | Case::MicrophoneBypass
                         | Case::AutoCorrection
                         | Case::AutoAttSingle
+                        | Case::AutoAttLimit
                         | Case::AutoSustained
                 ) {
                     2
@@ -1356,6 +1366,8 @@ impl RuntimeIo for Io {
                         self.wave.attenuation(scope.attenuation_db);
                         if self.case == Case::AutoAttRange {
                             self.wave.amplify_feedback(1000.);
+                        } else if self.case == Case::AutoAttLimit {
+                            self.wave.amplify_feedback(18.);
                         }
                     }
                 }
@@ -1482,6 +1494,15 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         io.expected_rx = Some(settings);
     }
     let mut selected_options = options();
+    if case == Case::AutoAttLimit {
+        // Same host component margin as the reported G2 run, not a relaxed
+        // full-scale fixture guard. Native fitting must pass at this margin.
+        selected_options
+            .operational_policy
+            .as_mut()
+            .unwrap()
+            .component_limit = 0.95;
+    }
     let previous_satp_status = std::env::var_os("SATURN_BRIDGE_SATP_STATUS_PATH");
     if case == Case::SatpPairing {
         unsafe {
@@ -1600,6 +1621,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::MicrophoneBypass
                 | Case::AutoCorrection
                 | Case::AutoAttSingle
+                | Case::AutoAttLimit
                 | Case::AutoAttRelease
                 | Case::AutoAttReconfigure
                 | Case::AutoAttDisconnect
@@ -2129,4 +2151,12 @@ fn actual_run_inner_band_recall_80m_40m_roundtrip_both_backends() {
 #[test]
 fn actual_run_inner_faulted_receive_tuning_programs_ddc6() {
     exercise(true, Case::FaultedReceiveTune);
+}
+
+#[test]
+#[ignore = "serial matched WDSP; real orchestration, acquisition and TX adapters; file/loopback only"]
+fn actual_run_inner_max_attenuation_unclipped_feedback_fits_and_rearms() {
+    for direct in [false, true] {
+        exercise(direct, Case::AutoAttLimit);
+    }
 }

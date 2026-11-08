@@ -1,6 +1,7 @@
 //! Startup level servo; no RF writes, DSP calls, allocation or clear-overload claims.
 //! Physical key precedes leveling; the key receipt is held so native fitting/IQC
-//! remain disabled. Once stable, gain is held until the next fresh TX action.
+//! remain disabled. Once stable or limited without a rail/validity fault,
+//! normal native admission starts and gain is held for this TX action.
 use saturn_bridge::puresignal::{Fault, PairBlock};
 
 pub(super) const START_DB: u8 = 31;
@@ -15,6 +16,9 @@ pub(crate) enum Phase {
     Settling,
     Waiting,
     Stable,
+    /// Startup ratio above target at maximum attenuation; not a native fit
+    /// result or a clipping measurement. Normal controller admission still runs.
+    Limited,
 }
 impl Phase {
     pub(crate) fn label(self) -> &'static str {
@@ -23,6 +27,7 @@ impl Phase {
             Self::Settling => "settling",
             Self::Waiting => "leveling",
             Self::Stable => "stable",
+            Self::Limited => "limited",
         }
     }
 }
@@ -49,6 +54,7 @@ pub(super) struct Servo {
     rf_energy: f64,
     active_pairs: usize,
     stable_windows: u8,
+    limited_windows: u8,
     steps: u8,
 }
 impl Servo {
@@ -85,6 +91,7 @@ impl Servo {
             rf_energy: 0.,
             active_pairs: 0,
             stable_windows: 0,
+            limited_windows: 0,
             steps: 0,
         })
     }
@@ -100,6 +107,8 @@ impl Servo {
         self.applied = now;
         self.next_pair = None;
         self.next_sequence = None;
+        self.stable_windows = 0;
+        self.limited_windows = 0;
         self.reset_window();
     }
     pub(super) fn applied(&mut self, now: u64) {
@@ -192,6 +201,7 @@ impl Servo {
                 return Err(Fault::SevereOverdrive);
             }
             self.stable_windows = 0;
+            self.limited_windows = 0;
             self.steps = self.steps.saturating_add(1);
             if self.steps > MAX_STEPS {
                 return Err(Fault::FeedbackLevel);
@@ -228,7 +238,8 @@ impl Servo {
         self.info = Some(info);
         self.reset_window();
         if (140..=165).contains(&info) {
-            self.stable_windows += 1;
+            self.limited_windows = 0;
+            self.stable_windows = self.stable_windows.saturating_add(1);
             if self.stable_windows >= 2 {
                 self.phase = Phase::Stable;
                 self.ready_ns = Some(now)
@@ -236,6 +247,20 @@ impl Servo {
             return Ok(None);
         }
         self.stable_windows = 0;
+        // The startup RMS ratio is not WDSP's extrapolated info[4]. Running
+        // out of actuator range cannot establish clipping. Keep maximum ATT,
+        // require two valid windows, and let the normal controller/native fit
+        // evaluate the feedback. All timestamp, continuity, overload, finite
+        // and component-rail checks above remain prerequisites on every block.
+        if self.db == 31 && info > 165 {
+            self.limited_windows = self.limited_windows.saturating_add(1);
+            if self.limited_windows >= 2 {
+                self.phase = Phase::Limited;
+                self.ready_ns = Some(now);
+            }
+            return Ok(None);
+        }
+        self.limited_windows = 0;
         self.steps = self.steps.saturating_add(1);
         if self.steps > MAX_STEPS {
             return Err(Fault::FeedbackLevel);
@@ -358,6 +383,36 @@ mod tests {
         let mut b = block(1, 0, 1, 0.1);
         b.tx[0] = 1.;
         assert_eq!(s.observe(&b, 1), Err(Fault::SevereOverdrive));
+    }
+    #[test]
+    fn unclipped_258_estimate_at_maximum_is_a_limit_notice_not_a_tx_fault() {
+        let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();
+        s.keyed(0);
+        let mut limited_at = None;
+        for step in 0..80u64 {
+            let now = step * 10_000_000;
+            s.tick(now).unwrap();
+            let b = block(1, step * 1024, now, 258. / 256.);
+            assert_eq!(s.observe(&b, now).unwrap(), None);
+            if step < 59 {
+                assert!(
+                    s.ready_ns.is_none(),
+                    "two completed post-settling windows required"
+                );
+            }
+            if s.ready_ns.is_some() {
+                limited_at = Some(now);
+                break;
+            }
+        }
+        assert!(limited_at.is_some());
+        assert_eq!(s.phase, Phase::Limited);
+        assert_eq!(s.db, 31);
+        assert_eq!(s.info, Some(258));
+        let now = limited_at.unwrap() + 10_000_000;
+        let mut clipped = block(1, (now / 10_000_000) * 1024, now, 258. / 256.);
+        clipped.rf[0] = 0.95;
+        assert_eq!(s.observe(&clipped, now), Err(Fault::SevereOverdrive));
     }
     #[test]
     fn discontinuity_nonfinite_and_positive_overload_cannot_enable_fitting() {

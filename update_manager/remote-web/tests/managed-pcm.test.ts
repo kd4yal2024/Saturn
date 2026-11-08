@@ -39,6 +39,8 @@ describe('selectable managed PCM controller', () => {
     expect(h.session.status().autoAttenuationSupported).toBe(false);
     h.session.text('saturn_ps_auto_att_caps:0,start31-owner-v1;tx_puresignal_auto_attenuate:0,true;saturn_ps_auto_att:0,2,11,7200000,true,off,31,-1,-1,0,false;',h.epoch);
     expect(h.session.status()).toMatchObject({autoAttenuationSupported:true,autoAttenuationEnabled:true,autoAttStatus:{phase:'off',db:31,frequencyHz:7200000,keyed:false}});
+    h.session.text('saturn_ps_auto_att:0,2,11,7200000,true,limited,31,31,258,6,true;',h.epoch);
+    expect(h.session.status()).toMatchObject({phase:'ready',autoAttStatus:{phase:'limited',db:31,appliedDb:31,info:258,keyed:true}});
     h.session.text('saturn_ps_auto_att:0,1,10,3909000,true,stable,12,12,152,5,true;',h.epoch);
     expect(h.session.status().autoAttStatus?.db).toBe(31);
     h.session.disconnect();expect(h.session.status().autoAttenuationSupported).toBe(false);
