@@ -27,7 +27,7 @@ fn recorder(capacity: usize) -> MeasurementRecorder {
         CaptureContext {
             source_pin: "synthetic-offline-fixture-not-hardware".into(),
             native_identity: format!(
-                "WDSP210 archive={}",
+                "WDSP211 archive={}",
                 env!("SATURN_BRIDGE_WDSP_ARCHIVE_SHA256")
             ),
             feedback_attenuation_db: Some(9),

@@ -10,7 +10,7 @@
 //! with the stub) and takes about 40 s with FFTW wisdom, about two minutes
 //! without. Run it with:
 //!
-//!   SATURN_WDSP_DIR=<built WDSP> SATURN_BRIDGE_WDSP_FLAVOR=wdsp2-2.10 \
+//!   SATURN_WDSP_DIR=<built WDSP> SATURN_BRIDGE_WDSP_FLAVOR=wdsp2-2.11 \
 //!   SATURN_REPLAY_E2E_WISDOM=<wisdom file, created on first use> \
 //!   cargo test --release --locked --test replay_e2e -- --ignored --nocapture
 //!

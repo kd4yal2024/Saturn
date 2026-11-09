@@ -10,9 +10,9 @@ if [[ "$MEASUREMENT_OUTPUT" != /* || -e "$MEASUREMENT_OUTPUT" ]]; then
   exit 1
 fi
 printf '%s  %s\n' \
-  8b75784e63e1c3c9baba993dc866db0002cee0037d42b0d80b88c059d58bb248 "$MEASUREMENT_WDSP/libwdsp.a" \
-  3dde5a9bfafe7e87f76684eeaab7da22fd5d421c08a8a725b0e2ec3cbd5416af "$MEASUREMENT_WDSP/wdsp.h" \
-  1aa8470294640e7109824db7cc41786a02e21a5f0b9cf54bbbcfaf2df190ab66 "$MEASUREMENT_WDSP/calcc.c" \
+  447c032a79b44d5bc5ea92576a9dc3cf11fd7aaaca493f30468a348e074384e0 "$MEASUREMENT_WDSP/libwdsp.a" \
+  3c4e9f9094a49bc7651686b28a15e8cf3733baac19af66e1cf6d56a9b6f6c20f "$MEASUREMENT_WDSP/wdsp.h" \
+  584c2250c5492e3dec8cbb752c0196d25bcd9c86360d8f8daeefe78e5ce66311 "$MEASUREMENT_WDSP/calcc.c" \
   | sha256sum --check --strict
 mkdir -p "$MEASUREMENT_OUTPUT/native-captures" "$MEASUREMENT_OUTPUT/observer"
 cc -std=gnu11 -O2 -Wall -Wextra -I"$MEASUREMENT_WDSP" -c \

@@ -4281,7 +4281,7 @@ mod native {
                 FullNative::offline(&m, unsafe { GetWDSPVersion() }, Some(140), iqc_flags).unwrap();
             assert!((hardware_peak() - 0.4072).abs() < 1e-12);
             assert!(matches!(
-                FullNative::offline(&m, 210, Some(140), iqc_flags),
+                FullNative::offline(&m, 211, Some(140), iqc_flags),
                 Err(Fault::ExternalController)
             ));
             let life = controller(native, owner, backend);

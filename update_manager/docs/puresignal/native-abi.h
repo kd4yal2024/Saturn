@@ -1,5 +1,5 @@
-/* Milestone 1 proposal only; not included by production code.
- * Contract pinned to TAPR WDSP b02d5bac675dd2f33ec2bab2b339f79a597c47dd.
+/* Build-time source contract; no radio or runtime control.
+ * Contract pinned to TAPR WDSP e69de50d1d702216098019013899ad87534c64e0.
  * Compile this AFTER that revision's wdsp.h: incompatible declarations fail.
  * A source/header check is not proof of an installed library's ABI.
  */

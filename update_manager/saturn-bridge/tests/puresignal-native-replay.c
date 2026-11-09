@@ -1,5 +1,5 @@
 /* Offline numerical/ABI positive control. NO radio/device/network access.
- * Build ONLY against the independently source-verified WDSP 2.10 archive.
+ * Build ONLY against the independently source-verified WDSP 2.11 archive.
  * This exercises native fitting/display curves, not G2's installed binary or
  * the production TXA correction/output/FPGA/RF chain.
  */
@@ -83,7 +83,7 @@ static void pump_dsp(void) {
     fexchange0(1, mic.data, duc_output.data, &error);
 }
 int main(void) {
-    if (GetWDSPVersion() != 210) { fprintf(stderr, "wrong native version\n"); return 2; }
+    if (GetWDSPVersion() != 211) { fprintf(stderr, "wrong native version\n"); return 2; }
     // Bound offline startup planning only; no altered WDSP numerical sources.
     fftw_set_timelimit(0.01);
     guards_init();
@@ -113,13 +113,13 @@ int main(void) {
     if (blocks == 2048 || (info.data[6] & 3) || measured_count.value != 4096 || correction_count.value != 512) {
         fprintf(stderr, "native fit incomplete: blocks=%d calibrations=%d correcting=%d status=%d state=%d measured=%d correction=%d\n",
             blocks, info.data[5], info.data[14], info.data[6], info.data[15], measured_count.value, correction_count.value);
-        CloseChannel(1); return 6;
+        SetChannelState(1, 0, 1); CloseChannel(1); return 6;
     }
     double uncorrected = 0, corrected = 0; int compared = 0;
     for (int i = 0; i < correction_count.value; ++i) {
         double target = xm_cor.data[i]; double gain = ym_cor.data[i];
         if (!isfinite(target) || !isfinite(gain) || !isfinite(ya_cor.data[i])) {
-            fprintf(stderr, "nonfinite correction curve\n"); CloseChannel(1); return 7;
+            fprintf(stderr, "nonfinite correction curve\n"); SetChannelState(1, 0, 1); CloseChannel(1); return 7;
         }
         if (target < .1 || target > .9) continue;
         double drive = target * gain;
@@ -130,13 +130,13 @@ int main(void) {
     }
     if (!compared || corrected >= 0.1 * uncorrected) {
         fprintf(stderr, "native curve did not improve synthetic AM/AM residual: %.9g -> %.9g\n", uncorrected, corrected);
-        CloseChannel(1); return 8;
+        SetChannelState(1, 0, 1); CloseChannel(1); return 8;
     }
-    printf("native positive control passed: version=210 blocks=%d calibrations=%d measured=%d correction=%d canaries=pass requested_delay_ns=150 actual_delay_ns=%.6f modeled_uncorrected_rms=%.9g modeled_corrected_rms=%.9g\n",
+    printf("native positive control passed: version=211 blocks=%d calibrations=%d measured=%d correction=%d canaries=pass requested_delay_ns=150 actual_delay_ns=%.6f modeled_uncorrected_rms=%.9g modeled_corrected_rms=%.9g\n",
         blocks + 1, info.data[5], measured_count.value, correction_count.value, actual_delay * 1e9,
         sqrt(uncorrected / compared), sqrt(corrected / compared));
     SetPSControl(1, 1, 0, 0, 0);
     for (int i = 0; i < 8; ++i) { pscc(1, 1024, tx.data, rx.data); pump_dsp(); }
     SetChannelState(1, 0, 0);
-    CloseChannel(1); return 0;
+    SetChannelState(1, 0, 1); CloseChannel(1); return 0;
 }

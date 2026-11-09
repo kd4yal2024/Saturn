@@ -1416,6 +1416,7 @@ impl Drop for WdspRxEngine {
                     destroy_anbEXT(self.channel_id);
                     destroy_nobEXT(self.channel_id);
                 }
+                SetChannelState(self.channel_id, 0, 1);
                 CloseChannel(self.channel_id);
             }
         }
@@ -1790,7 +1791,7 @@ impl WdspTxEngine {
         if self.channel_open {
             unsafe {
                 SetPSMox(self.channel_id, 0);
-                SetChannelState(self.channel_id, 0, 0);
+                SetChannelState(self.channel_id, 0, 1);
                 CloseChannel(self.channel_id);
             }
             self.channel_open = false;
@@ -2444,6 +2445,7 @@ impl Drop for WdspTxEngine {
         }
         if self.channel_open {
             unsafe {
+                SetChannelState(self.channel_id, 0, 1);
                 CloseChannel(self.channel_id);
             }
             self.channel_open = false;

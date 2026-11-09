@@ -109,7 +109,7 @@ impl FullNative {
         flags: fn() -> i32,
         worker_policy: super::native_worker_scheduling::WorkerPolicy,
     ) -> Result<Self, Fault> {
-        if version != 210 || history.is_some_and(|h| h != 140) {
+        if version != 211 || history.is_some_and(|h| h != 140) {
             return Err(Fault::NativeUnverified);
         }
         if model.desired.two_tone_enabled
@@ -457,6 +457,10 @@ impl CooperativeNative for FullNative {
     fn cleanup_step(&mut self) -> Result<CleanupProgress, Fault> {
         let (resetting, stable) = self.cleanup.ok_or(Fault::NativeFailure)?;
         if self.closing_worker {
+            // Advance the 2.11 OFF/down-slew/flush sequence one exchange per
+            // lifecycle turn before joining. Output authority is already closed.
+            self.exchange(&[0.; 512])?;
+            self.audit.cleanup_steps += 1;
             #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
             {
                 unsafe extern "C" {

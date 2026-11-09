@@ -127,15 +127,15 @@ fn build_ps_observer(wdsp: &Path) {
     }
     assert_eq!(
         native_digest("wdsp.h"),
-        "3dde5a9bfafe7e87f76684eeaab7da22fd5d421c08a8a725b0e2ec3cbd5416af",
+        "3c4e9f9094a49bc7651686b28a15e8cf3733baac19af66e1cf6d56a9b6f6c20f",
         "unreviewed PS header"
     );
     let digest = native_digest("libwdsp.a");
     assert!(
         matches!(
             digest.as_str(),
-            "8b75784e63e1c3c9baba993dc866db0002cee0037d42b0d80b88c059d58bb248"
-                | "f5f21c7cb76df1add17647c15a700f564a7f045e930e84be870333fa6e74973e"
+            "447c032a79b44d5bc5ea92576a9dc3cf11fd7aaaca493f30468a348e074384e0"
+                | "2b144f675b9fb6671b147a09c6a410a351090e685711043cf801810e5e922b3f"
         ),
         "unreviewed PS archive"
     );
@@ -144,7 +144,7 @@ fn build_ps_observer(wdsp: &Path) {
     // exact linked source, never an independently hand-maintained offset table.
     assert_eq!(
         native_digest("calcc.c"),
-        "1aa8470294640e7109824db7cc41786a02e21a5f0b9cf54bbbcfaf2df190ab66",
+        "584c2250c5492e3dec8cbb752c0196d25bcd9c86360d8f8daeefe78e5ce66311",
         "unreviewed native measurement control layout"
     );
     println!("cargo:rerun-if-changed={}", wdsp.join("calcc.c").display());

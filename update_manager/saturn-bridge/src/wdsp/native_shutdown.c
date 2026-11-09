@@ -71,6 +71,19 @@ int saturn_channel_shutdown_poll(int channel) {
         return 1;
     }
     if (!worker->stopping) {
+        /* WDSP 2.11 requires a completed OFF transition before CloseChannel.
+         * Begin it without blocking this lifecycle turn; the native owner
+         * continues zero-input exchanges while shutdown is pending. */
+        if (ch[channel].state != 0) {
+            SetChannelState(channel, 0, 0);
+            pthread_mutex_unlock(&saturn_workers_mutex);
+            return 0;
+        }
+        if (__atomic_load_n(&ch[channel].flushflag, __ATOMIC_SEQ_CST) & 1) {
+            pthread_mutex_unlock(&saturn_workers_mutex);
+            return 0;
+        }
+        SetChannelState(channel, 0, 1); /* Already flushed: completes immediately. */
         /* dexchange exits its pthread when run is clear. Only clear it while
          * holding csDSP, so a worker cannot exit with that mutex still held.
          * A worker already waiting for csDSP observes exec_bypass after us. */
@@ -95,6 +108,9 @@ int saturn_channel_shutdown_poll(int channel) {
 /* Managed cleanup polls first, so it reaches the close only after the join.
  * This build's legacy TX destruction also waits; RX is unchanged. */
 void __wrap_CloseChannel(int channel) {
+    /* Managed cleanup has completed the OFF/flush stage already. Other close
+     * paths use WDSP's bounded wait before destroying the channel. */
+    SetChannelState(channel, 0, 1);
     if (channel != 1) { __real_CloseChannel(channel); return; }
     int state;
     while ((state = saturn_channel_shutdown_poll(channel)) == 0) usleep(1000);

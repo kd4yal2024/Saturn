@@ -34,7 +34,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("--check", action="store_true", help="Validate without writing")
+    parser.add_argument("--check-fixed", action="store_true", help="Validate the upstream 2.11 fix without writing")
     args = parser.parse_args()
+    if args.check_fixed:
+        source = args.source.read_bytes().decode("utf-8").replace("\r\n", "\n")
+        if digest(source) != PATCHED_SHA256:
+            raise ValueError("Unexpected WDSP emph.c fixed source; refusing build")
+        print(f"WDSP upstream fix verified: {PATCH_ID} source={PATCHED_SHA256}")
+        return
     patched = candidate(args.source.read_bytes().decode("utf-8"))
     if not args.check:
         args.source.write_bytes(patched.encode("utf-8"))

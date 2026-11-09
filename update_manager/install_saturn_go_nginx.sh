@@ -467,7 +467,7 @@ saturn_remote_bridge_preflight() {
   warn "Saturn Remote bridge prerequisites are missing:"
   printf '  - %s\n' "${missing[@]}" >&2
   warn "Remote pages can load, but /remote and /remote-next will not work until saturn-bridge is installed."
-  warn "The installer provisions pinned WDSP 2.10 and Linux-port sources; no piHPSDR build or cloud-init step is required."
+  warn "The installer provisions pinned WDSP 2.11 and Linux-port sources; no piHPSDR build or cloud-init step is required."
 
   if env_flag_enabled "$SATURN_REQUIRE_BRIDGE"; then
     err "SATURN_REQUIRE_BRIDGE=1 and Saturn Remote bridge prerequisites are missing."

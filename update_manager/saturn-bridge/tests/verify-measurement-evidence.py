@@ -39,7 +39,7 @@ def verify(directory):
             for capture in record['captures']:
                 assert capture['backend'] == backend
                 assert capture['sourcePin'] == 'synthetic-offline-fixture-not-hardware'
-                assert capture['nativeIdentity'].startswith('WDSP210 archive=8b75784e')
+                assert capture['nativeIdentity'].startswith('WDSP211 archive=447c032a')
                 assert capture['feedbackAttenuationCommandDb'] == 9
                 assert capture['commandedDriveCode'] == 5
                 assert capture['overloadQualification'] == 'Unknown'

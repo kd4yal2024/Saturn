@@ -203,12 +203,12 @@ def bridge_report(binary: Path, expected_commit: str) -> dict:
         "bytes": binary.stat().st_size,
         "machine": machine.group(1).strip() if machine else None,
         "dynamic_needed": needed,
-        "embeds_wdsp_flavor_2_10": "wdsp2-2.10" in strings,
+        "embeds_wdsp_flavor_2_11": "wdsp2-2.11" in strings,
         "embeds_wdsp_commit": expected_commit in strings,
         # A string scan of the file. The 40-character commit is found in
         # read-only data in every build seen; a short constant such as the flavor
         # label may not appear as a scannable string at all (seen on x86-64, where
-        # the Bridge reports wdsp2-2.10 in perf.json yet no such string is in the
+        # the Bridge reports wdsp2-2.11 in perf.json yet no such string is in the
         # file; how it is stored was not examined), so "False" for the flavor is
         # "not found", never "absent". Nothing here ties this binary to the
         # libwdsp.a recorded below.
@@ -230,7 +230,7 @@ def main() -> int:
 
     wdsp_repo = args.native_src / "OpenHPSDR-wdsp"
     port_repo = args.native_src / "pihpsdr"
-    source = wdsp_repo / "wdsp 2.10" / "Source"
+    source = wdsp_repo / "wdsp 2.11" / "Source"
     expected = {
         "wdsp": installer_value("SATURN_WDSP2_REF"),
         "pihpsdr_linux_port": installer_value("SATURN_PIHPSDR_PORT_REF"),
@@ -277,7 +277,7 @@ def main() -> int:
             "match": pins_match,
         },
         "upstream_sources": {
-            "wdsp_2_10_source": tree_hashes(source, {".c", ".h"}),
+            "wdsp_2_11_source": tree_hashes(source, {".c", ".h"}),
             "linux_port": {
                 name: sha256(port_repo / "wdsp" / name) for name in ("linux_port.c", "linux_port.h")
             },
@@ -312,8 +312,8 @@ def main() -> int:
             f"no occurrence of the expected WDSP commit {expected['wdsp']} was found in the Bridge "
             "(was it built with SATURN_BRIDGE_WDSP_COMMIT set?)"
         )
-    if bridge is not None and not bridge["embeds_wdsp_flavor_2_10"]:
-        print("wdsp-pin-manifest: note: the flavor label wdsp2-2.10 was not found by string scan in the "
+    if bridge is not None and not bridge["embeds_wdsp_flavor_2_11"]:
+        print("wdsp-pin-manifest: note: the flavor label wdsp2-2.11 was not found by string scan in the "
               "Bridge; a short constant may not be stored as a scannable string, so this is not "
               "proof it is absent (the running Bridge reports it as wdsp_flavor in perf.json)", file=sys.stderr)
     for problem in problems:

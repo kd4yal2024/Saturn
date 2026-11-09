@@ -113,7 +113,7 @@ impl OfflineNative {
             "only one offline TXA owner"
         );
         unsafe {
-            assert_eq!(GetWDSPVersion(), 210);
+            assert_eq!(GetWDSPVersion(), 211);
             fftw_set_timelimit(0.01);
             OpenChannel(
                 CHANNEL, 512, 2048, 48000, 96000, 192000, 1, 0, 0.01, 0.025, 0., 0.01, 1,

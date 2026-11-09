@@ -51,11 +51,24 @@ class EmphasisFixGuards(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "emph.c"
             source.write_bytes(b"not pinned\r\n")
-            for args in [[], ["--check"]]:
+            for args in [[], ["--check"], ["--check-fixed"]]:
                 result = subprocess.run([sys.executable, str(HELPER), *args, str(source)],
                                         capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(source.read_bytes(), b"not pinned\r\n")
+
+    def test_upstream_fixed_check_preserves_bytes_and_rejects_unfixed_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "emph.c"
+            fixed = b"before\r\n" + module.NEW.encode().replace(b"\n", b"\r\n")
+            source.write_bytes(fixed)
+            with patch.object(module, "PATCHED_SHA256", module.digest(fixed.decode().replace("\r\n", "\n"))), \
+                 patch.object(sys, "argv", [str(HELPER), "--check-fixed", str(source)]):
+                module.main()
+                self.assertEqual(source.read_bytes(), fixed)
+                source.write_text(module.OLD)
+                with self.assertRaisesRegex(ValueError, "fixed source"):
+                    module.main()
 
     def test_build_rejects_drift_before_removing_existing_archive(self):
         with tempfile.TemporaryDirectory() as tmp:

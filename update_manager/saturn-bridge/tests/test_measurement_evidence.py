@@ -19,7 +19,7 @@ BACKENDS = ['P2', 'DirectXdma']
 def fixture(backend, case):
     fence = {'boot': '1', 'generation': 2, 'config': '3', 'txEpoch': 4}
     capture = {'backend': backend, 'sourcePin': 'synthetic-offline-fixture-not-hardware',
-        'nativeIdentity': 'WDSP210 archive=8b75784e-test-fixture',
+        'nativeIdentity': 'WDSP211 archive=447c032a-test-fixture',
         'feedbackAttenuationCommandDb': 9, 'commandedDriveCode': 5,
         'overloadQualification': 'Unknown', 'overloadProvenUnclipped': False,
         'lp700Measurement': None, 'native': {'fittingEnabled': False, 'automaticEnabled': False,

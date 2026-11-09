@@ -1,6 +1,6 @@
-# WDSP 2.10 Linux/ARM Integration
+# WDSP 2.11 Linux/ARM Integration
 
-Saturn Bridge uses WDSP 2.10 by default in the Saturn Go installer. The native
+Saturn Bridge uses WDSP 2.11 by default in the Saturn Go installer. The native
 build is reproducible and does not depend on cloud-init, a prebuilt piHPSDR
 checkout, or files under another user's home directory.
 
@@ -9,10 +9,10 @@ checkout, or files under another user's home directory.
 `update_manager/scripts/install-saturn-bridge.sh` provisions sparse checkouts
 at exact upstream commits under the bridge Cargo target directory:
 
-- TAPR OpenHPSDR WDSP: `b02d5bac675dd2f33ec2bab2b339f79a597c47dd` (Release Version 2.10)
+- TAPR OpenHPSDR WDSP: `e69de50d1d702216098019013899ad87534c64e0` (Release Version 2.11)
 - piHPSDR Linux port shim: `974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1`
 
-Only `wdsp 2.10/Source` and `wdsp/linux_port.c` / `linux_port.h` are checked
+Only `wdsp 2.11/Source` and `wdsp/linux_port.c` / `linux_port.h` are checked
 out. The helper copies and patches those sources into an ignored build
 directory; upstream checkouts remain unchanged. Changing either pin is a
 native dependency update and requires the complete bridge test matrix.
@@ -28,7 +28,7 @@ Set `SATURN_INSTALL_BRIDGE=0` to opt out. `SATURN_REQUIRE_BRIDGE` defaults to
 the same value, so the normal installation fails rather than publishing a
 Remote UI that has no matching backend.
 
-## Build WDSP 2.10
+## Build WDSP 2.11
 
 The bridge installer is the supported entry point for a native build-only
 artifact:
@@ -48,14 +48,14 @@ update_manager/saturn-bridge/scripts/build-wdsp2-linux-arm.sh
 
 Default cache/build locations:
 
-- WDSP 2.10 source: `target/native-src/OpenHPSDR-wdsp/wdsp 2.10/Source`
+- WDSP 2.11 source: `target/native-src/OpenHPSDR-wdsp/wdsp 2.11/Source`
 - piHPSDR Linux port shim: `target/native-src/pihpsdr/wdsp`
 - output archive: `update_manager/saturn-bridge/target/wdsp2-linux-arm/libwdsp.a`
 
 Override those paths with `WDSP2_SOURCE_DIR`, `PIHPSDR_WDSP_DIR`, and
 `WDSP2_BUILD_DIR`.
 
-## Build Saturn Bridge Against WDSP 2.10
+## Build Saturn Bridge Against WDSP 2.11
 
 ```sh
 cd update_manager/saturn-bridge
@@ -73,7 +73,7 @@ directory. Override those locations with `SATURN_RNNOISE_DIR` and
 
 ## Saturn Remote Controls
 
-The bridge and `/remote-next` client expose these WDSP 2.10 controls through
+The bridge and `/remote-next` client expose these WDSP 2.11 controls through
 TCI and saved radio profiles:
 
 - NR2 gain method: Gaussian, Gaussian Log, Gamma, or Trained
@@ -98,54 +98,83 @@ blanker, notch, AGC, and passband controls. The bridge refuses transmit while
 WFM is active. WFM is advertised to clients only when the linked archive
 exports both `SetRXAWBFMdmph` and `GetRXAWBFMStereoIndicator`.
 
-PureSignal uses Saturn's synchronized 192 kHz feedback path: DDC0 carries the
-ADC0 PA feedback samples and DDC1 carries the TX-DAC reference samples. The
-bridge deinterleaves those samples into WDSP `pscc` blocks, tunes both feedback
-DDCs to the transmit frequency, and applies the Saturn-specific hardware peak
-and delay values. Feedback attenuation defaults to automatic control and is
-constrained to 0-31 dB. Enable, automatic-control, and manual-attenuation
-changes are rejected while TX is armed. A feedback outage bypasses correction
-without interrupting uncorrected TX, reports a fault to the UI, and restarts
-calibration when synchronized feedback returns.
+PureSignal uses Saturn's synchronized 192 kHz paired feedback. The shared
+lifecycle remains the single TX/native owner, with separate P2 and Direct XDMA
+acquisition adapters. The managed startup remains an explicit host selection;
+this library update preserves the deployed selection and operator settings.
+Feedback level, delay, overload coverage and correction quality remain separate
+measurements. A version string or native correction flag does not certify RF
+IMD, physical shutdown timing or an unclipped capture.
 
-The Linux/ARM build helper patches the WDSP 2.10 de-emphasis setter in its
+The Linux/ARM build helper patches the WDSP 2.11 de-emphasis setter in its
 staged source tree so a runtime 75 us/50 us change reaches both WFM audio
 channels. The upstream source checkout is not modified.
 
-## WDSP 2.10 Notes
+## WDSP 2.11 changes and compatibility
 
-WDSP 2.10 adds an NNR (neural-network noise reduction) engine with two embedded
-models (`nnr_model_0.c`, `nnr_model_1.c`). Saturn Bridge does not drive NNR: the
-block is created with `run = 0` and the bridge never calls `SetRXANNR*`. The
-models still link into the archive (~6.8 MB of `.rodata`), so the Linux/ARM
-build helper compiles `nnr_model_*.c` at `-O1` while every other WDSP source
-keeps `-O3`; the model units are pure data and optimizing them at `-O3` costs
-minutes and hundreds of MB of RAM on the CM4 for no runtime benefit.
+Upstream 2.11 adds Standard/Premium CW NNR models (slots 2/3) beside the
+speech models (slots 0/1), fixes FM, pre-emphasis, EMNR and neural processing,
+and validates more file paths and buffer sizes. The bridge retains its current
+operator controls; a library upgrade does not automatically select a new model.
+The four model translation units are pure data and compile at `-O1`; all DSP
+code remains `-O3`, without fast-math. The Premium models need measurement on
+an actual CM4 before recommending them for continuous operation.
 
-2.10 also reworks the PureSignal calibration engine (`calcc` and the NURBS
-helpers), the TX/RX CFIR/ICFIR impulse builders, and the NR2/EMNR `post2`
-noise generator, and makes several internal structs opaque behind accessors.
-The exported control API used by the bridge is unchanged.
+The Linux port now uses upstream `wdsp_align.h` for real aligned allocation.
+The old Saturn pre-emphasis repair is present upstream: its corrected source
+hash is verified instead of applying the patch twice. The existing resampler
+index optimization and WFM stereo de-emphasis setter repair remain guarded by
+source checks.
 
-## Current Limitation
+2.11 requires `SetChannelState(ch, 0, 1)` before closing a channel. The managed
+owner begins OFF without blocking a lifecycle turn, continues zero-input DSP
+exchanges after the output stop receipt, waits for flush completion and joins
+the TX worker before freeing storage. Other close paths request the documented
+bounded OFF transition. Native cleanup, observer layout, public header and
+archive identities are pinned to this build; the update does not change the
+PureSignal algorithm or its calibration/measurement qualification.
 
-WDSP 2.10 does not include piHPSDR's `RNNR` / `SBNR` symbols. Saturn Bridge now
-detects those symbols at build time. If they are absent, NR3 and NR4 requests
-fall back to EMNR so the bridge can link and run, but NR3/NR4 are not equivalent
-to the current piHPSDR WDSP 1.29 behavior.
+## Developer CPU profiling
 
-PureSignal has native-library and packet-path test coverage, but its feedback
-level, automatic attenuation, correction quality, and RF delay values still
-require controlled low-power validation on each Saturn hardware path before it
-is treated as production calibrated. CESSB remains deferred until the bridge
-can coordinate its compressor, linear-phase filter, and transmit-level
-safeguards as one state transition.
+Profiling was introduced upstream in 2.10 and remains available in 2.11.
+Production builds keep it **off**. An isolated developer archive enables the
+upstream NNR per-stage timers:
 
-The first controlled Saturn test produced feedback levels of 155-159 with 4 dB
-feedback attenuation, zero gaps across more than 10,000 synchronized feedback
-packets, and `maxTx` near the configured 0.6121 hardware peak. The ADC overflow
-status remained clear. This validates the tested hardware path but does not
-replace per-radio dummy-load validation after installation.
+```sh
+SATURN_WDSP_NNR_PROFILE=1 WDSP2_BUILD_DIR=/tmp/wdsp211-profile \
+  bash update_manager/saturn-bridge/scripts/build-wdsp2-linux-arm.sh
+SATURN_WDSP_DIR=/tmp/wdsp211-profile \
+  SATURN_WDSP_PROFILE_OUTPUT=/tmp/wdsp211-reports \
+  python3 tests/test-wdsp-211-contract.py
+```
+
+Run these commands from the repository root after provisioning the pinned
+sources. The test uses synthetic audio, exercises all four models and exports
+one `nnr-profile-model-N.txt` report per model. It opens no radio device and
+keys no RF. Profiling writes files and is intentionally excluded from the
+reviewed production archive whitelist. Exchange elapsed time includes worker
+scheduling; it is not the same quantity as the upstream per-stage CPU timers.
+For an x86 developer build additionally select `SATURN_WDSP_TARGET_ARCH=x86_64`
+and `SATURN_WDSP_TARGET_CPU=x86-64`.
+
+For normal archive validation:
+
+```sh
+SATURN_WDSP_DIR=/path/to/normal/wdsp211 \
+  python3 tests/test-wdsp-211-contract.py
+python3 tests/test-wdsp-channel-shutdown.py
+```
+
+Actual runtime fixtures with real WDSP must run serially in **fresh processes**.
+An intentional unrecoverable restoration-failure test retains the native lease;
+running later scenarios in that same process correctly refuses a second owner.
+Use `tests/run-wdsp-runtime-isolated.py` after building the managed test binary
+with the offline observer linked. Loopback/file-backed TX in these fixtures is
+synthetic; it is not physical RF qualification.
+
+WDSP 2.11 does not supply piHPSDR RNNR/SBNR exports. Existing feature detection
+and fallback behavior remain unchanged. No firmware, driver, RXC1 polling,
+feedback limits or RF permission settings change with this update.
 
 ## Pin manifest
 

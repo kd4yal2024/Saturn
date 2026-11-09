@@ -4,7 +4,7 @@
 //! `SATURN_BRIDGE_STATE_DIR`, the way an update restarts it. Ignored by default for the same reason as `replay_e2e`: it needs the real native
 //! WDSP. Run it the same way:
 //!
-//!   SATURN_WDSP_DIR=<built WDSP> SATURN_BRIDGE_WDSP_FLAVOR=wdsp2-2.10 \
+//!   SATURN_WDSP_DIR=<built WDSP> SATURN_BRIDGE_WDSP_FLAVOR=wdsp2-2.11 \
 //!   SATURN_REPLAY_E2E_WISDOM=<wisdom file> \
 //!   cargo test --release --locked --test replay_rx_state -- --ignored --nocapture --test-threads=1
 

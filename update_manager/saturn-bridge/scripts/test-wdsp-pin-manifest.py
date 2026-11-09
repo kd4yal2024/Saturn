@@ -16,7 +16,7 @@ spec.loader.exec_module(manifest)
 
 class PinManifestTests(unittest.TestCase):
     def test_pins_and_symbols_come_from_the_installer(self):
-        self.assertEqual(manifest.installer_value("SATURN_WDSP2_REF"), "b02d5bac675dd2f33ec2bab2b339f79a597c47dd")
+        self.assertEqual(manifest.installer_value("SATURN_WDSP2_REF"), "e69de50d1d702216098019013899ad87534c64e0")
         self.assertEqual(
             manifest.installer_value("SATURN_PIHPSDR_PORT_REF"), "974acbac07fe7dd3e24f28f3956a9ffb3a1ebaf1"
         )
@@ -41,7 +41,7 @@ class PinManifestTests(unittest.TestCase):
     def test_an_archive_missing_a_required_symbol_is_reported_and_fails(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            (root / "native-src" / "OpenHPSDR-wdsp" / "wdsp 2.10" / "Source").mkdir(parents=True)
+            (root / "native-src" / "OpenHPSDR-wdsp" / "wdsp 2.11" / "Source").mkdir(parents=True)
             (root / "native-src" / "pihpsdr" / "wdsp").mkdir(parents=True)
             for name in ("linux_port.c", "linux_port.h"):
                 (root / "native-src" / "pihpsdr" / "wdsp" / name).write_text("/* shim */\n")
@@ -137,7 +137,7 @@ class ManifestScopeTests(unittest.TestCase):
     def test_a_manifest_states_its_limits_and_where_each_field_came_from(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
-            (root / "native-src" / "OpenHPSDR-wdsp" / "wdsp 2.10" / "Source").mkdir(parents=True)
+            (root / "native-src" / "OpenHPSDR-wdsp" / "wdsp 2.11" / "Source").mkdir(parents=True)
             (root / "native-src" / "pihpsdr" / "wdsp").mkdir(parents=True)
             for name in ("linux_port.c", "linux_port.h"):
                 (root / "native-src" / "pihpsdr" / "wdsp" / name).write_text("/* shim */\n")

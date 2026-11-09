@@ -315,7 +315,10 @@ jobs:
         run: python3 update_manager/scripts/saturn-xdma-operational-client.py --self-test
 
       - name: Test pinned WDSP resampler optimization guards
-        run: python3 tests/test-wdsp-hbres-index.py
+        run: |
+          python3 tests/test-wdsp-hbres-index.py
+          python3 tests/test-wdsp-emph-fix.py
+          python3 tests/test-wdsp-channel-shutdown.py
 
       - name: Test unified provisioning contract
         run: tests/test-provisioning-contract.sh

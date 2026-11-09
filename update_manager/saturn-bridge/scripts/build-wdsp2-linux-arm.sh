@@ -5,10 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BRIDGE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 NATIVE_SOURCE_ROOT="${SATURN_BRIDGE_NATIVE_SOURCE_ROOT:-${BRIDGE_DIR}/target/native-src}"
-WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-${NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp/wdsp 2.10/Source}"
+WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-${NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp/wdsp 2.11/Source}"
 PIHPSDR_WDSP_DIR="${PIHPSDR_WDSP_DIR:-${NATIVE_SOURCE_ROOT}/pihpsdr/wdsp}"
 BUILD_DIR="${WDSP2_BUILD_DIR:-${BRIDGE_DIR}/target/wdsp2-linux-arm}"
 TARGET_CPU="${SATURN_WDSP_TARGET_CPU:-cortex-a72}"
+TARGET_ARCH="${SATURN_WDSP_TARGET_ARCH:-$(uname -m)}"
+NNR_PROFILE="${SATURN_WDSP_NNR_PROFILE:-0}"
+[[ "$NNR_PROFILE" == 0 || "$NNR_PROFILE" == 1 ]] || { echo "ERROR: SATURN_WDSP_NNR_PROFILE must be 0 or 1" >&2; exit 1; }
 
 if [[ ! "$TARGET_CPU" =~ ^[A-Za-z0-9._+-]+$ ]]; then
   echo "ERROR: invalid SATURN_WDSP_TARGET_CPU: ${TARGET_CPU}" >&2
@@ -16,7 +19,7 @@ if [[ ! "$TARGET_CPU" =~ ^[A-Za-z0-9._+-]+$ ]]; then
 fi
 
 if [[ ! -d "${WDSP2_SOURCE_DIR}" ]]; then
-  echo "ERROR: WDSP 2.10 source directory not found: ${WDSP2_SOURCE_DIR}" >&2
+  echo "ERROR: WDSP 2.11 source directory not found: ${WDSP2_SOURCE_DIR}" >&2
   exit 1
 fi
 if [[ ! -f "${PIHPSDR_WDSP_DIR}/linux_port.c" || ! -f "${PIHPSDR_WDSP_DIR}/linux_port.h" ]]; then
@@ -34,16 +37,15 @@ fi
 
 # Fail before touching the existing archive if the pinned resampler changed.
 python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" --check "${WDSP2_SOURCE_DIR}/reshb.c"
-# The pinned FM pre-emphasis resize frees its filter but fails to retain the
-# replacement, crashing Bridge's TX initialization when NC changes 2048->4096.
-python3 "${SCRIPT_DIR}/wdsp_emph_fix.py" --check "${WDSP2_SOURCE_DIR}/emph.c"
+# WDSP 2.11 includes the previous Saturn pre-emphasis repair upstream.
+# Verify the corrected source rather than reapplying the old transformation.
+python3 "${SCRIPT_DIR}/wdsp_emph_fix.py" --check-fixed "${WDSP2_SOURCE_DIR}/emph.c"
 
 rm -rf "${BUILD_DIR}"
 mkdir -p "${BUILD_DIR}"
 cp -a "${WDSP2_SOURCE_DIR}/." "${BUILD_DIR}/"
 cp "${PIHPSDR_WDSP_DIR}/linux_port.c" "${PIHPSDR_WDSP_DIR}/linux_port.h" "${BUILD_DIR}/"
 python3 "${SCRIPT_DIR}/wdsp_hbres_index.py" "${BUILD_DIR}/reshb.c"
-python3 "${SCRIPT_DIR}/wdsp_emph_fix.py" "${BUILD_DIR}/emph.c"
 
 python3 - "${BUILD_DIR}" <<'PY'
 from pathlib import Path
@@ -85,6 +87,11 @@ comm.write_text(text)
 
 linux_port_h = root / "linux_port.h"
 text = linux_port_h.read_text()
+# Use WDSP 2.11's actual aligned allocator consistently across all sources.
+# The historical port's malloc aliases would conflict with wdsp_align.h and
+# discard the alignment requested by SIMD-capable DSP blocks.
+text = text.replace('#define _aligned_malloc(x,y) malloc(x)\n', '#include "wdsp_align.h"\n')
+text = text.replace('#define _aligned_free(x)\t free(x)\n', '')
 text = text.replace("#define CRITICAL_SECTION pthread_mutex_t\n", "#define CRITICAL_SECTION pthread_mutex_t\n#define LPCRITICAL_SECTION pthread_mutex_t *\n")
 text = text.replace(
     "#define freopen_s freopen\n",
@@ -186,8 +193,15 @@ text = text.replace(
 )
 linux_port_c.write_text(text)
 
-# These standalone WDSP sources use _aligned_malloc/_aligned_free without
-# including comm.h, which supplies the Linux definitions through linux_port.h.
+# New 2.11 bypass implementation is standalone and still includes Windows.h.
+bypass = root / "nnrbypass.c"
+text = bypass.read_text()
+if text.count('#include <Windows.h>') != 1:
+    raise RuntimeError("WDSP 2.11 nnrbypass platform include changed")
+text = text.replace('#include <Windows.h>', '#ifdef _WIN32\n#include <Windows.h>\n#else\n#include "linux_port.h"\n#endif', 1)
+bypass.write_text(text)
+
+# WDSP 2.11 supplies the standalone allocation includes upstream.
 for name, include in (
     ("extrapolate.c", '#include "extrapolate.h"'),
     ("nurbs_fit.c", '#include "nurbs_fit.h"'),
@@ -195,16 +209,15 @@ for name, include in (
 ):
     source = root / name
     text = source.read_text()
-    if text.count(include) != 1:
-        raise RuntimeError(f"WDSP 2.10 {name} includes changed")
-    source.write_text(text.replace(include, '#include "linux_port.h"\n' + include, 1))
+    if text.count(include) != 1 or '#include "wdsp_align.h"' not in text:
+        raise RuntimeError(f"WDSP 2.11 {name} allocation includes changed")
 
 for source in root.glob("*.c"):
     text = source.read_text()
     if ("_aligned_malloc" in text or "_aligned_free" in text) and not (
-        '#include "comm.h"' in text or '#include "linux_port.h"' in text
+        '#include "comm.h"' in text or '#include "linux_port.h"' in text or '#include "wdsp_align.h"' in text
     ):
-        raise RuntimeError(f"WDSP 2.10 {source.name} uses aligned allocation without Linux definitions")
+        raise RuntimeError(f"WDSP 2.11 {source.name} uses aligned allocation without Linux definitions")
 
 snoop = root / "snoop.c"
 if snoop.exists():
@@ -238,7 +251,13 @@ mapfile -t sources < <(find . -maxdepth 1 -name '*.c' -printf '%f\n' | sort)
 # Cortex-A72 scheduling and vector selection are safe for the Saturn G2 CM4.
 # Do not add unsafe floating-point optimizations: WDSP numerical behavior is
 # part of the radio-quality contract and is deliberately unchanged here.
-cflags=(-pthread -O3 "-mcpu=${TARGET_CPU}" -D_GNU_SOURCE -Wno-parentheses -Wcast-align)
+cflags=(-pthread -O3 -D_GNU_SOURCE -Wno-parentheses -Wcast-align)
+case "$TARGET_ARCH" in
+  aarch64|arm64) cflags+=("-mcpu=${TARGET_CPU}") ;;
+  x86_64) cflags+=("-march=${TARGET_CPU}") ;;
+  *) echo "ERROR: unsupported WDSP target architecture: $TARGET_ARCH" >&2; exit 1 ;;
+esac
+if [[ "$NNR_PROFILE" == 1 ]]; then cflags+=(-DNNET_PROFILE); fi
 if [[ -d "${PIHPSDR_WDSP_DIR}/../rnnoise/include" ]]; then
   cflags+=("-I${PIHPSDR_WDSP_DIR}/../rnnoise/include")
 fi
@@ -248,7 +267,7 @@ fi
 read -r -a fftw_cflags <<<"$(pkg-config --cflags fftw3)"
 cflags+=("${fftw_cflags[@]}")
 
-# WDSP 2.10 ships the NNR engine plus two embedded neural-network models
+# WDSP 2.11 ships the NNR engine plus four embedded neural-network models
 # (nnr_model_0.c ~11 MB, nnr_model_1.c ~24 MB of hex literals, i.e. ~6.8 MB of
 # const data). Those translation units are pure data: optimizing them at -O3
 # costs minutes and hundreds of MB of RAM on the CM4 with no runtime benefit,
@@ -269,7 +288,7 @@ done
 ar rcs libwdsp.a ./*.o
 ranlib libwdsp.a
 
-echo "Built WDSP 2.10 Linux/ARM archive:"
+echo "Built WDSP 2.11 Linux archive:"
 echo "  ${BUILD_DIR}/libwdsp.a"
 echo "  target CPU: ${TARGET_CPU}"
 echo

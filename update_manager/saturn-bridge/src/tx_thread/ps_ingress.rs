@@ -1907,7 +1907,7 @@ impl SharedIngress {
                     let context = CaptureContext {
                         source_pin: env!("SATURN_BRIDGE_SOURCE_PIN").into(),
                         native_identity: format!(
-                            "WDSP210 archive={} header={}",
+                            "WDSP211 archive={} header={}",
                             env!("SATURN_BRIDGE_WDSP_ARCHIVE_SHA256"),
                             env!("SATURN_BRIDGE_WDSP_HEADER_SHA256")
                         ),

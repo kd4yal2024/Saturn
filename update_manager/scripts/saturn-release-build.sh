@@ -67,7 +67,7 @@ verify_puresignal_build(){
     die "selected source has no read-only PureSignal build identity"
   fi
   "$binary" --native-build-info \
-    | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["productionManagedWiring"] == "opt-in-review" and v["wdspVersion"]==210 and not v["stubNative"], "Persistent PS profile requires a matched managed WDSP build"'
+    | python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["productionManagedWiring"] == "opt-in-review" and v["wdspVersion"]==211 and not v["stubNative"], "Persistent PS profile requires a matched managed WDSP build"'
 }
 
 
