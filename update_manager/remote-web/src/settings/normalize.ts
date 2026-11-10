@@ -20,10 +20,10 @@ import {
   type WsUrlEnvironment,
 } from './types';
 import { clampDemodMode } from '../radio/passband';
+import { BAND_MEMORY_LABELS } from '../radio/band';
 
 const ALLOWED_SAMPLE_RATES = [48000, 96000, 192000, 384000] as const;
 const WATERFALL_PALETTES: readonly WaterfallPalette[] = ['classic', 'ember', 'ice', 'forest', 'enhanced', 'reference', 'reference-dark'];
-const HAM_BAND_LABELS = new Set(['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', 'FM']);
 
 export function safeFiniteNumber(value: unknown, fallback = 0): number {
   const numeric = Number(value);
@@ -399,7 +399,7 @@ export function normalizeBandMemory(input: unknown): BandMemory {
   if (!input || typeof input !== 'object') return output;
   const record = input as Record<string, unknown>;
   for (const [label, raw] of Object.entries(record)) {
-    if (!HAM_BAND_LABELS.has(label) || !raw || typeof raw !== 'object') continue;
+    if (!BAND_MEMORY_LABELS.has(label) || !raw || typeof raw !== 'object') continue;
     const entry = raw as Record<string, unknown>;
     output[label] = {
       frequency: Math.max(0, Math.round(safeFiniteNumber(entry.frequency, 0))),

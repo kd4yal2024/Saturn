@@ -140,6 +140,8 @@ import {
   splitTransportEnabled,
 } from './transport/transport-mode';
 import {
+  SWL_BAND_EDGES_HZ,
+  normalizeBandGroup,
   bandKeyForFrequency,
   effectiveIqSampleRate,
   adcLabel,
@@ -367,6 +369,8 @@ const api = {
   dequantizeSpectrumRow,
 
   // Radio
+  SWL_BAND_EDGES_HZ,
+  normalizeBandGroup,
   bandKeyForFrequency,
   effectiveIqSampleRate,
   adcLabel,

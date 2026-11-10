@@ -405,6 +405,8 @@ export interface AppState {
   // ── Profiles / Band Memory ──────────────────────────────────────────────
   remoteProfiles: Record<string, unknown>;
   bandMemory: Record<string, unknown>;
+  bandPanelGroup: 'ham' | 'swl';
+  bandMemoryGroup: 'ham' | 'swl';
   applyingBandMemory: boolean;
 
   // ── Performance ─────────────────────────────────────────────────────────
@@ -774,6 +776,8 @@ export function createAppState(): AppState {
 
     remoteProfiles: {},
     bandMemory: {},
+    bandPanelGroup: 'ham',
+    bandMemoryGroup: 'ham',
     applyingBandMemory: false,
 
     displayProfile: '',

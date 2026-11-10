@@ -250,6 +250,8 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
     }
+    .band-btn[hidden] { display: none !important; }
+    .band-group-field { margin-bottom: 8px; }
     .mode-grid, .band-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -6769,7 +6771,7 @@
   </style>
   <!-- The blocking local bundle installs token CSS before the body can paint. -->
   <script
-    src="/remote-assets/remote-next.js?v=phone-connect-1"
+    src="/remote-assets/remote-next.js?v=band-groups-1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -7969,20 +7971,39 @@
           <div class="panel-body">
             <div class="field-row">
               <div>
-                <label class="label">Band</label>
+                <label class="label" for="band-group">Band group</label>
+                <select class="field band-group-field" id="band-group" aria-controls="band-grid">
+                  <option value="ham">Ham HF</option>
+                  <option value="swl">SWL</option>
+                </select>
                 <div class="band-grid" id="band-grid" role="radiogroup" aria-label="Band">
-                  <button class="band-btn" data-band="1840000" type="button" role="radio" aria-checked="false">160m</button>
-                  <button class="band-btn" data-band="3800000" type="button" role="radio" aria-checked="false">80m</button>
-                  <button class="band-btn" role="radio" aria-checked="false" data-band="5357500" type="button">60m</button>
-                  <button class="band-btn" data-band="7150000" type="button" role="radio" aria-checked="false">40m</button>
-                  <button class="band-btn" data-band="10125000" type="button" role="radio" aria-checked="false">30m</button>
-                  <button class="band-btn" data-band="14200000" type="button" role="radio" aria-checked="true">20m</button>
-                  <button class="band-btn" data-band="18120000" type="button" role="radio" aria-checked="false">17m</button>
-                  <button class="band-btn" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
-                  <button class="band-btn" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
-                  <button class="band-btn" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
-                  <button class="band-btn" data-band="50150000" type="button" role="radio" aria-checked="false">6m</button>
-                  <button class="band-btn" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false">FM</button>
+                  <button class="band-btn" data-band-group="ham" data-band="1840000" type="button" role="radio" aria-checked="false">160m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="3800000" type="button" role="radio" aria-checked="false">80m</button>
+                  <button class="band-btn" data-band-group="ham" role="radio" aria-checked="false" data-band="5357500" type="button">60m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="7150000" type="button" role="radio" aria-checked="false">40m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="10125000" type="button" role="radio" aria-checked="false">30m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="14200000" type="button" role="radio" aria-checked="true">20m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="18120000" type="button" role="radio" aria-checked="false">17m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="50150000" type="button" role="radio" aria-checked="false">6m</button>
+                  <button class="band-btn" data-band-group="ham" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false">FM</button>
+                  <button class="band-btn" data-band-group="swl" data-band="1000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="LW/MW broadcast · 0.15–1.71 MHz" hidden>LW/MW</button>
+                  <button class="band-btn" data-band-group="swl" data-band="2400000" data-mode="AM" type="button" role="radio" aria-checked="false" title="120m broadcast · 2.3–2.495 MHz" hidden>120m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="3300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="90m broadcast · 3.2–3.4 MHz" hidden>90m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="3950000" data-mode="AM" type="button" role="radio" aria-checked="false" title="75m broadcast · 3.9–4 MHz" hidden>75m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="4850000" data-mode="AM" type="button" role="radio" aria-checked="false" title="60m broadcast · 4.75–5.06 MHz" hidden>60m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="6000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="49m broadcast · 5.9–6.2 MHz" hidden>49m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="7350000" data-mode="AM" type="button" role="radio" aria-checked="false" title="41m broadcast · 7.2–7.45 MHz" hidden>41m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="9600000" data-mode="AM" type="button" role="radio" aria-checked="false" title="31m broadcast · 9.4–9.9 MHz" hidden>31m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="11800000" data-mode="AM" type="button" role="radio" aria-checked="false" title="25m broadcast · 11.6–12.1 MHz" hidden>25m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="13700000" data-mode="AM" type="button" role="radio" aria-checked="false" title="22m broadcast · 13.57–13.87 MHz" hidden>22m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="15300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="19m broadcast · 15.1–15.8 MHz" hidden>19m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="17700000" data-mode="AM" type="button" role="radio" aria-checked="false" title="16m broadcast · 17.48–17.9 MHz" hidden>16m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="18950000" data-mode="AM" type="button" role="radio" aria-checked="false" title="15m broadcast · 18.9–19.02 MHz" hidden>15m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="21600000" data-mode="AM" type="button" role="radio" aria-checked="false" title="13m broadcast · 21.45–21.85 MHz" hidden>13m</button>
+                  <button class="band-btn" data-band-group="swl" data-band="25900000" data-mode="AM" type="button" role="radio" aria-checked="false" title="11m broadcast · 25.67–26.1 MHz" hidden>11m</button>
                 </div>
               </div>
             </div>
@@ -8030,7 +8051,7 @@
         <script>
           (function wireTuneAndMeterPresentation() {
             const byId = (id) => document.getElementById(id);
-            const activeRadio = (buttons) => buttons.find((button) => button.classList.contains('active')) || buttons[0];
+            const activeRadio = (buttons) => buttons.find((button) => !button.hidden && button.classList.contains('active')) || buttons.find((button) => !button.hidden);
             function wireRadioGroup(gridId, selector) {
               const grid = byId(gridId);
               if (!grid) return;
@@ -8039,7 +8060,7 @@
                 const all = buttons();
                 const active = activeRadio(all);
                 all.forEach((button) => {
-                  const checked = button === active;
+                  const checked = !button.hidden && button === active;
                   button.setAttribute('aria-checked', String(checked));
                   button.tabIndex = checked ? 0 : -1;
                 });
@@ -8065,6 +8086,7 @@
 
             const bandGrid = byId('band-grid');
             const canonicalBands = Array.from(bandGrid.querySelectorAll('.band-btn'));
+            const bandGroup = byId('band-group');
             const recentBandKey = 'saturn.ui.recentBands';
             let recentBands = [];
             try {
@@ -8079,18 +8101,26 @@
               const priority = activeBand
                 ? [activeBand.dataset.band, ...recentBands.filter((band) => band !== activeBand.dataset.band)]
                 : recentBands;
-              const ordered = phone
-                ? [...canonicalBands].sort((a, b) => {
+              const ordered = [...canonicalBands].sort((a, b) => {
+                    if (a.hidden !== b.hidden) return a.hidden ? 1 : -1;
+                    if (!phone) return canonicalBands.indexOf(a) - canonicalBands.indexOf(b);
                     const ai = priority.indexOf(a.dataset.band);
                     const bi = priority.indexOf(b.dataset.band);
                     return (ai < 0 ? 100 + canonicalBands.indexOf(a) : ai) - (bi < 0 ? 100 + canonicalBands.indexOf(b) : bi);
-                  })
-                : canonicalBands;
+                  });
               ordered.forEach((button, index) => {
                 if (bandGrid.children[index] !== button) bandGrid.insertBefore(button, bandGrid.children[index] || null);
               });
               focusedBand?.focus({ preventScroll: true });
             }
+            function displayBandGroup() {
+              canonicalBands.forEach(button => { button.hidden = button.dataset.bandGroup !== bandGroup.value; });
+              bandGrid.setAttribute('aria-label', bandGroup.value === 'swl' ? 'SWL bands' : 'Ham HF bands');
+              applyRecentBandOrder();
+            }
+            bandGroup.addEventListener('change', displayBandGroup);
+            bandGroup.addEventListener('bandgroupchange', displayBandGroup);
+            displayBandGroup();
             bandGrid.addEventListener('click', (event) => {
               const button = event.target.closest('.band-btn');
               if (!button || button.disabled) return;
@@ -11362,7 +11392,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function bandEdgesInView() {
-      return _bandEdgesInView(state.dds, displaySpanHz(), HAM_BAND_EDGES_HZ);
+      return _bandEdgesInView(state.dds, displaySpanHz(), state.bandPanelGroup === "swl" ? _next.SWL_BAND_EDGES_HZ : HAM_BAND_EDGES_HZ);
     }
 
     function displayRangeHz() {
@@ -11385,7 +11415,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function visibleBandPlanSegments() {
       const range = displayRangeHz();
-      return HAM_BAND_EDGES_HZ
+      return (state.bandPanelGroup === "swl" ? _next.SWL_BAND_EDGES_HZ : HAM_BAND_EDGES_HZ)
         .filter((band) => band.end >= range.low && band.start <= range.high)
         .map((band) => {
           const start = Math.max(band.start, range.low);
@@ -12136,7 +12166,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       clampSpectrumVisualEffect,
       clampRxAdc,
       clampRxAntenna,
-      bandKeyForFrequency,
+      bandKeyForFrequency: _bandKeyForFrequency,
       normalizeBandMemory: sanitizeBandMemory,
       signedPassbandFromUiCuts,
       shiftedSignedPassbandFromUiCuts,
@@ -13430,10 +13460,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!Number.isFinite(buttonHz) || buttonHz <= 0) {
         return;
       }
-      const newBandKey = bandKeyForFrequency(buttonHz);
+      const newBandKey = _bandKeyForFrequency(buttonHz, "ham");
       const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
       const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
       rememberCurrentBandSettings();
+      state.bandMemoryGroup = "ham";
+      saveBandPanelPreferences();
       const requestedMode = button.dataset.freqMode;
       const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
       setFrequency(targetHz, true, { rememberBand: false });
@@ -14034,6 +14066,22 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
+    const BAND_PANEL_KEY = "saturn.ui.bandGroup";
+    function saveBandPanelPreferences() {
+      try { localStorage.setItem(BAND_PANEL_KEY, JSON.stringify({ panel: state.bandPanelGroup, memory: state.bandMemoryGroup })); } catch {}
+    }
+    function setBandPanelGroup(value, persist = true) {
+      state.bandPanelGroup = _next.normalizeBandGroup(value);
+      const select = $("band-group");
+      if (select) {
+        select.value = state.bandPanelGroup;
+        select.dispatchEvent(new Event("bandgroupchange"));
+      }
+      if (persist) saveBandPanelPreferences();
+    }
+    function bandKeyForFrequency(hz) {
+      return _bandKeyForFrequency(hz, state.bandMemoryGroup);
+    }
     function currentBandMemoryEntry() {
       return {
         frequency: activeVfoFrequency() || state.dds,
@@ -18237,10 +18285,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function syncActiveBandButtons() {
-      const currentBand = bandKeyForFrequency(activeVfoFrequency());
+      const currentBand = _bandKeyForFrequency(activeVfoFrequency(), state.bandPanelGroup);
       document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
-        const buttonBand = bandKeyForFrequency(Number(button.dataset.band));
-        button.classList.toggle("active", Boolean(currentBand) && buttonBand === currentBand);
+        const buttonBand = _bandKeyForFrequency(Number(button.dataset.band), _next.normalizeBandGroup(button.dataset.bandGroup));
+        button.classList.toggle("active", !button.hidden && Boolean(currentBand) && buttonBand === currentBand);
         if (button.dataset.mode === "WFM") button.disabled = !state.rxWbfmSupported;
       });
     }
@@ -23227,13 +23275,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           sendTxFilterBand();
         });
       });
+      $("band-group").addEventListener("change", () => {
+        setBandPanelGroup($("band-group").value);
+        updateUi();
+      });
       document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
         button.addEventListener("click", () => {
           const buttonHz = Number(button.dataset.band);
-          const newBandKey = bandKeyForFrequency(buttonHz);
+          const group = _next.normalizeBandGroup(button.dataset.bandGroup);
+          const newBandKey = _bandKeyForFrequency(buttonHz, group);
           const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
           const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
           rememberCurrentBandSettings();
+          state.bandMemoryGroup = group;
+          saveBandPanelPreferences();
           const requestedMode = button.dataset.mode;
           const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
           setFrequency(targetHz, true, { rememberBand: false });
@@ -24125,6 +24180,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     // ─────────────────────────────────────────────────────────────────────────
 
     async function init() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(BAND_PANEL_KEY) || "{}");
+        state.bandMemoryGroup = _next.normalizeBandGroup(saved?.memory);
+        setBandPanelGroup(saved?.panel, false);
+      } catch { setBandPanelGroup("ham", false); }
       state.phoneWaterfallVisible = true;
       state.phoneSpectrumMode = loadPhoneSpectrumMode();
       state.spectrumWaterfallRatio = loadSpectrumWaterfallRatio();

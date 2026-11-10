@@ -7,7 +7,7 @@ import { applyRadioPrefsToState, applyDisplayPrefsToState } from '../src/state/a
 import { normalizeBandMemory, normalizeRadioPrefs } from '../src/settings/normalize';
 import { buildAllRadioPrefsCommands } from '../src/tci/commands';
 import { managedSettingsMessage } from '../src/transport/managed-pcm';
-import { bandKeyForFrequency } from '../src/radio/band';
+import { bandKeyForFrequency, normalizeBandGroup } from '../src/radio/band';
 import { PureSignalReports, pureSignalTestView } from '../src/puresignal/test-view';
 import type { ManagedPcmStatus } from '../src/transport/managed-pcm';
 import { clampPureSignalAttenuationDb } from '../src/settings/normalize';
@@ -26,20 +26,20 @@ function fixture() {
     bridgeReady: true, remoteClientRole: 'operator', rxHeadphonesSupported: true, txMonitorSupported: true });
   const storage = new Map<string, string>();
   const sent: string[] = [], logs: string[] = [], tasks: Array<() => void> = [];
-  const names = ['currentRadioPrefs', 'applyRadioPrefsObject', 'currentDisplayPrefs',
+  const names = ['bandKeyForFrequency', 'saveBandPanelPreferences', 'currentRadioPrefs', 'applyRadioPrefsObject', 'currentDisplayPrefs',
     'currentBandMemoryEntry', 'rememberCurrentBandSettings', 'applyBandMemoryForFrequency',
     'setFrequency', 'recallFrequencyEntryBand', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
     'sendCurrentRadioPrefsToBridge'];
   const context = {
     state, console, txPowerDraft: new TxPowerDraft(), receiveOnlyValidationSession: false, REMOTE_FIXED_RX_ADC: 0,
-    BAND_MEMORY_KEY: 'bandMemory', RADIO_PREFS_KEY: 'radioPrefs', REMOTE_SETTINGS_SAVE_DEBOUNCE_MS: 750,
+    BAND_MEMORY_KEY: 'bandMemory', BAND_PANEL_KEY: 'bandGroup', _bandKeyForFrequency: bandKeyForFrequency, RADIO_PREFS_KEY: 'radioPrefs', REMOTE_SETTINGS_SAVE_DEBOUNCE_MS: 750,
     remoteSettingsSaveTimer: null,
     localStorage: { setItem: (k: string, v: string) => storage.set(k, v) },
     window: { setTimeout: (f: () => void) => { tasks.push(f); return tasks.length; }, clearTimeout: vi.fn() },
     _next: { radioPrefsFromState, displayPrefsFromState, applyRadioPrefsToState,
-      buildAllRadioPrefsCommands, managedSettingsMessage },
+      buildAllRadioPrefsCommands, managedSettingsMessage, normalizeBandGroup },
     activeVfoFrequency: () => state.activeVfo === 'B' ? state.vfoB : state.vfoA,
-    bandKeyForFrequency, applyDisplayPrefsObject: (prefs: Record<string, unknown>) => applyDisplayPrefsToState(prefs, state),
+    applyDisplayPrefsObject: (prefs: Record<string, unknown>) => applyDisplayPrefsToState(prefs, state),
     logEvent: (s: string) => logs.push(s), $: () => null,
     currentRemoteSettings: () => ({ radioPrefs: radioPrefsFromState(state), bandMemory: state.bandMemory }),
     persistLocalSettingsFallback: vi.fn(), saveRemoteSettingsToServer: vi.fn(),
@@ -55,6 +55,33 @@ function fixture() {
 }
 
 describe('automatic band operating settings', () => {
+  it('recalls distinct Ham and SWL memories through the real band-button callback, including overlapping frequencies', () => {
+    const f = fixture();
+    const band = template.lastIndexOf('document.querySelectorAll("#band-grid .band-btn")');
+    const start = template.indexOf('button.addEventListener("click", () => {', band)
+      + 'button.addEventListener("click", () => {'.length;
+    const end = template.indexOf('\n        });', start);
+    const recall = runInNewContext(`button => {${template.slice(start, end)}\n}`, { ...f.context, ...f.api });
+    f.api.setFrequency(3_950_000);
+    Object.assign(f.state, { mode: 'LSB', rxAttenuationDb: 10 }); f.api.saveRadioPrefs();
+    recall({ dataset: { band: '3950000', bandGroup: 'swl', mode: 'AM' } });
+    expect(f.state.mode).toBe('AM');
+    expect(f.state.bandMemoryGroup).toBe('swl');
+    f.api.setFrequency(3_975_000);
+    Object.assign(f.state, { mode: 'SAM', rxAttenuationDb: 20 }); f.api.saveRadioPrefs();
+    recall({ dataset: { band: '3800000', bandGroup: 'ham' } });
+    expect(f.state.vfoA).toBe(3_950_000); expect(f.state.mode).toBe('LSB');
+    expect(f.state.rxAttenuationDb).toBe(10);
+    recall({ dataset: { band: '3950000', bandGroup: 'swl', mode: 'AM' } });
+    expect(f.state.vfoA).toBe(3_975_000); expect(f.state.mode).toBe('SAM');
+    expect(f.state.rxAttenuationDb).toBe(20);
+    const stored = normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!));
+    expect(stored['80m']!.frequency).toBe(3_950_000);
+    expect(stored['SWL 75m']!.frequency).toBe(3_975_000);
+    expect(stored['SWL 75m']!.radioPrefs.mode).toBe('SAM');
+    expect(JSON.parse(f.storage.get('bandGroup')!).memory).toBe('swl');
+  });
+
   it('does not carry an uncommitted power drag into another band or loaded profile',()=>{
     const f=fixture();f.context.txPowerDraft.preview(100);
     f.api.applyRadioPrefsObject({txDrive:20});

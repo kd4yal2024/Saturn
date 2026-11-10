@@ -19,9 +19,44 @@ export const HAM_BAND_EDGES_HZ: readonly BandEdge[] = Object.freeze([
   { start: 88000000, end: 108000000, label: 'FM' },
 ]);
 
-export function bandKeyForFrequency(hz: number): string {
+export type BandGroup = 'ham' | 'swl';
+
+// Receive navigation ranges, not a transmit-permission/band-plan policy.
+// Prefix memory keys because amateur and broadcast meter-band names overlap.
+export const SWL_BANDS = Object.freeze([
+  { start: 150000, end: 1710000, label: 'LW/MW', frequency: 1000000 },
+  { start: 2300000, end: 2495000, label: '120m', frequency: 2400000 },
+  { start: 3200000, end: 3400000, label: '90m', frequency: 3300000 },
+  { start: 3900000, end: 4000000, label: '75m', frequency: 3950000 },
+  { start: 4750000, end: 5060000, label: '60m', frequency: 4850000 },
+  { start: 5900000, end: 6200000, label: '49m', frequency: 6000000 },
+  { start: 7200000, end: 7450000, label: '41m', frequency: 7350000 },
+  { start: 9400000, end: 9900000, label: '31m', frequency: 9600000 },
+  { start: 11600000, end: 12100000, label: '25m', frequency: 11800000 },
+  { start: 13570000, end: 13870000, label: '22m', frequency: 13700000 },
+  { start: 15100000, end: 15800000, label: '19m', frequency: 15300000 },
+  { start: 17480000, end: 17900000, label: '16m', frequency: 17700000 },
+  { start: 18900000, end: 19020000, label: '15m', frequency: 18950000 },
+  { start: 21450000, end: 21850000, label: '13m', frequency: 21600000 },
+  { start: 25670000, end: 26100000, label: '11m', frequency: 25900000 },
+]);
+export const SWL_BAND_EDGES_HZ: readonly BandEdge[] = Object.freeze(
+  SWL_BANDS.map(band => ({ start: band.start, end: band.end, label: `SWL ${band.label}` })),
+);
+export const BAND_MEMORY_LABELS = new Set([
+  ...HAM_BAND_EDGES_HZ.map(band => band.label), ...SWL_BAND_EDGES_HZ.map(band => band.label),
+]);
+
+export function normalizeBandGroup(value: unknown): BandGroup {
+  return value === 'swl' ? 'swl' : 'ham';
+}
+
+export function bandKeyForFrequency(hz: number, group: BandGroup = 'ham'): string {
   const freq = Number(hz);
-  const band = HAM_BAND_EDGES_HZ.find((b) => freq >= b.start && freq <= b.end);
+  const first = group === 'swl' ? SWL_BAND_EDGES_HZ : HAM_BAND_EDGES_HZ;
+  const second = group === 'swl' ? HAM_BAND_EDGES_HZ : SWL_BAND_EDGES_HZ;
+  const band = first.find((b) => freq >= b.start && freq <= b.end)
+    || second.find((b) => freq >= b.start && freq <= b.end);
   return band ? band.label : '';
 }
 
