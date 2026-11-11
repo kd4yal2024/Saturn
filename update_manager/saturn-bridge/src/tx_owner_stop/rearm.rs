@@ -5,7 +5,7 @@ use crate::{
     tci::ps_authorization::Credential,
     tx_thread::{can_key_rf, KeyQualification, TxRadio},
 };
-use saturn_bridge::puresignal::Fence;
+use saturn_bridge::puresignal::{tx_lifecycle::StopCause, Fence};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OutputStamp {
@@ -34,6 +34,9 @@ pub(super) struct Rearm {
     stimulus: crate::tx_thread::feedback_owner::Stimulus,
     auto_limits: Option<(f64, f64, u64)>,
     auto_selected: bool,
+    retained_attenuation: Option<u8>,
+    resume_correction: bool,
+    retained_revision: u64,
     pub(super) auto_att: Option<super::auto_attenuation::Servo>,
     pub(super) held_key: Option<KeyReceipt>,
 }
@@ -58,6 +61,8 @@ impl Rearm {
         self.direct_stage = Default::default();
         self.auto_att = None;
         self.auto_selected = false;
+        self.resume_correction = false;
+        self.retained_revision = 0;
         self.held_key = None;
     }
     fn consume_iq(&mut self, mut count: usize) {
@@ -97,10 +102,36 @@ impl OwnerStopAdapter<'_> {
         self.rearm.auto_selected = selected;
         Ok(())
     }
+    pub(crate) fn resume_correction_for_arm(&mut self, retained: bool) {
+        self.rearm.resume_correction = retained;
+    }
+    pub(super) fn remember_release_attenuation(&mut self, cause: StopCause) {
+        if cause != StopCause::Release {
+            self.rearm.retained_attenuation = None;
+        } else if let Some(scope) = self.rearm.capture_scope {
+            self.rearm.retained_attenuation = Some(scope.attenuation_db);
+        }
+    }
     pub(crate) fn auto_attenuation_status(&self, faulted: bool) -> super::AutoAttStatus {
         if faulted {
             if let Some((_, snapshot, _, _)) = self.last_auto_att_fault {
                 return snapshot;
+            }
+        }
+        if self.rearm.auto_selected && self.rearm.resume_correction {
+            if let Some(scope) = self.rearm.capture_scope {
+                return super::AutoAttStatus {
+                    phase: if self.rearm.keyed {
+                        "retained"
+                    } else {
+                        "retained-pending"
+                    },
+                    db: scope.attenuation_db,
+                    applied_db: self.rearm.keyed.then_some(scope.attenuation_db),
+                    info: None,
+                    revision: self.rearm.retained_revision,
+                    keyed: self.rearm.keyed,
+                };
             }
         }
         if let Some(a) = &self.rearm.auto_att {
@@ -398,7 +429,13 @@ impl OwnerStopAdapter<'_> {
                 },
             };
             if self.rearm.auto_selected {
-                scope.attenuation_db = super::auto_attenuation::START_DB;
+                scope.attenuation_db = if self.rearm.resume_correction {
+                    self.rearm
+                        .retained_attenuation
+                        .ok_or(Fault::InvalidConfig)?
+                } else {
+                    super::auto_attenuation::START_DB
+                };
                 self.rearm
                     .model
                     .as_mut()
@@ -409,7 +446,8 @@ impl OwnerStopAdapter<'_> {
             self.rearm.capture_scope = Some(scope);
             if let Some((link, _)) = &self.feedback {
                 let request = link.request(Some(scope))?;
-                if self.rearm.auto_selected {
+                self.rearm.retained_revision = request.serial;
+                if self.rearm.auto_selected && !self.rearm.resume_correction {
                     let (peak, rail, stale) = self.rearm.auto_limits.ok_or(Fault::InvalidConfig)?;
                     self.rearm.auto_att = Some(super::auto_attenuation::Servo::new(
                         request.serial,
@@ -482,9 +520,12 @@ impl OwnerStopAdapter<'_> {
         self.rearm.last_source = Some(self.rearm.last_source.unwrap_or(0).max(observed));
         Ok(())
     }
-    pub(crate) fn take_mic(&mut self, stamp: OutputStamp) -> Result<Vec<f32>, Fault> {
+    pub(crate) fn take_mic(&mut self, stamp: OutputStamp) -> Result<[f32; 512], Fault> {
         self.validate_stamp(stamp)?;
-        let samples: Vec<f32> = self.pending_mic.drain(..).collect();
+        if self.pending_mic.len() != 512 {
+            return Err(Fault::UnequalLength);
+        }
+        let samples = std::array::from_fn(|_| self.pending_mic.pop_front().unwrap());
         if samples
             .iter()
             .any(|v| v.abs() >= crate::tx_thread::TX_KEY_MIC_PEAK_THRESHOLD)
@@ -619,7 +660,10 @@ impl OwnerStopAdapter<'_> {
         if observed > now || now - observed > window.as_nanos() as u64 {
             return Err(Fault::Stale);
         }
-        let iq: Vec<f32> = self.pending_iq.iter().take(480).copied().collect();
+        let mut iq = [0.; 480];
+        for (destination, source) in iq.iter_mut().zip(self.pending_iq.iter()) {
+            *destination = *source;
+        }
         let peak = iq.iter().fold(0.0_f32, |p, v| p.max(v.abs()));
         // Manual PTT is not VOX. A fresh, authorized source may key in
         // silence, before the first syllable. Native recreation, generation,
@@ -713,7 +757,10 @@ impl OwnerStopAdapter<'_> {
         if t > now || now - t > 150_000_000 {
             return Err(Fault::Stale);
         }
-        let iq: Vec<f32> = self.pending_iq.iter().take(480).copied().collect();
+        let mut iq = [0.; 480];
+        for (destination, source) in iq.iter_mut().zip(self.pending_iq.iter()) {
+            *destination = *source;
+        }
         let diagnostic = self.diagnostic_submission(Some(t));
         let done = match &self.owner {
             OutputOwner::P2 { session, .. } => session

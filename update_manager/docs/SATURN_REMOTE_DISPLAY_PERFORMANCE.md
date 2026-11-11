@@ -128,3 +128,11 @@ measurement changes on the operating browser. Profile rendering/layout and the
 existing acquisition owner alongside that comparison. Change scheduling only if
 its own measurements justify it. Evaluate WebGPU after this CPU/ownership baseline;
 retain FreeDV and audio-buffer tuning as separate work.
+
+## Server cadence after missed deadlines
+
+The server spectrum worker advances a missed deadline to the next future
+cadence boundary. It skips obsolete periods rather than emitting a catch-up
+FFT followed immediately by another FFT. A deterministic regression covers
+on-time work, a boundary and multiple missed intervals. Display transport,
+FFT resolution and canonical capture samples are unchanged.

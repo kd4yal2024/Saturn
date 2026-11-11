@@ -76,6 +76,7 @@ directory. Override those locations with `SATURN_RNNOISE_DIR` and
 The bridge and `/remote-next` client expose these WDSP 2.11 controls through
 TCI and saved radio profiles:
 
+- NNR Standard/Premium with voice/CW model selection and native model readback
 - NR2 gain method: Gaussian, Gaussian Log, Gamma, or Trained
 - NR2 noise estimate: OSMS, MMSE, or NSTAT
 - NR2 psychoacoustic post filter
@@ -172,9 +173,58 @@ Use `tests/run-wdsp-runtime-isolated.py` after building the managed test binary
 with the offline observer linked. Loopback/file-backed TX in these fixtures is
 synthetic; it is not physical RF qualification.
 
-WDSP 2.11 does not supply piHPSDR RNNR/SBNR exports. Existing feature detection
-and fallback behavior remain unchanged. No firmware, driver, RXC1 polling,
+WDSP 2.11 does not supply piHPSDR RNNR/SBNR exports. Saved NR3/NR4 requests
+still use NR2 when those exports are absent. `rx_nr_capabilities` advertises the
+available algorithms; `rx_nr_effective` identifies the implementation selected
+for the saved request, and `rx_nnr_model` reports WDSP's model slot (or -1 when
+NNR is inactive). The UI disables unsupported new selections while retaining
+saved preferences and explicitly labels an NR2 fallback. No firmware, driver, RXC1 polling,
 feedback limits or RF permission settings change with this update.
+
+## Integration and performance follow-up (2026-11-11)
+
+NNR selects slots 0/1 for Standard/Premium voice and 2/3 for CWU/CWL. Quality
+and level use the existing saved radio/profile/band preference paths. The level
+slider sets WDSP's mask floor from 0 to -60 dB. The host requires all four NNR
+control/readback exports before advertising it. Premium remains an explicit
+operator choice; x86 tests do not qualify CM4 CPU capacity.
+
+Ordinary managed PTT release now retains an existing PS curve after the
+matching backend stop receipt, MOX-off, fitter/IQC quiescence and completed
+native audio/IQ flush. Loaded IQC run state is distinguished from asynchronous
+IQC work. CALCC delay lines and external DEXP history are also cleared. The next
+fresh authorized generation reuses the curve and its last applied feedback ATT;
+mode flags are requested once per configuration, not on each PTT. New output
+is still fenced until that generation's acquisition preparation completes.
+A fault, reconfiguration or shutdown uses cold cleanup and discards the curve;
+a cold request can supersede an in-progress warm flush. This is in-process
+retention, not correction-file persistence or permission to reuse a curve
+across a band/route/source/configuration change. RF freshness and rail guards
+remain enforced.
+
+The second-over replay covers Single and Auto through authenticated TCI/SATP,
+the shared controller, real WDSP and both actual owner adapters. A separate
+native test seeds real audio-filter history, proves zero output on the next
+zero-input over, and escalates an active warm flush to cold shutdown. Synthetic
+replay confirms host/native contracts, not RF improvement.
+
+Shared receive runs the normal WDSP passband/meter chain for connected
+control-only clients. With no audio subscription or local headphone consumer,
+it bypasses NR, ANF and RX EQ, skips audio conversion/packetization and clears
+partial packets. Enabling audio restores the saved profile. With no clients,
+IQ subscription or headphone consumer, the receive channel is suspended while
+acquisition continues to drain. Full TX/native output, owner mic blocks, IQ
+packet submission and SATP output use fixed/reused buffers in the scheduling
+loop. Retained SATP timestamps and FIR-history provenance are unchanged.
+
+The shared performance JSON adds fixed-storage count, p95/p99 bucket upper
+bounds and observed maxima for RX exchanges, active TX turns, feedback pumping,
+rendering, backend output submission/gaps, source age and notification-to-stop
+receipt. These are session totals. Exchange includes native-worker waiting;
+source age starts at Bridge ingress; a backend receipt does not measure physical
+RF-off latency. Formatting is in the existing low-rate publisher. Use an actual
+CM4 before claiming CPU or RF timing improvements. No audio-buffer reduction,
+firmware/driver change or scheduling-policy change is part of this slice.
 
 ## Pin manifest
 

@@ -15,8 +15,10 @@ pub enum CleanupProgress {
 
 /// One native owner, no second WDSP thread. Each operation performs at most ONE
 /// DSP exchange and returns; no reset loop, sleep, join or channel destruction.
-/// Complete means no async fit/old IQC work remains and IQC run/busy are both 0.
+/// Complete means MOX and asynchronous fit/exchange work are quiescent.
+/// A matched port may retain a loaded correction after an ordinary release.
 pub trait CooperativeNative: NativePs {
+    fn cleanup_cause(&mut self, _cause: StopCause) {}
     fn advance_dsp_discard(&mut self) -> Result<(), Fault>;
     fn begin_cleanup(&mut self) -> Result<(), Fault>;
     fn cleanup_step(&mut self) -> Result<CleanupProgress, Fault>;
@@ -208,6 +210,7 @@ pub struct TxLifecycle<N: CooperativeNative, A: TxAuthority> {
     last_action: u64,
     pending_action: Option<FreshTxAction>,
     shutdown_requested: bool,
+    cleanup_cause: StopCause,
 }
 impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
     pub fn new(
@@ -238,6 +241,7 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
             last_action: 0,
             pending_action: None,
             shutdown_requested: false,
+            cleanup_cause: StopCause::Shutdown,
             status: LifecycleStatus {
                 mode: RunMode::Correction,
                 measurement_deadline_ns: None,
@@ -393,6 +397,13 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
         Ok(())
     }
     fn stop(&mut self, cause: StopCause) -> Result<(), Fault> {
+        let already_stopping = matches!(
+            self.status.phase,
+            Phase::AwaitingAuthority | Phase::CleaningNative | Phase::Blocked
+        );
+        if !already_stopping || cause != StopCause::Release {
+            self.cleanup_cause = cause;
+        }
         self.status.measurement_deadline_ns = None;
         let applied = self.c().status().correction_applied_reported
             || self.status.last_known_applied_before_stop;
@@ -854,6 +865,8 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
                     self.status.stop_evidence = Some(receipt.evidence);
                     self.status.cleanup_started_ns = Some(now);
                     self.status.phase = Phase::CleaningNative;
+                    let cause = self.cleanup_cause;
+                    self.c_mut().lifecycle_native().cleanup_cause(cause);
                     if let Err(fault) = self.c_mut().lifecycle_native().begin_cleanup() {
                         return self.native_failed(fault);
                     }
@@ -870,6 +883,8 @@ impl<N: CooperativeNative, A: TxAuthority> TxLifecycle<N, A> {
                     return self.native_failed(Fault::CleanupTimeout);
                 }
                 self.status.cleanup_steps += 1;
+                let cause = self.cleanup_cause;
+                self.c_mut().lifecycle_native().cleanup_cause(cause);
                 let progress = match self.c_mut().lifecycle_native().cleanup_step() {
                     Ok(p) => p,
                     Err(fault) => return self.native_failed(fault),

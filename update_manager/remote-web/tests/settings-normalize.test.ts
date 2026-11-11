@@ -236,3 +236,13 @@ describe('settings normalization', () => {
     expect(remote.bandMemory['20m']?.radioPrefs.agcMode).toBe('SLOW');
   });
 });
+
+describe('WDSP neural settings persistence', () => {
+  it('keeps both neural qualities in per-band memories and saved profiles', () => {
+    for (const mode of ['NNR', 'NNR_PREMIUM'] as const) {
+      expect(normalizeRadioPrefs({rxNoiseReductionMode: mode}).rxNoiseReductionMode).toBe(mode);
+      const memory = normalizeBandMemory({'40m': {frequency: 7200000, mode: 'LSB', radioPrefs: {rxNoiseReductionMode: mode}}});
+      expect(memory['40m']?.radioPrefs.rxNoiseReductionMode).toBe(mode);
+    }
+  });
+});

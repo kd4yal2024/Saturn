@@ -757,3 +757,119 @@ fn retained_balanced_g2_20261022_feedback_admission_review() {
         }
     }
 }
+
+#[test]
+#[ignore = "serial real WDSP warm-release, audio-history and cold-escalation regression; no hardware or RF"]
+fn native_single_and_auto_retain_only_a_quiescent_curve_and_flush_audio_history() {
+    use saturn_bridge::puresignal::tx_lifecycle::StopCause;
+    unsafe extern "C" {
+        fn fftw_set_timelimit(seconds: f64);
+    }
+    unsafe {
+        fftw_set_timelimit(0.01);
+    }
+    for automatic in [false, true] {
+        let model = RadioModel::new(6, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut native = FullNative::matched(&model).unwrap();
+        let mut cfg = config(0.67);
+        cfg.automatic = automatic;
+        native.configure(cfg).unwrap();
+        native.mox(true);
+        let mut random = 0x53460004u32;
+        let mut fitted = false;
+        for _ in 0..512 {
+            let mut tx = [0.; 2048];
+            let mut rf = [0.; 2048];
+            for pair in 0..1024 {
+                let mut uniform = || {
+                    random = random.wrapping_mul(1664525).wrapping_add(1013904223);
+                    f64::from(random) / 4294967296.
+                };
+                let radius = 0.001 + 0.999 * uniform();
+                let phase = std::f64::consts::TAU * uniform();
+                let received = 0.5 * radius * (1. - 0.25 * radius * radius);
+                let shifted = phase + 0.18 * radius * radius;
+                tx[2 * pair] = cfg.hardware_peak * radius * phase.cos();
+                tx[2 * pair + 1] = cfg.hardware_peak * radius * phase.sin();
+                rf[2 * pair] = received * shifted.cos();
+                rf[2 * pair + 1] = received * shifted.sin();
+            }
+            native.process(&mut tx, &mut rf).unwrap();
+            native.render(&[0.; 512]).unwrap();
+            if native.information().unwrap()[14] != 0 {
+                fitted = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(fitted, "positive control must really fit");
+        let mut seeded_peak = 0f32;
+        for block in 0..8 {
+            let audio = std::array::from_fn::<_, 512, _>(|i| {
+                (std::f64::consts::TAU * 1500. * (block * 512 + i) as f64 / 48000.).sin() as f32
+                    * 0.3
+            });
+            for value in native.render(&audio).unwrap() {
+                seeded_peak = seeded_peak.max(value.abs());
+            }
+        }
+        assert!(seeded_peak > 0.001, "seed real native filter history");
+        let before = native.audit();
+        native.cleanup_cause(StopCause::Release);
+        native.begin_cleanup().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut previous_exchanges = native.audit().exchanges;
+        while native.cleanup_step().unwrap() != CleanupProgress::Complete {
+            assert!(native.audit().exchanges - previous_exchanges <= 1);
+            previous_exchanges = native.audit().exchanges;
+            assert!(Instant::now() < deadline, "warm cleanup did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(native.quiescent().unwrap());
+        assert!(native.retained_correction());
+        assert!(native.channel_paused);
+        assert_eq!(native.audit().recreations, before.recreations);
+        native.mox(true);
+        assert_eq!(native.audit().mode_requests, before.mode_requests);
+        assert_eq!(
+            native.information().unwrap()[14],
+            1,
+            "curve before new feedback"
+        );
+        for _ in 0..6 {
+            assert!(
+                native
+                    .render(&[0.; 512])
+                    .unwrap()
+                    .iter()
+                    .all(|v| v.abs() < 1e-7),
+                "old microphone or IQ filter history crossed release"
+            );
+        }
+        native.cleanup_cause(StopCause::Release);
+        native.begin_cleanup().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !native.warm_flush_started {
+            assert_eq!(native.cleanup_step().unwrap(), CleanupProgress::Pending);
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Escalate an already-started warm flush. Shutdown must discard the
+        // curve and join/recreate the native channel rather than report warm clean.
+        native.cleanup_cause(StopCause::Shutdown);
+        let mut previous_exchanges = native.audit().exchanges;
+        while native.cleanup_step().unwrap() != CleanupProgress::Complete {
+            assert!(
+                native.audit().exchanges - previous_exchanges <= 1,
+                "cold escalation performed multiple exchanges in one turn"
+            );
+            previous_exchanges = native.audit().exchanges;
+            assert!(Instant::now() < deadline, "cold escalation did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!native.retained_correction());
+        assert_eq!(native.information().unwrap()[14], 0);
+        assert_eq!(native.audit().recreations, before.recreations + 1);
+        assert!(native.quiescent().unwrap());
+    }
+}

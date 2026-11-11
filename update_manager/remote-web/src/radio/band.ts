@@ -79,6 +79,8 @@ export function normalizeStreamMode(value: unknown): 'lan' | 'wan' {
 export function noiseReductionLabel(mode: string, level: number): string {
   if (mode === 'OFF') return 'Off';
   if (mode === 'NR3') return 'NR3 fixed';
+  if (mode === 'NNR') return 'NNR Standard ' + level + '%';
+  if (mode === 'NNR_PREMIUM') return 'NNR Premium ' + level + '%';
   return `${mode} ${level}%`;
 }
 

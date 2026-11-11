@@ -155,6 +155,7 @@ fn handle_command(
                 return false;
             }
             model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
+            model.observed.rx_nnr_model_slot = wdsp.nnr_model_slot();
         }
         RxCommand::ResetAudioPacketizer => wdsp.reset_audio_packetizer(),
         RxCommand::SetAudioFrameFloatCount(count) => {
@@ -242,6 +243,7 @@ fn handle_event(
                     ));
                 }
                 model.observed.rx_wbfm_stereo_detected = wdsp.wbfm_stereo_detected();
+                model.observed.rx_nnr_model_slot = wdsp.nnr_model_slot();
                 model.apply_ddc_frame(frame);
             }
         }

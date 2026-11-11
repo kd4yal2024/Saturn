@@ -226,6 +226,7 @@ struct SettingsTail {
 }
 #[derive(Clone)]
 pub(crate) struct SharedIngress {
+    pub(crate) performance: Arc<Mutex<crate::xdma_telemetry::SharedTxPerformance>>,
     audio_drops: Arc<AtomicU64>,
     pub(crate) signal_capture: Arc<OnceLock<crate::tx_signal_capture::shared::Producer>>,
     two_tone_limits: Arc<OnceLock<TwoToneLimits>>,
@@ -1980,6 +1981,7 @@ impl SharedIngress {
         let (feedback, frx) = super::owner_mailbox::sync_channel(FEEDBACK_QUEUE_BLOCKS);
         (
             Self {
+                performance: Arc::new(Mutex::new(Default::default())),
                 audio_drops: Arc::new(AtomicU64::new(0)),
                 signal_capture: Arc::new(OnceLock::new()),
                 commands,

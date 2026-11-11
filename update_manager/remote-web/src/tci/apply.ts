@@ -186,6 +186,13 @@ export function applyTciCommand(command: TciCommand, current: TciRadioState): Tc
   } else if (command.name === 'rx_ssql_threshold') {
     const threshold = numericArg(argAt(args, 1) ?? trailingArg(args));
     if (threshold != null) next.rxSsqlThreshold = Math.max(0, Math.min(100, threshold));
+  } else if (command.name === 'rx_nr_capabilities') {
+    next.rxNoiseReductionCapabilities = args.slice(1).filter(mode => ['OFF', 'NR1', 'NR2', 'NR3', 'NR4', 'NNR', 'NNR_PREMIUM'].includes(mode));
+  } else if (command.name === 'rx_nr_effective') {
+    next.rxNoiseReductionEffective = normalizeNrMode(argAt(args, 1) ?? trailingArg(args));
+  } else if (command.name === 'rx_nnr_model') {
+    const slot = numericArg(argAt(args, 1) ?? trailingArg(args));
+    next.rxNnrModelSlot = slot != null && Number.isInteger(slot) && slot >= 0 && slot <= 3 ? slot : null;
   } else if (command.name === 'rx_nr_mode' || command.name === 'nr_mode') {
     next.rxNoiseReductionMode = normalizeNrMode(argAt(args, 1) ?? trailingArg(args));
   } else if (command.name === 'rx_nr' || command.name === 'nr') {

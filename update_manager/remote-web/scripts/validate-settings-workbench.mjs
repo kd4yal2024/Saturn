@@ -112,6 +112,18 @@ try {
   check('Receiver includes all ten EQ bands and advanced NR2',await child(`return d.querySelectorAll('[data-setting^="receive.rxEqBand"] input[type="range"]').length===10 && !!d.querySelector('[data-setting="receive.nr2GainMethod"] select')`));
   await child(`const input=d.querySelector('[data-setting="receive.nr2PostFilter"] input');input.checked=false;input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new Event('change',{bubbles:true}));`);
   check('Checkbox edits use the actual RX preference handler',await evaluate(`document.getElementById('setup-dsp-nr2-post-filter').checked===false && JSON.parse(localStorage.getItem('saturn.remote.radioPrefs')).rxNr2PostFilterEnabled===false`));
+  await evaluate(`handleTciText('rx_nr_capabilities:0,OFF,NR1,NR2,NNR,NNR_PREMIUM;rx_nr_mode:0,NR3;rx_nr_effective:0,NR2;rx_nnr_model:0,-1;')`);
+  await pause(350);
+  check('Native algorithm capabilities disable unavailable NR3/NR4 and enable neural qualities', await evaluate(`document.querySelector('[data-nr-mode="NR3"]').disabled && document.querySelector('[data-nr-mode="NR4"]').disabled && !document.querySelector('[data-nr-mode="NNR"]').disabled && !document.querySelector('[data-nr-mode="NNR_PREMIUM"]').disabled`));
+  check('An existing NR3 preference displays its actual NR2 fallback', await evaluate(`document.getElementById('rx-nr-readout').textContent.includes('NR3 → NR2')`));
+  await child(`const select=d.querySelector('[data-setting="receive.nr"] select');select.value='NNR_PREMIUM';select.dispatchEvent(new Event('change',{bubbles:true}));`);
+  check('Popup selects Premium NNR through the saved per-band preference handler',await evaluate(`JSON.parse(localStorage.getItem('saturn.remote.radioPrefs')).rxNoiseReductionMode==='NNR_PREMIUM' && Object.values(JSON.parse(localStorage.getItem('saturn.remote.bandMemory'))).some(entry=>entry.radioPrefs.rxNoiseReductionMode==='NNR_PREMIUM')`));
+  await evaluate(`handleTciText('rx_nr_mode:0,NNR_PREMIUM;rx_nr_effective:0,NNR_PREMIUM;rx_nnr_model:0,3;')`);
+  await pause(350);
+  check('Native CW Premium slot is named in the radio readout',await evaluate(`document.getElementById('rx-nr-readout').textContent.includes('CW Premium')`));
+  await evaluate(`handleTciText('rx_nr_capabilities:0,OFF,NR1,NR2;')`);
+  await pause(350);
+  check('Host without neural support inhibits NNR without erasing its saved preference',await evaluate(`document.querySelector('[data-nr-mode="NNR_PREMIUM"]').disabled && JSON.parse(localStorage.getItem('saturn.remote.radioPrefs')).rxNoiseReductionMode==='NNR_PREMIUM'`));
   await search('SATP');
   check('Search finds existing names across categories',await child(`return d.querySelector('.sw-page-heading').textContent.includes('Results') && d.querySelectorAll('[data-setting]').length>=3`));
   await child(`d.querySelector('[data-page="ps"]').click()`);

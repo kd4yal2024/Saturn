@@ -25,6 +25,7 @@ pub(crate) struct Audit {
     pub(crate) feedback_blocks: u64,
     pub(crate) model_updates: u64,
     pub(crate) recreations: u64,
+    pub(crate) mode_requests: u64,
     pub(crate) cleanup_steps: u64,
     pub(crate) dexp_exchanges: u64,
 }
@@ -39,6 +40,11 @@ pub(crate) struct FullNative {
     cleanup: Option<(bool, u32)>,
     closing_worker: bool,
     quiescent: bool,
+    retain_on_release: bool,
+    retained: bool,
+    mode_pending: bool,
+    warm_flush_started: bool,
+    channel_paused: bool,
     measurement_gain: bool,
     diagnostic_source: crate::tx_thread::feedback_owner::Stimulus,
     audit: Audit,
@@ -146,6 +152,11 @@ impl FullNative {
             cleanup: None,
             closing_worker: false,
             quiescent: true,
+            retain_on_release: false,
+            retained: false,
+            mode_pending: false,
+            warm_flush_started: false,
+            channel_paused: false,
             measurement_gain: false,
             diagnostic_source: Default::default(),
             audit: Audit::default(),
@@ -170,7 +181,45 @@ impl FullNative {
             engine.observe_correction_with_attenuation(input, model, keyed, attenuation);
         }
     }
-    fn exchange(&mut self, samples: &[f32]) -> Result<Vec<f32>, Fault> {
+    fn resume_channel(&mut self) {
+        if self.channel_paused {
+            unsafe {
+                SetChannelState(WDSP_TX_CHANNEL, 1, 0);
+            }
+            self.channel_paused = false;
+        }
+    }
+    fn warm_idle(&self) -> Result<bool, Fault> {
+        #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+        {
+            unsafe extern "C" {
+                fn saturn_try_shared_ps_quiescent() -> i32;
+            }
+            match unsafe { saturn_try_shared_ps_quiescent() } {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(Fault::NativeFailure),
+            }
+        }
+        #[cfg(any(not(feature = "managed-puresignal"), saturn_bridge_stub_native))]
+        Ok(false)
+    }
+    fn warm_flush_complete(&self) -> Result<bool, Fault> {
+        #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+        {
+            unsafe extern "C" {
+                fn saturn_try_shared_warm_flush_complete() -> i32;
+            }
+            match unsafe { saturn_try_shared_warm_flush_complete() } {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(Fault::NativeFailure),
+            }
+        }
+        #[cfg(any(not(feature = "managed-puresignal"), saturn_bridge_stub_native))]
+        Ok(false)
+    }
+    fn exchange(&mut self, samples: &[f32]) -> Result<[f32; 4096], Fault> {
         #[cfg(test)]
         let started = std::time::Instant::now();
         self.audit.exchanges += 1;
@@ -245,6 +294,15 @@ impl FullNative {
     }
 }
 impl NativePs for FullNative {
+    fn quiescent(&mut self) -> Result<bool, Fault> {
+        Ok(self.quiescent
+            && self.cleanup.is_none()
+            && ((self.flags)() == 0 || (self.retained && (self.flags)() == 1))
+            && (!self.retained || self.channel_paused))
+    }
+    fn retained_correction(&self) -> bool {
+        self.retained
+    }
     fn bypass_tx_guard(&mut self) -> Result<(), Fault> {
         #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
         {
@@ -284,7 +342,11 @@ impl NativePs for FullNative {
         Err(Fault::NativeUnverified)
     }
     fn configure(&mut self, c: Config) -> Result<f64, Fault> {
+        if self.retained {
+            return Err(Fault::CleanupPending);
+        }
         let delay = Self::apply_config(c)?;
+        self.mode_pending = c.enabled;
         self.automatic = c.automatic;
         self.config = Some((c, delay));
         Ok(delay)
@@ -292,6 +354,11 @@ impl NativePs for FullNative {
     fn mox(&mut self, active: bool) {
         if active {
             self.quiescent = false;
+            self.resume_channel();
+        }
+        if active && self.mode_pending {
+            self.mode_pending = false;
+            self.audit.mode_requests += 1;
             unsafe {
                 SetPSControl(
                     WDSP_TX_CHANNEL,
@@ -386,8 +453,8 @@ impl ScheduledNative for FullNative {
             if enabled {
                 temporary.desired.tx_mic_gain_db = MEASUREMENT_MIC_GAIN_DB;
             }
-            // self.model remains the committed normal profile. Channel recreation
-            // on release, fault or disconnect restores it before declaring clean.
+            // self.model remains the committed normal profile. Warm release
+            // restores it in place; cold cleanup restores it after recreation.
             self.engine
                 .as_mut()
                 .ok_or(Fault::NativeFailure)?
@@ -420,13 +487,14 @@ impl ScheduledNative for FullNative {
         self.audit.model_updates += 1;
         Ok(())
     }
-    fn render(&mut self, mono: &[f32]) -> Result<Vec<f32>, Fault> {
+    fn render(&mut self, mono: &[f32]) -> Result<[f32; 4096], Fault> {
         if self.diagnostic_source == crate::tx_thread::feedback_owner::Stimulus::NativeTwoTone {
             if mono.iter().any(|v| *v != 0.) {
                 return Err(Fault::InvalidConfig);
             }
             self.verify_generator()?;
         }
+        self.resume_channel();
         self.exchange(mono)
     }
     fn satp_history_samples(&self) -> Option<usize> {
@@ -434,6 +502,13 @@ impl ScheduledNative for FullNative {
     }
 }
 impl CooperativeNative for FullNative {
+    fn cleanup_cause(&mut self, cause: saturn_bridge::puresignal::tx_lifecycle::StopCause) {
+        let warm = cause == saturn_bridge::puresignal::tx_lifecycle::StopCause::Release
+            && self.config.is_some_and(|(config, _)| config.enabled);
+        if self.cleanup.is_none() || !warm {
+            self.retain_on_release = warm;
+        }
+    }
     fn advance_dsp_discard(&mut self) -> Result<(), Fault> {
         if self.closing_worker {
             return Ok(());
@@ -442,6 +517,11 @@ impl CooperativeNative for FullNative {
     }
     fn begin_cleanup(&mut self) -> Result<(), Fault> {
         self.mox(false);
+        self.retain_on_release &= self.info()[14] != 0;
+        self.retained = false;
+        if self.channel_paused {
+            self.resume_channel();
+        }
         // Authority stop receipt already completed. Never run the generator
         // through cleanup or allow recreation to retain its action identity.
         if self.diagnostic_source == crate::tx_thread::feedback_owner::Stimulus::NativeTwoTone {
@@ -456,6 +536,31 @@ impl CooperativeNative for FullNative {
     }
     fn cleanup_step(&mut self) -> Result<CleanupProgress, Fault> {
         let (resetting, stable) = self.cleanup.ok_or(Fault::NativeFailure)?;
+        if self.warm_flush_started {
+            self.exchange(&[0.; 512])?;
+            self.audit.cleanup_steps += 1;
+            if !self.warm_flush_complete()? {
+                return Ok(CleanupProgress::Pending);
+            }
+            self.warm_flush_started = false;
+            self.channel_paused = true;
+            self.engine.as_mut().unwrap().clear_tx_buffers();
+            if self.engine.as_ref().unwrap().dexp_initialized {
+                unsafe {
+                    flush_dexp(WDSP_DEXP_ID);
+                }
+            }
+            if self.retain_on_release {
+                self.engine.as_mut().unwrap().sync_model(&self.model);
+                self.measurement_gain = false;
+                self.retained = self.info()[14] != 0;
+                self.quiescent = true;
+                self.cleanup = None;
+                return Ok(CleanupProgress::Complete);
+            }
+            self.resume_channel(); // A fault/config/shutdown superseded warm release.
+            return Ok(CleanupProgress::Pending); // This turn already advanced DSP once.
+        }
         if self.closing_worker {
             // Advance the 2.11 OFF/down-slew/flush sequence one exchange per
             // lifecycle turn before joining. Output authority is already closed.
@@ -495,6 +600,10 @@ impl CooperativeNative for FullNative {
                 }
             }
             self.audit.recreations += 1;
+            self.mode_pending = self.config.is_some_and(|(config, _)| config.enabled);
+            self.retained = false;
+            self.channel_paused = false;
+            self.retain_on_release = false;
             self.cleanup = None;
             self.closing_worker = false;
             self.quiescent = true;
@@ -508,6 +617,15 @@ impl CooperativeNative for FullNative {
         }
         self.exchange(&[0.; 512])?;
         self.audit.cleanup_steps += 1;
+        if self.retain_on_release {
+            if self.warm_idle()? {
+                unsafe {
+                    SetChannelState(WDSP_TX_CHANNEL, 0, 0);
+                }
+                self.warm_flush_started = true;
+            }
+            return Ok(CleanupProgress::Pending);
+        }
         let info = self.info();
         let flags = (self.flags)();
         if !(0..=3).contains(&flags) {
@@ -536,7 +654,11 @@ impl CooperativeNative for FullNative {
 }
 impl Drop for FullNative {
     fn drop(&mut self) {
-        if !self.quiescent || self.cleanup.is_some() || (self.flags)() != 0 {
+        if !self.quiescent
+            || self.cleanup.is_some()
+            || ((self.flags)() & !1) != 0
+            || (self.retained && !self.channel_paused)
+        {
             // Same fail-closed lifetime rule as TxLifecycle; never destroy a
             // native channel with possible fitter/IQC work outstanding.
             if let Some(engine) = self.engine.take() {

@@ -508,3 +508,19 @@ describe('applyTciText', () => {
     expect(result.state.txCessbEnabled).toBe(true);
   });
 });
+
+describe('WDSP 2.11 neural capability reports', () => {
+  it('reports the selected algorithm fallback and native voice/CW slot separately', () => {
+    const result = applyTciText(
+      'rx_nr_capabilities:0,OFF,NR1,NR2,NNR,NNR_PREMIUM;rx_nr_mode:0,NR3;rx_nr_effective:0,NR2;rx_nnr_model:0,-1;',
+      createState(),
+    ).state;
+    expect(result.rxNoiseReductionMode).toBe('NR3');
+    expect(result.rxNoiseReductionEffective).toBe('NR2');
+    expect(result.rxNoiseReductionCapabilities).toEqual(['OFF', 'NR1', 'NR2', 'NNR', 'NNR_PREMIUM']);
+    expect(result.rxNnrModelSlot).toBeNull();
+    const cw = applyTciText('rx_nr_mode:0,NNR_PREMIUM;rx_nr_effective:0,NNR_PREMIUM;rx_nnr_model:0,3;', result).state;
+    expect(cw.rxNoiseReductionMode).toBe('NNR_PREMIUM');
+    expect(cw.rxNnrModelSlot).toBe(3);
+  });
+});

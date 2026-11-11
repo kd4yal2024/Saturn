@@ -1797,7 +1797,7 @@ impl ScheduledNative for Fake {
             .push(m.desired.tx_filter_low_hz);
         Ok(())
     }
-    fn render(&mut self, mic: &[f32]) -> Result<Vec<f32>, Fault> {
+    fn render(&mut self, mic: &[f32]) -> Result<[f32; 4096], Fault> {
         assert_eq!(mic.len(), 512);
         let mut t = self.trace.borrow_mut();
         t.exchanges += 1;
@@ -1810,7 +1810,7 @@ impl ScheduledNative for Fake {
         if let Some(cancel) = cancel {
             cancel.release();
         }
-        Ok((0..4096).map(|i| mic[(i / 8) % 512] * 0.2).collect())
+        Ok(std::array::from_fn(|i| mic[(i / 8) % 512] * 0.2))
     }
 }
 
@@ -3951,7 +3951,14 @@ mod native {
     fn combined_remote_split_opus_shared_owner_both_backends() {
         actual_ingress_replay(true, true);
     }
+    #[test]
+    fn combined_remote_split_pcm_single_retains_correction_on_fresh_rearm() {
+        actual_ingress_replay_mode(true, false, false);
+    }
     fn actual_ingress_replay(tagged: bool, opus: bool) {
+        actual_ingress_replay_mode(tagged, opus, true);
+    }
+    fn actual_ingress_replay_mode(tagged: bool, opus: bool, automatic: bool) {
         // Same offline planner setting as OfflineNative::open; this focused
         // test must not depend on another test having initialized FFTW first.
         unsafe {
@@ -4053,6 +4060,7 @@ mod native {
             let mut next_mic = 0;
             let mut mic_sequence = 0;
             let mut corrected = [false; 3];
+            let mut retained_audit = None;
             let mut exchanges = 0;
             let mut last_active_stage = None;
             let mut last_token = None;
@@ -4106,8 +4114,10 @@ mod native {
                 }
                 match stage {
                     0 if r.life.status().phase == Phase::ReadyOff => {
+                        let mut configuration = cfg(11);
+                        configuration.automatic = automatic;
                         ingress
-                            .bootstrap(m.clone(), cfg(11), TxAudioSource::Tci)
+                            .bootstrap(m.clone(), configuration, TxAudioSource::Tci)
                             .unwrap();
                         stage = 1;
                     }
@@ -4134,6 +4144,28 @@ mod native {
                     }
                     3 | 5 | 7 if r.life.status().phase == Phase::Active => {
                         if replay.is_none() {
+                            if stage == 5 {
+                                let previous: crate::wdsp::ps_native::Audit =
+                                    retained_audit.unwrap();
+                                let audit = r.life.offline_native_snapshot(|n| n.audit());
+                                assert_eq!(
+                                    audit.recreations, previous.recreations,
+                                    "ordinary release recreated the TX engine"
+                                );
+                                assert_eq!(
+                                    audit.mode_requests, previous.mode_requests,
+                                    "second key re-issued calibration mode"
+                                );
+                                assert_eq!(
+                                    audit.feedback_blocks, previous.feedback_blocks,
+                                    "retained correction must precede new feedback"
+                                );
+                                assert_eq!(
+                                    r.life.status().correction_applied,
+                                    Some(true),
+                                    "second key must apply the retained curve immediately"
+                                );
+                            }
                             let mut src = Replay::new(backend, r.life.fence(), now);
                             src.evidence = Evidence::Missing;
                             replay = Some(src);
@@ -4165,6 +4197,16 @@ mod native {
                         }
                     }
                     4 if r.life.status().phase == Phase::ReadyOff => {
+                        assert!(r
+                            .life
+                            .offline_native_snapshot(|native| native.retained_correction()));
+                        assert_eq!(
+                            iqc_flags(),
+                            1,
+                            "loaded curve retained, asynchronous IQC idle"
+                        );
+                        retained_audit =
+                            Some(r.life.offline_native_snapshot(|native| native.audit()));
                         assert!(
                             (unsafe { saturn_offline_tx_mic_gain() } - 10f64.powf(-3. / 20.)).abs()
                                 < 1e-12
@@ -4310,6 +4352,7 @@ mod native {
             let mut correction_seen = false;
             let mut rearm_correction_seen = false;
             let mut retained_delay = None;
+            let mut before_release = None;
             let mut selected = TxAudioSource::Satp;
             r.run(&AtomicBool::new(false), |r, now| {
                 if r.life.status().phase == Phase::Blocked {
@@ -4388,26 +4431,31 @@ mod native {
                         }
                         if correction_seen {
                             old = Some(r.snapshot());
+                            before_release = Some(r.life.offline_native_snapshot(|n| n.audit()));
                             r.cancel_handle().release();
                             stage = 4;
                         }
                     }
                     4 if r.life.status().phase == Phase::ReadyOff => {
-                        assert_eq!(iqc_flags(), 0);
+                        assert_eq!(iqc_flags(), 1, "retain the idle correction");
+                        assert!(r.life.offline_native_snapshot(|n| n.retained_correction()));
                         assert_eq!(unsafe { saturn_offline_tx_features() }, 63);
                         assert!(
                             (unsafe { saturn_offline_tx_mic_gain() } - 10f64.powf(-3. / 20.)).abs()
                                 < 1e-12
                         );
                         let audit = r.life.offline_native_snapshot(|n| n.audit());
-                        assert!(audit.dexp_exchanges > 0 && audit.recreations >= 3);
+                        let previous: crate::wdsp::ps_native::Audit = before_release.unwrap();
+                        assert!(audit.dexp_exchanges > 0);
+                        assert_eq!(audit.recreations, previous.recreations);
+                        assert_eq!(audit.mode_requests, previous.mode_requests);
                         assert_eq!(hardware_peak(), 0.6121);
                         assert_eq!(
                             r.life.feedback_status().actual_delay_seconds,
                             retained_delay
                         );
                         // No configuration command: cleanup must preserve the
-                        // controller's current PS contract on the new channel.
+                        // controller's current PS contract and loaded curve.
                         send_arm(r, &commands, &ingress);
                         replay = None;
                         stage = 40;
@@ -4545,7 +4593,7 @@ mod native {
             assert!(r.life.offline_owner().queues_empty());
             let audit = r.life.offline_native_snapshot(|n| n.audit());
             assert!(
-                audit.feedback_blocks > 0 && audit.model_updates == 3 && audit.recreations >= 6
+                audit.feedback_blocks > 0 && audit.model_updates == 3 && audit.recreations >= 4
             );
             if let Some(d) = &d {
                 d.assert_off();
@@ -4604,8 +4652,11 @@ mod native {
             self.models.borrow_mut().push(m.desired.tx_filter_low_hz);
             Ok(())
         }
-        fn render(&mut self, m: &[f32]) -> Result<Vec<f32>, Fault> {
-            self.native.render_mic(m)
+        fn render(&mut self, m: &[f32]) -> Result<[f32; 4096], Fault> {
+            self.native
+                .render_mic(m)?
+                .try_into()
+                .map_err(|_| Fault::UnequalLength)
         }
     }
     #[test]

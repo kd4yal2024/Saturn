@@ -53,7 +53,7 @@ pub(crate) trait ScheduledNative: CooperativeNative {
             Ok(())
         }
     }
-    fn render(&mut self, mono: &[f32]) -> Result<Vec<f32>, Fault>;
+    fn render(&mut self, mono: &[f32]) -> Result<[f32; 4096], Fault>;
     /// None preserves the existing inhibited SATP default. Only a verified
     /// equal-rate port may report its native FIR retention capacity.
     fn satp_history_samples(&self) -> Option<usize> {
@@ -297,6 +297,7 @@ pub(crate) struct StaleSnapshot {
 }
 #[derive(Default, Debug)]
 pub(crate) struct Counters {
+    pub(crate) performance: crate::xdma_telemetry::SharedTxPerformance,
     pub(crate) last_stale: Option<StaleSnapshot>,
     pub(crate) turns: u64,
     pub(crate) rejected: u64,
@@ -364,6 +365,8 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     two_tone_deadline: Option<u64>,
     reported_lifecycle: Option<(Phase, u64)>,
     last_signal_report: Instant,
+    last_timing_report: Instant,
+    last_output_at: Option<Instant>,
     #[cfg(test)]
     before_audio_check: Option<fn(&mut Self)>,
 }
@@ -438,6 +441,8 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             two_tone_deadline: None,
             reported_lifecycle: None,
             last_signal_report: Instant::now(),
+            last_timing_report: Instant::now(),
+            last_output_at: None,
             #[cfg(test)]
             before_audio_check: None,
         })
@@ -536,9 +541,27 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         evidence.component_limit, evidence.native_info);
                 }
             }
+            if status.phase == Phase::ReadyOff {
+                if let Some((notified, completed)) =
+                    status.notified_ns.zip(status.authority_completed_ns)
+                {
+                    self.counters
+                        .performance
+                        .stop_receipt
+                        .record(std::time::Duration::from_nanos(
+                            completed.saturating_sub(notified),
+                        ));
+                }
+            }
             self.reported_lifecycle = Some(transition);
         }
         if let Some(ingress) = self.ingress.clone() {
+            if self.last_timing_report.elapsed() >= std::time::Duration::from_secs(1) {
+                if let Ok(mut performance) = ingress.performance.try_lock() {
+                    *performance = self.counters.performance.clone();
+                    self.last_timing_report = Instant::now();
+                }
+            }
             let snapshot = self.snapshot();
             ingress.publish(
                 snapshot,
@@ -592,6 +615,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         audio_permit_matches(stamp, current, self.life.status().phase)
     }
     fn discard_local(&mut self) {
+        self.last_output_at = None;
         self.satp_started = false;
         self.mic.clear();
         self.mic_stamp = None;
@@ -793,6 +817,12 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                     self.life
                         .offline_owner()
                         .auto_attenuation_for_arm(auto_att)?;
+                    let retained = self
+                        .life
+                        .offline_native_snapshot(|native| native.retained_correction());
+                    self.life
+                        .offline_owner()
+                        .resume_correction_for_arm(retained);
                     let arm_result = if self
                         .installed
                         .as_ref()
@@ -1212,6 +1242,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         let result = self.service_turn(now, before_pump, realtime, after_tick);
         let elapsed_ns = start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
         if entered_active {
+            self.counters.performance.turn.record(start.elapsed());
             self.counters.active_max_turn_ns = self.counters.active_max_turn_ns.max(elapsed_ns);
         }
         self.counters.max_turn_ns = self.counters.max_turn_ns.max(elapsed_ns);
@@ -1540,6 +1571,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 // IQC/fitter and returns output from that single DSP exchange.
                 let start = Instant::now();
                 let result = self.life.pump(now);
+                self.counters.performance.pump.record(start.elapsed());
                 self.counters.max_pump_ns = self
                     .counters
                     .max_pump_ns
@@ -1599,9 +1631,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                         .map(|b| (b.oldest.unwrap_or(now), b.samples))
                 } else {
                     let observed = self.mic.front().map(|s| s.1).unwrap_or(now);
-                    let take = self.mic.len().min(512);
-                    let mut samples: Vec<f32> = self.mic.drain(..take).map(|v| v.0).collect();
-                    samples.resize(512, 0.);
+                    let samples = std::array::from_fn(|_| self.mic.pop_front().map_or(0., |v| v.0));
                     Ok((observed, samples))
                 };
                 let (observed, mic) = match input {
@@ -1634,6 +1664,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                     // Fixed-clock zero fill continues native DSP during source
                     // pauses. It NEVER updates last_arrival or grants mic-level
                     // qualification; both watchdogs remain based on ingress.
+                    self.counters
+                        .performance
+                        .source_age
+                        .record(std::time::Duration::from_nanos(now - observed));
                     self.counters.input_component_peak =
                         mic.iter().fold(0.0_f32, |p, v| p.max(v.abs()));
                     if self.counters.input_component_peak >= super::TX_KEY_MIC_PEAK_THRESHOLD {
@@ -1657,6 +1691,10 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                                 .life
                                 .offline_tx_exchange(now, |native| native.render(&mic));
                             if self.life.status().phase == Phase::Active {
+                                self.counters
+                                    .performance
+                                    .render
+                                    .record(render_started.elapsed());
                                 self.counters.active_max_render_ns =
                                     self.counters.active_max_render_ns.max(
                                         render_started
@@ -1710,8 +1748,20 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                 && now >= self.next_iq
             {
                 if let Ok(stamp) = self.life.offline_owner().output_stamp() {
+                    let started = Instant::now();
                     match self.life.offline_owner().flush_iq(stamp, now) {
                         Ok(true) => {
+                            self.counters
+                                .performance
+                                .output_submission
+                                .record(started.elapsed());
+                            let completed = Instant::now();
+                            if let Some(previous) = self.last_output_at.replace(completed) {
+                                self.counters
+                                    .performance
+                                    .output_gap
+                                    .record(completed.duration_since(previous));
+                            }
                             self.counters.iq_packets += 1;
                             worked = true;
                         }

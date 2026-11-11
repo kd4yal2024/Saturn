@@ -161,6 +161,8 @@ pub struct TciClientSnapshot {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TciMediaDemand {
+    /// Keep passband metering alive for control-only clients.
+    pub(crate) client_active: bool,
     /// Some client wants RX IQ in any form, so the backend must decode it.
     pub(crate) iq_stream_enabled: bool,
     pub(crate) audio_stream_enabled: bool,
@@ -683,6 +685,7 @@ impl TciFrontend {
     pub(crate) fn media_demand(&self) -> TciMediaDemand {
         let clients = self.clients.lock_unpoisoned();
         TciMediaDemand {
+            client_active: !clients.is_empty(),
             iq_stream_enabled: clients
                 .values()
                 .any(|client| client.state.iq_stream_enabled),
@@ -721,6 +724,10 @@ impl TciFrontend {
     }
 
     pub(crate) fn publish_observer_capabilities(&self) {
+        self.send_text(format!(
+            "rx_nr_capabilities:0,{};",
+            crate::wdsp::noise_reduction_capabilities()
+        ));
         self.send_text(format!(
             "saturn_ps_correction_caps:{};",
             if self.correction_monitor_available.load(Ordering::Acquire) {
@@ -786,6 +793,10 @@ impl TciFrontend {
         self.send_text(format!(
             "rx_nr_mode:0,{};",
             model.desired.rx_noise_reduction_mode
+        ));
+        self.send_text(format!(
+            "rx_nr_effective:0,{};",
+            crate::wdsp::effective_noise_reduction(model.desired.rx_noise_reduction_mode)
         ));
         self.send_text(format!(
             "rx_nr_level:0,{:.0};",
@@ -1165,6 +1176,14 @@ impl TciFrontend {
     }
 
     pub fn publish_telemetry(&self, model: &RadioModel) {
+        self.send_text(format!(
+            "rx_nr_effective:0,{};",
+            crate::wdsp::effective_noise_reduction(model.desired.rx_noise_reduction_mode)
+        ));
+        self.send_text(format!(
+            "rx_nnr_model:0,{};",
+            model.observed.rx_nnr_model_slot.unwrap_or(-1)
+        ));
         self.send_text(format!(
             "rx_wbfm_stereo:0,{};",
             model.observed.rx_wbfm_stereo_detected

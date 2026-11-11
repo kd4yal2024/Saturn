@@ -484,6 +484,9 @@ impl TxAuthority for OwnerStopAdapter<'_> {
         Some(ReleaseHandle::from_mailbox(self.fence.clone()))
     }
     fn release_received(&mut self, _: u64, _: u64) -> Result<(), Fault> {
+        self.remember_release_attenuation(
+            saturn_bridge::puresignal::tx_lifecycle::StopCause::Release,
+        );
         self.fence.close();
         if let Some(c) = &self.diagnostic_last {
             c.event(crate::tx_signal_capture::shared::Kind::Stop, None);
@@ -497,6 +500,7 @@ impl TxAuthority for OwnerStopAdapter<'_> {
         Ok(())
     }
     fn begin_stop(&mut self, request: StopRequest) -> Result<(), Fault> {
+        self.remember_release_attenuation(request.cause);
         // Even malformed requests fence immediately; they cannot mint receipts.
         self.fence.close();
         if let (saturn_bridge::puresignal::tx_lifecycle::StopCause::Fault(fault), Some(servo)) =

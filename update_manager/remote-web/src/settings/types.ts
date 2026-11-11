@@ -4,7 +4,7 @@ import type { DemodMode } from '../radio/passband';
 export type LayoutMode = 'desktop' | 'phone';
 export type ThemeMode = 'dark' | 'light';
 export type StreamMode = 'lan' | 'wan';
-export type NoiseReductionMode = 'OFF' | 'NR1' | 'NR2' | 'NR3' | 'NR4';
+export type NoiseReductionMode = 'OFF' | 'NR1' | 'NR2' | 'NR3' | 'NR4' | 'NNR' | 'NNR_PREMIUM';
 export type Nr2GainMethod = 'GAUSSIAN' | 'GAUSSIAN_LOG' | 'GAMMA' | 'TRAINED';
 export type Nr2NpeMethod = 'OSMS' | 'MMSE' | 'NSTAT';
 export type WbfmDeemphasis = 'OFF' | 'NA_75US' | 'EU_50US';

@@ -45,6 +45,11 @@ pub(crate) fn clamp_spectrum_interval_ms(requested: u32) -> u32 {
     requested.clamp(SPECTRUM_MIN_INTERVAL_MS, SPECTRUM_MAX_INTERVAL_MS)
 }
 
+fn next_spectrum_deadline(due: Instant, interval: Duration, now: Instant) -> Instant {
+    let periods = now.saturating_duration_since(due).as_nanos() / interval.as_nanos() + 1;
+    due + interval.saturating_mul(u32::try_from(periods).unwrap_or(u32::MAX))
+}
+
 /// One computed display row, shared by every client in the same
 /// (fft_size, interval) group. The per-client sequence is assigned when the
 /// writer dequeues the row, so replaced rows never consume credit.
@@ -219,7 +224,7 @@ fn run_worker(
             let due = deadlines.entry((fft_size, interval_ms)).or_insert(now);
             if now >= *due {
                 // Skip missed deadlines instead of bursting to catch up.
-                *due = (*due + interval).max(now);
+                *due = next_spectrum_deadline(*due, interval, now);
                 let captured_at = Instant::now();
                 match ring.snapshot(fft_size as usize, &mut iq) {
                     Some(center_hz) => {
@@ -266,6 +271,18 @@ fn run_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_spectrum_work_skips_to_a_future_cadence_without_a_catchup_fft() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(33);
+        for (elapsed, expected) in [(0, 33), (1, 33), (33, 66), (100, 132)] {
+            let now = start + Duration::from_millis(elapsed);
+            let next = next_spectrum_deadline(start, interval, now);
+            assert_eq!(next.duration_since(start), Duration::from_millis(expected));
+            assert!(next > now);
+        }
+    }
 
     fn tone(pairs: usize, bin: f64, amplitude: f32) -> Vec<f32> {
         (0..pairs)

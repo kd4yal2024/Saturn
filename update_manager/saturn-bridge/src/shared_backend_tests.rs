@@ -424,6 +424,10 @@ impl RuntimeIo for Io {
             let mut silent_ptt_started: Option<Instant> = None;
             let mut bypass_packets = 0;
             let mut auto_generations = std::collections::BTreeSet::new();
+            let mut last_good_att = None;
+            let require_monitor = case == Case::ShutdownActive
+                && std::env::var("SATURN_PS_CORRECTION_MONITOR").as_deref() == Ok("1");
+            let mut monitor_baseline = crate::correction_monitor::published()[usize::from(direct)];
             let mut leveling_since = None;
             let mut negative_started = false;
             while !joined.load(Ordering::Acquire) {
@@ -452,8 +456,9 @@ impl RuntimeIo for Io {
                     if let Some(scope) = link.desired().scope {
                         if auto_generations.insert(scope.output.generation) {
                             assert_eq!(
-                                scope.attenuation_db, 31,
-                                "each fresh PS TX starts at maximum feedback attenuation"
+                                scope.attenuation_db,
+                                if stage >= 4 { last_good_att.expect("warm re-arm requires a completed previous key") } else { 31 },
+                                "cold TX starts at maximum ATT; warm re-arm retains the completed key's ATT"
                             );
                         }
                         if status.phase == Phase::Active {
@@ -461,12 +466,22 @@ impl RuntimeIo for Io {
                             if case == Case::AutoAttLimit {
                                 let att = ingress.auto_leveling_snapshot().unwrap();
                                 assert_eq!(scope.attenuation_db, 31);
-                                assert_eq!(att.phase, "limited");
-                                assert!(att.info.is_some_and(|level| level > 165));
+                                if auto_generations.len() > 1 {
+                                    assert_eq!(att.phase, "retained");
+                                    assert_eq!(att.applied_db, Some(31));
+                                    assert_eq!(
+                                        att.info, None,
+                                        "old startup ratio is not a new measurement"
+                                    );
+                                } else {
+                                    assert_eq!(att.phase, "limited");
+                                    assert!(att.info.is_some_and(|level| level > 165));
+                                }
                             } else {
                                 assert!(scope.attenuation_db < 31, "servo must actually adjust");
                             }
                             assert!(link.prepared(scope.output).unwrap());
+                            last_good_att = Some(scope.attenuation_db);
                         }
                     }
                 }
@@ -649,13 +664,13 @@ impl RuntimeIo for Io {
                             client.as_ref().unwrap().audio_frames
                         );
                         if case == Case::ReceiveSpectrum {
-                            let client = client.as_ref().unwrap();
-                            assert!(client.vfo_a_reports <= 3, "idle receive must not repeat full configuration snapshots: {} VFO reports", client.vfo_a_reports);
+                            let spectrum_client = client.as_ref().unwrap();
+                            assert!(spectrum_client.vfo_a_reports <= 3, "idle receive must not repeat full configuration snapshots: {} VFO reports", spectrum_client.vfo_a_reports);
                             assert!(
-                                client.rx_meter_dbm.len() >= 2,
+                                spectrum_client.rx_meter_dbm.len() >= 2,
                                 "periodic meter updates must continue"
                             );
-                            assert!(client.monitor_caps_reports > 0, "late clients must receive monitor capabilities without a configuration change");
+                            assert!(spectrum_client.monitor_caps_reports > 0, "late clients must receive monitor capabilities without a configuration change");
                             let perf = std::fs::read_to_string(&perf_path).unwrap();
                             assert!(perf.contains(concat!(
                                 "\"app_version\":\"",
@@ -696,10 +711,44 @@ impl RuntimeIo for Io {
                                 .unwrap();
                             assert!(rate.is_finite() && rate > 0.0);
                             assert_eq!(
-                                client.iq_frames, 0,
+                                spectrum_client.iq_frames, 0,
                                 "WAN client must receive spectrum rows without raw-IQ fallback"
                             );
                             assert_eq!(status.phase, Phase::ReadyOff);
+                            assert!(perf.contains("\"shared_performance\":{\"scope\":"));
+                            assert!(perf.contains("\"rx_exchange_p95_upper_us\":"));
+                            assert!(!perf.contains("\"rx_exchange_count\":0"));
+                            assert!(perf.contains("\"tx_render_count\":0"));
+                            // Real subscription changes leave the passband S-meter
+                            // alive, stop unrequested audio/rows and resume audio.
+                            let c = client.as_mut().unwrap();
+                            c.text("audio_stop:0;iq_stop:0;");
+                            let drain = Instant::now();
+                            while drain.elapsed() < Duration::from_millis(300) {
+                                c.drain();
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            let paused = (c.audio_frames, c.spectrum_frames, c.rx_meter_dbm.len());
+                            let meter_only = Instant::now();
+                            while meter_only.elapsed() < Duration::from_millis(1200) {
+                                c.drain();
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            assert_eq!((c.audio_frames, c.spectrum_frames), (paused.0, paused.1));
+                            assert!(
+                                c.rx_meter_dbm.len() > paused.2,
+                                "control-only RX lost passband metering"
+                            );
+                            c.text("audio_start:0;iq_start:0;");
+                            let resumed = Instant::now();
+                            while c.audio_frames == paused.0 || c.spectrum_frames == paused.1 {
+                                c.drain();
+                                assert!(
+                                    resumed.elapsed() < Duration::from_secs(3),
+                                    "RX demand resume stalled"
+                                );
+                                thread::sleep(Duration::from_millis(2));
+                            }
                             stop.store(true, Ordering::Release);
                             while !joined.load(Ordering::Acquire) {
                                 assert!(Instant::now() < end);
@@ -1009,6 +1058,9 @@ impl RuntimeIo for Io {
                             } else {
                                 status.correction_applied == Some(true)
                             }
+                            && (!require_monitor
+                                || crate::correction_monitor::published()[usize::from(direct)]
+                                    > monitor_baseline)
                             && (case != Case::AutoSustained
                                 || auto_active_since
                                     .is_some_and(|t| t.elapsed() >= Duration::from_secs(15))) =>
@@ -1085,6 +1137,8 @@ impl RuntimeIo for Io {
                         silent_ptt_started = None;
                         bypass_packets = output_packets.load(Ordering::Acquire);
                         auto_active_since = None;
+                        monitor_baseline =
+                            crate::correction_monitor::published()[usize::from(direct)];
                         client.as_mut().unwrap().native_calibrations.clear();
                         if case.rear_ptt() {
                             // A delayed old press must not consume or fault the

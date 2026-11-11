@@ -270,6 +270,15 @@ unsafe extern "C" {
     #[cfg(wdsp_has_rnnr_sbnr)]
     fn SetRXASBNRPosition(channel: i32, position: i32);
 
+    #[cfg(wdsp_has_nnr)]
+    fn SetRXANNRRun(channel: i32, run: i32);
+    #[cfg(wdsp_has_nnr)]
+    fn SetRXANNRModel(channel: i32, slot: i32) -> i32;
+    #[cfg(wdsp_has_nnr)]
+    fn GetRXANNRModel(channel: i32) -> i32;
+    #[cfg(wdsp_has_nnr)]
+    fn SetRXANNRMaskFloor(channel: i32, floor_db: f64);
+
     // AGC
     fn SetRXAAGCMode(channel: i32, mode: i32);
     fn SetRXAAGCSlope(channel: i32, slope: i32);
@@ -594,6 +603,7 @@ pub struct WdspRxEngine {
     mode: DemodMode,
     volume_db: f64,
     noise_reduction_mode: NoiseReductionMode,
+    nnr_model_slot: Option<i32>,
     noise_reduction_level: f64,
     nr2_gain_method: Nr2GainMethod,
     nr2_npe_method: Nr2NpeMethod,
@@ -626,6 +636,8 @@ pub struct WdspRxEngine {
     last_meter_dbm: Option<f32>,
     nb_initialized: bool,
     rx_suspended: bool,
+    audio_output_enabled: bool,
+    performance: crate::xdma_telemetry::SharedRxPerformance,
     rx_fft_size: u32,
     rx_low_latency: bool,
     rx_eq_enabled: bool,
@@ -643,6 +655,7 @@ impl WdspRxEngine {
             mode: DemodMode::Unknown,
             volume_db: -10.0,
             noise_reduction_mode: NoiseReductionMode::Off,
+            nnr_model_slot: None,
             noise_reduction_level: 100.0,
             nr2_gain_method: Nr2GainMethod::Gamma,
             nr2_npe_method: Nr2NpeMethod::Osms,
@@ -675,6 +688,8 @@ impl WdspRxEngine {
             last_meter_dbm: None,
             nb_initialized: false,
             rx_suspended: false,
+            audio_output_enabled: true,
+            performance: Default::default(),
             rx_fft_size: model.desired.rx_fft_size,
             rx_low_latency: model.desired.rx_low_latency,
             rx_eq_enabled: false,
@@ -684,6 +699,14 @@ impl WdspRxEngine {
         };
         engine.reconfigure(model)?;
         Ok(engine)
+    }
+
+    pub(crate) fn nnr_model_slot(&self) -> Option<i32> {
+        self.nnr_model_slot
+    }
+
+    pub(crate) fn performance(&self) -> &crate::xdma_telemetry::SharedRxPerformance {
+        &self.performance
     }
 
     pub fn smeter_dbm(&self) -> Option<f32> {
@@ -714,6 +737,7 @@ impl WdspRxEngine {
             self.apply_squelch();
             self.apply_noise_blanker();
             self.apply_agc();
+            self.apply_noise_reduction();
         }
 
         if model.desired.rx_wbfm_deemphasis != self.wbfm_deemphasis {
@@ -824,7 +848,10 @@ impl WdspRxEngine {
             self.rx_eq_bands = model.desired.rx_eq_bands;
             unsafe {
                 SetRXAGrphEQ10(self.channel_id, self.rx_eq_bands.as_mut_ptr());
-                SetRXAEQRun(self.channel_id, self.rx_eq_enabled as i32);
+                SetRXAEQRun(
+                    self.channel_id,
+                    (self.rx_eq_enabled && self.audio_output_enabled) as i32,
+                );
             }
         }
 
@@ -870,6 +897,21 @@ impl WdspRxEngine {
         self.audio_frame_fill = 0;
         unsafe {
             SetChannelState(self.channel_id, 1, 0);
+        }
+    }
+
+    /// Meter-only consumers retain the normal passband and S-meter path.
+    /// Audio processing and packet assembly resume from the saved profile.
+    pub(crate) fn set_audio_output_enabled(&mut self, enabled: bool) {
+        if self.audio_output_enabled == enabled {
+            return;
+        }
+        self.audio_output_enabled = enabled;
+        self.audio_frame_fill = 0;
+        self.apply_noise_reduction();
+        self.apply_anf();
+        unsafe {
+            SetRXAEQRun(self.channel_id, (enabled && self.rx_eq_enabled) as i32);
         }
     }
 
@@ -925,12 +967,18 @@ impl WdspRxEngine {
                         self.input_buffer.as_mut_ptr(),
                     );
                 }
+                let started = Instant::now();
                 fexchange0(
                     self.channel_id,
                     self.input_buffer.as_ptr(),
                     self.output_buffer.as_mut_ptr(),
                     &mut error,
                 );
+                self.performance.exchange.record(started.elapsed());
+                self.performance.input_pairs = self
+                    .performance
+                    .input_pairs
+                    .saturating_add(self.input_complex_samples as u64);
             }
 
             if error != 0 {
@@ -950,6 +998,9 @@ impl WdspRxEngine {
                 self.wbfm_stereo_detected = false;
             }
 
+            if !self.audio_output_enabled {
+                continue;
+            }
             if self.mode == DemodMode::Wfm && wbfm_supported() {
                 // RXA WBFM outputs true L/R audio and bypasses the panel gain block.
                 for index in (0..self.output_buffer.len()).step_by(2) {
@@ -976,6 +1027,7 @@ impl WdspRxEngine {
         self.audio_frame_buffer[self.audio_frame_fill + 1] = right;
         self.audio_frame_fill += 2;
         if self.audio_frame_fill == self.frame_float_count {
+            self.performance.audio_frames = self.performance.audio_frames.saturating_add(1);
             on_audio_frame(&self.audio_frame_buffer);
             self.audio_frame_fill = 0;
         }
@@ -1336,23 +1388,36 @@ impl WdspRxEngine {
             );
             SetRXAANFRun(
                 self.channel_id,
-                (self.mode != DemodMode::Wfm && self.anf_enabled) as i32,
+                (self.mode != DemodMode::Wfm && self.anf_enabled && self.audio_output_enabled)
+                    as i32,
             );
             SetRXAANFPosition(self.channel_id, WDSP_NR_POSITION_POST_AGC);
         }
     }
 
-    fn apply_noise_reduction(&self) {
+    fn apply_noise_reduction(&mut self) {
         let level = self.noise_reduction_level.clamp(0.0, 100.0);
-        let allowed = self.mode != DemodMode::Wfm;
-        let emnr_active = allowed
-            && (matches!(self.noise_reduction_mode, NoiseReductionMode::Nr2)
-                || (!cfg!(wdsp_has_rnnr_sbnr)
-                    && matches!(
-                        self.noise_reduction_mode,
-                        NoiseReductionMode::Nr3 | NoiseReductionMode::Nr4
-                    )));
+        let allowed = self.mode != DemodMode::Wfm && self.audio_output_enabled;
+        let effective = effective_noise_reduction(self.noise_reduction_mode);
+        let emnr_active = allowed && effective == NoiseReductionMode::Nr2;
+        self.nnr_model_slot = None;
         unsafe {
+            #[cfg(wdsp_has_nnr)]
+            {
+                let neural = matches!(
+                    effective,
+                    NoiseReductionMode::Nnr | NoiseReductionMode::NnrPremium
+                );
+                if neural && allowed {
+                    let cw = matches!(self.mode, DemodMode::Cwl | DemodMode::Cwu);
+                    let slot =
+                        i32::from(cw) * 2 + i32::from(effective == NoiseReductionMode::NnrPremium);
+                    SetRXANNRModel(self.channel_id, slot);
+                    self.nnr_model_slot = Some(GetRXANNRModel(self.channel_id));
+                    SetRXANNRMaskFloor(self.channel_id, -0.6 * level);
+                }
+                SetRXANNRRun(self.channel_id, (neural && allowed) as i32);
+            }
             SetRXAANRVals(
                 self.channel_id,
                 self.anr_taps,
@@ -1522,7 +1587,7 @@ impl WdspTxEngine {
     pub(crate) fn offline_render_block(
         &mut self,
         samples: &[f32],
-    ) -> Result<Vec<f32>, saturn_bridge::puresignal::Fault> {
+    ) -> Result<[f32; 4096], saturn_bridge::puresignal::Fault> {
         use saturn_bridge::puresignal::Fault;
         if !self.tx_active
             || samples.len() != TX_MIC_SAMPLES_PER_DSP_BLOCK
@@ -1562,7 +1627,7 @@ impl WdspTxEngine {
         self.total_output_pairs = self
             .total_output_pairs
             .saturating_add(WDSP_TX_OUTPUT_SAMPLES as u64);
-        Ok(self.output_buffer.iter().map(|s| *s as f32).collect())
+        Ok(std::array::from_fn(|i| self.output_buffer[i] as f32))
     }
     pub fn new(model: &RadioModel) -> Self {
         #[cfg(feature = "offline-puresignal-owner-adapters")]
@@ -2482,6 +2547,29 @@ pub fn wdsp_mode(mode: DemodMode) -> i32 {
     }
 }
 
+pub(crate) fn effective_noise_reduction(mode: NoiseReductionMode) -> NoiseReductionMode {
+    match mode {
+        NoiseReductionMode::Nr3 | NoiseReductionMode::Nr4 if !cfg!(wdsp_has_rnnr_sbnr) => {
+            NoiseReductionMode::Nr2
+        }
+        NoiseReductionMode::Nnr | NoiseReductionMode::NnrPremium if !cfg!(wdsp_has_nnr) => {
+            NoiseReductionMode::Nr2
+        }
+        mode => mode,
+    }
+}
+
+pub(crate) fn noise_reduction_capabilities() -> String {
+    let mut modes = vec!["OFF", "NR1", "NR2"];
+    if cfg!(wdsp_has_rnnr_sbnr) {
+        modes.extend(["NR3", "NR4"]);
+    }
+    if cfg!(wdsp_has_nnr) {
+        modes.extend(["NNR", "NNR_PREMIUM"]);
+    }
+    modes.join(",")
+}
+
 pub const fn wbfm_supported() -> bool {
     cfg!(wdsp_has_wbfm)
 }
@@ -2603,6 +2691,82 @@ mod tests {
         wdsp_mode, wdsp_tx_mode, MicRateMatcher, WdspRxEngine, WdspTxEngine, WDSP_AUDIO_RATE_HZ,
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
+
+    #[test]
+    fn noise_reduction_capabilities_match_the_effective_native_algorithm() {
+        use crate::radio_model::NoiseReductionMode::*;
+        let capabilities = super::noise_reduction_capabilities();
+        for mode in [Off, Nr1, Nr2, Nr3, Nr4, Nnr, NnrPremium] {
+            let available = capabilities.split(',').any(|name| name == mode.to_string());
+            assert_eq!(available, super::effective_noise_reduction(mode) == mode);
+        }
+    }
+
+    #[cfg(saturn_bridge_stub_native)]
+    #[test]
+    fn rx_audio_demand_keeps_metering_and_discards_partial_audio_on_resume() {
+        let model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut engine = WdspRxEngine::new(&model).unwrap();
+        let samples = vec![0.25; engine.input_buffer.len()];
+        let packet_length = engine.output_buffer.len() * 2;
+        engine.set_audio_frame_float_count(packet_length);
+        engine.process_iq(&samples, |_| panic!("only half a packet supplied"));
+        assert!(engine.audio_frame_fill > 0);
+        engine.set_audio_output_enabled(false);
+        assert_eq!(engine.audio_frame_fill, 0);
+        for _ in 0..3 {
+            engine.process_iq(&samples, |_| panic!("unrequested audio emitted"));
+        }
+        assert!(engine.last_meter_dbm.unwrap().is_finite());
+        assert_eq!(engine.performance.exchange.count(), 4);
+        assert_eq!(engine.performance.audio_frames, 0);
+        engine.set_audio_output_enabled(true);
+        let mut frames = 0;
+        engine.process_iq(&samples, |_| frames += 1);
+        assert_eq!(frames, 0, "pre-resume packet tail survived");
+        engine.process_iq(&samples, |_| frames += 1);
+        assert_eq!(frames, 1);
+    }
+
+    #[cfg(wdsp_has_nnr)]
+    #[test]
+    #[cfg_attr(
+        not(saturn_bridge_stub_native),
+        ignore = "serial native RX test; no devices or RF"
+    )]
+    fn nnr_models_follow_quality_and_voice_cw_mode() {
+        #[cfg(not(saturn_bridge_stub_native))]
+        {
+            unsafe extern "C" {
+                fn fftw_set_timelimit(seconds: f64);
+            }
+            unsafe {
+                fftw_set_timelimit(0.01);
+            }
+        }
+        use crate::radio_model::NoiseReductionMode;
+        let mut model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut engine = WdspRxEngine::new(&model).unwrap();
+        for (mode, nr, slot) in [
+            (DemodMode::Usb, NoiseReductionMode::Nnr, 0),
+            (DemodMode::Lsb, NoiseReductionMode::NnrPremium, 1),
+            (DemodMode::Cwu, NoiseReductionMode::Nnr, 2),
+            (DemodMode::Cwl, NoiseReductionMode::NnrPremium, 3),
+        ] {
+            model.desired.mode = mode;
+            model.desired.rx_noise_reduction_mode = nr;
+            engine.sync_model(&model).unwrap();
+            assert_eq!(engine.nnr_model_slot(), Some(slot));
+            let samples = vec![0.001; engine.input_buffer.len()];
+            engine.process_iq(&samples, |audio| {
+                assert!(audio.iter().all(|v| v.is_finite()))
+            });
+        }
+        engine.set_audio_output_enabled(false);
+        assert_eq!(engine.nnr_model_slot(), None);
+        engine.set_audio_output_enabled(true);
+        assert_eq!(engine.nnr_model_slot(), Some(3));
+    }
 
     #[test]
     fn nr2_level_scale_matches_midpoint_defaults() {

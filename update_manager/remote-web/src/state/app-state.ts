@@ -68,6 +68,9 @@ export interface AppState {
   rxSsqlEnabled: boolean;
   rxSsqlThreshold: number;
   rxNoiseReductionMode: string;
+  rxNoiseReductionCapabilities: string[] | null;
+  rxNoiseReductionEffective: string | null;
+  rxNnrModelSlot: number | null;
   rxNoiseReductionLevel: number;
   rxNr2GainMethod: string;
   rxNr2NpeMethod: string;
@@ -471,6 +474,9 @@ export function createAppState(): AppState {
     rxSsqlEnabled: false,
     rxSsqlThreshold: 16,
     rxNoiseReductionMode: 'NR2',
+    rxNoiseReductionCapabilities: null,
+    rxNoiseReductionEffective: null,
+    rxNnrModelSlot: null,
     rxNoiseReductionLevel: 100,
     rxNr2GainMethod: 'GAMMA',
     rxNr2NpeMethod: 'OSMS',

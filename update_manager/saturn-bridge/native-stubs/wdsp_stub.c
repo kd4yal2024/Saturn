@@ -372,3 +372,10 @@ void xdexp(int32_t id) { (void)id; }
 STUB_VOID_I32_I32(SetDEXPRun)
 STUB_VOID_I32_F64(SetDEXPExpansionRatio)
 STUB_VOID_I32_F64(SetDEXPAttackThreshold)
+
+/* WDSP 2.11 neural controls for wrapper/model routing regressions. */
+static int saturn_stub_nnr_model[8];
+void SetRXANNRRun(int channel, int run) { (void)channel; (void)run; }
+int SetRXANNRModel(int channel, int slot) { saturn_stub_nnr_model[channel] = slot; return slot; }
+int GetRXANNRModel(int channel) { return saturn_stub_nnr_model[channel]; }
+void SetRXANNRMaskFloor(int channel, double floor_db) { (void)channel; (void)floor_db; }

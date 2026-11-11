@@ -140,6 +140,8 @@ pub enum NoiseReductionMode {
     Nr2,
     Nr3,
     Nr4,
+    Nnr,
+    NnrPremium,
 }
 
 impl Default for NoiseReductionMode {
@@ -156,6 +158,8 @@ impl fmt::Display for NoiseReductionMode {
             Self::Nr2 => "NR2",
             Self::Nr3 => "NR3",
             Self::Nr4 => "NR4",
+            Self::Nnr => "NNR",
+            Self::NnrPremium => "NNR_PREMIUM",
         };
         f.write_str(text)
     }
@@ -169,6 +173,8 @@ impl NoiseReductionMode {
             "2" | "NR2" | "EMNR" => Self::Nr2,
             "3" | "NR3" | "RNNR" => Self::Nr3,
             "4" | "NR4" | "SBNR" => Self::Nr4,
+            "NNR" | "NNR_STANDARD" => Self::Nnr,
+            "NNR_PREMIUM" => Self::NnrPremium,
             _ => Self::Off,
         }
     }
@@ -475,6 +481,7 @@ pub struct ObservedRadioState {
     pub high_priority_packets: u64,
     pub ddc0_meter_dbm: Option<f32>,
     pub rx_wbfm_stereo_detected: bool,
+    pub rx_nnr_model_slot: Option<i32>,
     pub tx_mic_peak_db: Option<f64>,
     pub tx_comp_peak_db: Option<f64>,
     pub tx_comp_avg_db: Option<f64>,

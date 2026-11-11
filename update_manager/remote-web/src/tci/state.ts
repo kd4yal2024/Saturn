@@ -29,6 +29,9 @@ export type TciRadioState = {
   rxSsqlEnabled: boolean;
   rxSsqlThreshold: number;
   rxNoiseReductionMode: NoiseReductionMode;
+  rxNoiseReductionCapabilities?: string[] | null;
+  rxNoiseReductionEffective?: NoiseReductionMode | null;
+  rxNnrModelSlot?: number | null;
   rxNoiseReductionLevel: number;
   rxNr2GainMethod: Nr2GainMethod;
   rxNr2NpeMethod: Nr2NpeMethod;

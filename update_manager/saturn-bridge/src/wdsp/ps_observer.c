@@ -1,4 +1,5 @@
-/* Build-matched observation only. No radio access or WDSP state mutation.
+/* Build-matched native observation and sole-owner warm-flush verification.
+ * No radio access; only the completed warm-flush check clears CALCC delay history.
  * build.rs rejects archives/headers other than the reviewed native builds.
  * The single TX/native owner must keep channel 1 alive during these calls.
  */
@@ -135,4 +136,42 @@ int saturn_shared_satp_history(void) {
         a->nom_outrate != 48000 || a->rsize != 4096) history = -1;
     destroy_rmatchV(a);
     return history;
+}
+
+
+/* Try-only, sole-owner checks for a warm release. A loaded spline is allowed;
+ * asynchronous fitting/IQC changes, MOX and an incomplete flush are not. */
+int saturn_try_shared_ps_quiescent(void) {
+    if (pthread_mutex_trylock(&txa[1].calcc.cs_update)) return 0;
+    CALCC a = txa[1].calcc.p;
+    IQC iq = txa[1].iqc.p;
+    if (!a || !iq) {
+        LeaveCriticalSection(&txa[1].calcc.cs_update);
+        return -1;
+    }
+    int ready = !a->ctrl.calcinprogress && !__atomic_load_n(&a->mox, __ATOMIC_SEQ_CST)
+        && !__atomic_load_n(&iq->busy, __ATOMIC_SEQ_CST)
+        && (a->ctrl.state == 0 || a->ctrl.state == 1 || a->ctrl.state == 8);
+    LeaveCriticalSection(&txa[1].calcc.cs_update);
+    return ready;
+}
+
+int saturn_try_shared_warm_flush_complete(void) {
+    if (ch[1].state != 0 || (__atomic_load_n(&ch[1].flushflag, __ATOMIC_SEQ_CST) & 1))
+        return 0;
+    if (pthread_mutex_trylock(&ch[1].csDSP)) return 0;
+    if (pthread_mutex_trylock(&txa[1].calcc.cs_update)) {
+        LeaveCriticalSection(&ch[1].csDSP);
+        return 0;
+    }
+    CALCC a = txa[1].calcc.p;
+    IQC iq = txa[1].iqc.p;
+    int ready = a && iq && !a->ctrl.calcinprogress
+        && !__atomic_load_n(&a->mox, __ATOMIC_SEQ_CST)
+        && !__atomic_load_n(&iq->busy, __ATOMIC_SEQ_CST)
+        && (__atomic_load_n(&ch[1].iob.pc->exec_bypass, __ATOMIC_SEQ_CST) & 1);
+    if (ready) flush_calcc(a);
+    LeaveCriticalSection(&txa[1].calcc.cs_update);
+    LeaveCriticalSection(&ch[1].csDSP);
+    return ready;
 }

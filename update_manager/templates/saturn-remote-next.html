@@ -6779,7 +6779,7 @@
   </style>
   <!-- The blocking local bundle installs token CSS before the body can paint. -->
   <script
-    src="/remote-assets/remote-next.js?v=band-groups-1"
+    src="/remote-assets/remote-next.js?v=wdsp211-performance-1"
     onload="window.saturnRemoteBundleLoaded=true"
     onerror="window.saturnRemoteBundleError=true; window.saturnDiagLastError='remote-next.js failed to load'; window.saturnSetWsDiag && window.saturnSetWsDiag('JS error: remote-next.js failed to load')"
   ></script>
@@ -7304,6 +7304,8 @@
                               <option value="NR2">NR2 / EMNR</option>
                               <option value="NR3">NR3 / RNNR</option>
                               <option value="NR4">NR4 / SBNR</option>
+                              <option value="NNR">NNR / Standard</option>
+                              <option value="NNR_PREMIUM">NNR / Premium</option>
                             </select>
                             <div class="setup-readout">Thetis-style LMS controls below affect NR1. NR2/NR3/NR4 continue to use the live level path.</div>
                           </div>
@@ -7898,6 +7900,8 @@
               <button class="mode-btn active" data-nr-mode="NR2" type="button">NR2</button>
               <button class="mode-btn" data-nr-mode="NR3" type="button">NR3</button>
               <button class="mode-btn" data-nr-mode="NR4" type="button">NR4</button>
+              <button class="mode-btn" data-nr-mode="NNR" type="button" title="WDSP neural reduction, Standard voice/CW model">NNR Std</button>
+              <button class="mode-btn" data-nr-mode="NNR_PREMIUM" type="button" title="WDSP neural reduction, Premium voice/CW model; higher CPU load">NNR Prem</button>
             </div>
             <input id="rx-nr-level" type="range" min="0" max="100" step="1" value="100" aria-label="Noise reduction level" />
             <div class="audio-control-title">
@@ -13064,7 +13068,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
 
       $("mobile-nr-btn")?.addEventListener("click", () => {
-        const modes = ["OFF", "NR1", "NR2", "NR3", "NR4"];
+        const modes = ["OFF", "NR1", "NR2", "NR3", "NR4", "NNR", "NNR_PREMIUM"].filter(noiseReductionAvailable);
         const next = modes[(Math.max(0, modes.indexOf(state.rxNoiseReductionMode)) + 1) % modes.length];
         document.querySelector(`#rx-nr-grid .mode-btn[data-nr-mode="${next}"]`)?.click();
       });
@@ -13846,7 +13850,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function applyRadioPrefsObject(prefs) {
       if (prefs && Object.prototype.hasOwnProperty.call(prefs, "txDrive") && typeof txPowerDraft !== "undefined") txPowerDraft.cancel();
+      const previousNr = state.rxNoiseReductionMode;
       _next.applyRadioPrefsToState(prefs, state);
+      if (previousNr !== state.rxNoiseReductionMode) {
+        state.rxNoiseReductionEffective = null;
+        state.rxNnrModelSlot = null;
+      }
       state.rxAdc = REMOTE_FIXED_RX_ADC;
       // An explicit saved audio profile wins over URL lab defaults.
       if (prefs && Object.prototype.hasOwnProperty.call(prefs, "txEqBands")) state.txOpusProcessingUserEdited = true;
@@ -14509,7 +14518,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       const nrLevelDisabled = radio.rxNoiseReductionMode === "OFF";
       if ($("setup-dsp-nr-level")) $("setup-dsp-nr-level").disabled = nrLevelDisabled;
-      const nr2FieldsDisabled = radio.rxNoiseReductionMode !== "NR2";
+      const nr2FieldsDisabled = (state.rxNoiseReductionEffective || radio.rxNoiseReductionMode) !== "NR2";
       ["setup-dsp-nr2-gain-method", "setup-dsp-nr2-npe-method", "setup-dsp-nr2-post-filter"].forEach((id) => {
         if ($(id)) $(id).disabled = nr2FieldsDisabled;
       });
@@ -15957,8 +15966,18 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.audioGainNode.gain.setValueAtTime(gain, now);
     }
 
+    function noiseReductionAvailable(mode) {
+      if (state.rxNoiseReductionCapabilities) return state.rxNoiseReductionCapabilities.includes(mode);
+      return !mode.startsWith("NNR");
+    }
     function noiseReductionLabel() {
-      return _noiseReductionLabel(state.rxNoiseReductionMode, state.rxNoiseReductionLevel);
+      const requested = state.rxNoiseReductionMode;
+      const effective = state.rxNoiseReductionEffective || requested;
+      const label = _noiseReductionLabel(effective, state.rxNoiseReductionLevel);
+      if (effective !== requested) return `${requested} → ${label}`;
+      const models = ["Voice Standard", "Voice Premium", "CW Standard", "CW Premium"];
+      return effective.startsWith("NNR") && state.rxNnrModelSlot != null
+        ? `${label} · ${models[state.rxNnrModelSlot]}` : label;
     }
 
     function effectiveDisplayZoom() {
@@ -18386,7 +18405,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         $("display-zoom").value = zoomLevel;
       }
       const wfmActive = state.mode === "WFM";
-      $("rx-nr-level").disabled = wfmActive || state.rxNoiseReductionMode === "OFF" || state.rxNoiseReductionMode === "NR3";
+      const effectiveNr = state.rxNoiseReductionEffective || state.rxNoiseReductionMode;
+      $("rx-nr-level").disabled = wfmActive || effectiveNr === "OFF" || effectiveNr === "NR3";
       $("rx-nb-threshold").disabled = wfmActive;
       $("agc-gain").disabled = wfmActive;
       $("filter-low").disabled = wfmActive;
@@ -18394,8 +18414,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("rx-anf-btn").disabled = wfmActive;
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeNrMode(button.dataset.nrMode) === state.rxNoiseReductionMode);
-        button.disabled = wfmActive;
+        button.disabled = wfmActive || !noiseReductionAvailable(button.dataset.nrMode);
+        button.title = noiseReductionAvailable(button.dataset.nrMode)
+          ? (button.dataset.nrMode === "NNR_PREMIUM" ? "Premium neural reduction; higher CPU load" : button.textContent)
+          : "Algorithm unavailable from this host";
       });
+      for (const option of $("setup-dsp-nr-mode").options) {
+        option.disabled = !noiseReductionAvailable(option.value);
+      }
       document.querySelectorAll("#rx-nb-grid .mode-btn").forEach((button) => {
         button.classList.toggle("active", normalizeNbMode(button.dataset.nbMode) === state.rxNbMode);
         button.disabled = wfmActive;
@@ -20877,6 +20903,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent("Connect diagnostic: connect ignored because socket is already pending/live");
         return;
       }
+      state.rxNoiseReductionCapabilities = null;
+      state.rxNoiseReductionEffective = null;
+      state.rxNnrModelSlot = null;
       let reuseProbeSocket = null;
       if (window.saturnWsDiagProbe && window.saturnWsDiagProbe.readyState <= WebSocket.OPEN) {
         if (window.saturnWsDiagProbe.readyState === WebSocket.OPEN) {
@@ -22635,6 +22664,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       });
       $("setup-dsp-nr-mode").addEventListener("change", () => {
         state.rxNoiseReductionMode = normalizeNrMode($("setup-dsp-nr-mode").value);
+        state.rxNoiseReductionEffective = null;
+        state.rxNnrModelSlot = null;
         saveRadioPrefs();
         updateUi();
         sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);
@@ -23018,6 +23049,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       document.querySelectorAll("#rx-nr-grid .mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
           state.rxNoiseReductionMode = normalizeNrMode(button.dataset.nrMode);
+          state.rxNoiseReductionEffective = null;
+          state.rxNnrModelSlot = null;
           saveRadioPrefs();
           updateUi();
           sendTci(`rx_nr_mode:0,${state.rxNoiseReductionMode};`);

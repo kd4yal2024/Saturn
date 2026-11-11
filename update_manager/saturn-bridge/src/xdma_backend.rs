@@ -680,6 +680,7 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
                         }
                         model.observed.rx_wbfm_stereo_detected =
                             mode == RxProcessingMode::Audio && wdsp.wbfm_stereo_detected();
+                        model.observed.rx_nnr_model_slot = wdsp.nnr_model_slot();
                         last_idle_meter = Instant::now();
                     }
                 }

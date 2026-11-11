@@ -57,6 +57,8 @@ export function normalizeNrMode(value: unknown): RadioPrefs['rxNoiseReductionMod
   if (['NR2', 'EMNR', '2'].includes(text)) return 'NR2';
   if (['NR3', 'RNNR', '3'].includes(text)) return 'NR3';
   if (['NR4', 'SBNR', '4'].includes(text)) return 'NR4';
+  if (['NNR', 'NNR_STANDARD'].includes(text)) return 'NNR';
+  if (text === 'NNR_PREMIUM') return 'NNR_PREMIUM';
   return 'OFF';
 }
 

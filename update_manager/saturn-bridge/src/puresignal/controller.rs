@@ -52,9 +52,18 @@ impl Config {
 /// Implement on the existing TX thread, with verified native identity and the
 /// channel lifetime fenced there. This trait intentionally has no RF key method.
 /// configure must SetPSFeedbackRate before setting delay and return its actual
-/// quantized value. reset must quiesce native asynchronous work/old curves before
-/// admitting a new epoch; a mock implementation does NOT prove that contract.
+/// quantized value. Cold reset must retire asynchronous work and old curves.
+/// A matched warm release may preserve coefficients after proving quiescence
+/// and flushing sample history; a mock does NOT prove that native contract.
 pub trait NativePs {
+    /// A loaded correction may remain while MOX, fitting, exchange and IQC
+    /// updates are quiescent. Ports without a matched observer require OFF.
+    fn quiescent(&mut self) -> Result<bool, Fault> {
+        Ok(self.information()?[14] == 0)
+    }
+    fn retained_correction(&self) -> bool {
+        false
+    }
     /// Ordinary uncorrected TX verifies fitting/correction off while retaining
     /// the operator's microphone profile. Unknown ports retain the stricter
     /// measurement check until they implement a matching native readback.
@@ -273,7 +282,7 @@ impl<N: NativePs> Controller<N> {
     }
     #[cfg(feature = "offline-puresignal-tx-lifecycle")]
     pub(super) fn lifecycle_native_clean(&mut self) -> Result<(), Fault> {
-        if self.native.information()?[14] != 0 {
+        if !self.native.quiescent()? {
             return Err(Fault::NativeFailure);
         }
         self.native_clean = true;
@@ -469,6 +478,12 @@ impl<N: NativePs> Controller<N> {
         {
             self.adaptation_armed = true;
             self.native.mox(true);
+            if self.native.retained_correction() {
+                self.info = self.native.information()?;
+                if self.info[14] != 0 && self.info[5] > self.calibration_baseline {
+                    self.state = State::Correcting;
+                }
+            }
             #[cfg(feature = "offline-puresignal-tx-lifecycle")]
             {
                 self.native_clean = false;
@@ -520,10 +535,12 @@ impl<N: NativePs> Controller<N> {
             #[cfg(feature = "offline-puresignal-tx-lifecycle")]
             if self.lifecycle_deferred {
                 let info = self.native.information()?;
-                if info[14] != 0 || info[5] < 0 {
+                if (info[14] != 0 && !self.native.retained_correction()) || info[5] < 0 {
                     return Err(Fault::NativeFailure);
                 }
-                self.calibration_baseline = info[5];
+                if !self.native.retained_correction() {
+                    self.calibration_baseline = info[5];
+                }
                 return Ok(()); // cooperative owner already proved quiescence
             }
             self.native.mox(false);

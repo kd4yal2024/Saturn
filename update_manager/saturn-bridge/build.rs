@@ -27,6 +27,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_rnnr_sbnr)");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_phrot_auto)");
     println!("cargo:rustc-check-cfg=cfg(wdsp_has_wbfm)");
+    println!("cargo:rustc-check-cfg=cfg(wdsp_has_nnr)");
     println!("cargo:rustc-check-cfg=cfg(saturn_bridge_stub_native)");
     if env::var("SATURN_BRIDGE_STUB_NATIVE")
         .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
@@ -66,6 +67,17 @@ fn main() {
     }
     if wdsp_has_symbol(&libwdsp, "SetTXAPHROTAutoMode") {
         println!("cargo:rustc-cfg=wdsp_has_phrot_auto");
+    }
+    if [
+        "SetRXANNRRun",
+        "SetRXANNRModel",
+        "GetRXANNRModel",
+        "SetRXANNRMaskFloor",
+    ]
+    .iter()
+    .all(|symbol| wdsp_has_symbol(&libwdsp, symbol))
+    {
+        println!("cargo:rustc-cfg=wdsp_has_nnr");
     }
     if wdsp_has_wbfm(&libwdsp) {
         println!("cargo:rustc-cfg=wdsp_has_wbfm");
@@ -303,6 +315,17 @@ fn link_wdsp_dir(wdsp_dir: PathBuf) {
     if wdsp_has_symbol(&libwdsp, "SetTXAPHROTAutoMode") {
         println!("cargo:rustc-cfg=wdsp_has_phrot_auto");
     }
+    if [
+        "SetRXANNRRun",
+        "SetRXANNRModel",
+        "GetRXANNRModel",
+        "SetRXANNRMaskFloor",
+    ]
+    .iter()
+    .all(|symbol| wdsp_has_symbol(&libwdsp, symbol))
+    {
+        println!("cargo:rustc-cfg=wdsp_has_nnr");
+    }
     if wdsp_has_wbfm(&libwdsp) {
         println!("cargo:rustc-cfg=wdsp_has_wbfm");
     }
@@ -404,6 +427,7 @@ fn build_stub_native() {
     println!("cargo:rerun-if-changed={}", source.display());
     println!("cargo:rustc-cfg=wdsp_has_phrot_auto");
     println!("cargo:rustc-cfg=wdsp_has_wbfm");
+    println!("cargo:rustc-cfg=wdsp_has_nnr");
 
     let cc_status = Command::new(&cc)
         .arg("-std=c99")

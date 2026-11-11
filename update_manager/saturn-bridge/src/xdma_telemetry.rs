@@ -28,6 +28,10 @@ pub(crate) struct LatencyHistogram {
 }
 
 impl LatencyHistogram {
+    #[cfg(all(test, saturn_bridge_stub_native))]
+    pub(crate) fn count(&self) -> u64 {
+        self.count
+    }
     pub(crate) fn record(&mut self, duration: Duration) {
         let us = duration
             .as_nanos()
@@ -40,8 +44,11 @@ impl LatencyHistogram {
     }
 
     fn p99_upper_us(&self) -> u64 {
-        // ceil(count * 99 / 100), without overflowing the product.
-        let rank = self.count - self.count / 100;
+        self.percentile_upper_us(99)
+    }
+
+    fn percentile_upper_us(&self, percent: u64) -> u64 {
+        let rank = self.count / 100 * percent + (self.count % 100 * percent).div_ceil(100);
         let mut cumulative = 0u64;
         for (index, count) in self.buckets.iter().enumerate() {
             cumulative = cumulative.saturating_add(*count);
@@ -58,7 +65,7 @@ impl LatencyHistogram {
 
     /// Formatting is only for the low-rate telemetry publisher, never the
     /// reader. Prefixes distinguish session totals from reporting intervals.
-    pub(crate) fn fields(&self, prefix: &str) -> [(String, TelemetryValue); 3] {
+    pub(crate) fn fields(&self, prefix: &str) -> [(String, TelemetryValue); 4] {
         [
             (
                 format!("{prefix}_count"),
@@ -72,8 +79,61 @@ impl LatencyHistogram {
                 format!("{prefix}_p99_upper_us"),
                 TelemetryValue::number(self.p99_upper_us()),
             ),
+            (
+                format!("{prefix}_p95_upper_us"),
+                TelemetryValue::number(self.percentile_upper_us(95)),
+            ),
         ]
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SharedRxPerformance {
+    pub(crate) exchange: LatencyHistogram,
+    pub(crate) input_pairs: u64,
+    pub(crate) audio_frames: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SharedTxPerformance {
+    pub(crate) turn: LatencyHistogram,
+    pub(crate) pump: LatencyHistogram,
+    pub(crate) render: LatencyHistogram,
+    pub(crate) output_submission: LatencyHistogram,
+    pub(crate) output_gap: LatencyHistogram,
+    pub(crate) source_age: LatencyHistogram,
+    pub(crate) stop_receipt: LatencyHistogram,
+}
+
+fn shared_performance_json(rx: &SharedRxPerformance, tx: &SharedTxPerformance) -> String {
+    let mut fields = vec![
+        (
+            "rx_dsp_input_pairs".into(),
+            TelemetryValue::number(rx.input_pairs),
+        ),
+        (
+            "rx_audio_frames".into(),
+            TelemetryValue::number(rx.audio_frames),
+        ),
+    ];
+    for (name, histogram) in [
+        ("rx_exchange", &rx.exchange),
+        ("tx_active_turn", &tx.turn),
+        ("tx_feedback_pump", &tx.pump),
+        ("tx_render", &tx.render),
+        ("tx_output_submission", &tx.output_submission),
+        ("tx_output_gap", &tx.output_gap),
+        ("tx_source_age", &tx.source_age),
+        ("tx_stop_notification_to_receipt", &tx.stop_receipt),
+    ] {
+        fields.extend(histogram.fields(name));
+    }
+    let values = fields
+        .iter()
+        .map(|(name, value)| format!("{}:{}", json_string(name), value.to_json()))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{\"scope\":\"Bridge session; exchange includes native worker wait; output submission includes backend transfer; source age starts at ingress; stop receipt is backend evidence\",\"metrics\":{{{values}}}}}")
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -261,6 +321,7 @@ pub(crate) struct SharedHostObservation<'a> {
     /// Immutable identity captured by the acquisition owner when it opened.
     /// Clock status is deliberately not republished as a live observation.
     pub identity: Option<&'a crate::xdma::SaturnIdentity>,
+    pub performance: Option<(&'a SharedRxPerformance, &'a SharedTxPerformance)>,
 }
 
 pub(crate) fn record_shared_observed_host_status(
@@ -299,8 +360,11 @@ pub(crate) fn record_shared_observed_host_status(
     // The base schema remains unchanged; append an explicitly named host-only
     // readiness object rather than changing review-only/RF qualification.
     let document = format!(
-        "{},\"shared_host\":{host}}}\n",
-        document.trim_end().strip_suffix('}').unwrap()
+        "{},\"shared_host\":{host},\"shared_performance\":{}}}\n",
+        document.trim_end().strip_suffix('}').unwrap(),
+        observation
+            .and_then(|o| o.performance)
+            .map_or_else(|| "null".into(), |(rx, tx)| shared_performance_json(rx, tx))
     );
     write_snapshot_atomic(path, document.as_bytes(), false)
 }
@@ -426,6 +490,36 @@ mod tests {
     use super::{serialize_snapshot, write_snapshot_atomic, LatencyHistogram, TelemetryValue};
     use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    #[test]
+    fn shared_histograms_report_tail_bounds_and_their_measurement_scope() {
+        let mut rx = super::SharedRxPerformance::default();
+        let mut tx = super::SharedTxPerformance::default();
+        for _ in 0..95 {
+            tx.render.record(Duration::from_micros(10));
+        }
+        for _ in 0..4 {
+            tx.render.record(Duration::from_micros(100));
+        }
+        tx.render.record(Duration::from_micros(10_000));
+        assert_eq!(tx.render.percentile_upper_us(95), 16);
+        assert_eq!(tx.render.p99_upper_us(), 128);
+        assert_eq!(tx.render.max_us, 10_000);
+        rx.input_pairs = 2048;
+        let json = super::shared_performance_json(&rx, &tx);
+        for field in [
+            "\"tx_render_count\":100",
+            "\"tx_render_p95_upper_us\":16",
+            "\"tx_render_p99_upper_us\":128",
+            "\"tx_render_max_us\":10000",
+            "\"rx_dsp_input_pairs\":2048",
+            "\"tx_stop_notification_to_receipt_count\":0",
+            "source age starts at ingress",
+            "stop receipt is backend evidence",
+        ] {
+            assert!(json.contains(field), "missing {field}: {json}");
+        }
+    }
+
     #[cfg(feature = "managed-puresignal")]
     #[test]
     fn shared_owner_reports_cached_identity_without_inventing_live_clock_status() {
@@ -452,6 +546,7 @@ mod tests {
                 clients: &clients,
                 ddc_per_second: 1.,
                 identity: known.then_some(&identity),
+                performance: None,
             };
             super::record_shared_observed_host_status(
                 &path,

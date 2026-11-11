@@ -171,7 +171,7 @@ fn diagnostic_taps_follow_real_wdsp_and_completed_backend_output() {
                         as f32
                 })
                 .collect();
-            iq = engine.offline_render_block(&pcm).unwrap();
+            iq = engine.offline_render_block(&pcm).unwrap().to_vec();
             if block >= 104 {
                 retained_pcm.extend(pcm.iter().copied().map(f64::from));
             }

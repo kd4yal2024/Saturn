@@ -206,12 +206,14 @@ const AGC_MODES: [AgcMode; 5] = [
     AgcMode::Medium,
     AgcMode::Fast,
 ];
-const NR_MODES: [NoiseReductionMode; 5] = [
+const NR_MODES: [NoiseReductionMode; 7] = [
     NoiseReductionMode::Off,
     NoiseReductionMode::Nr1,
     NoiseReductionMode::Nr2,
     NoiseReductionMode::Nr3,
     NoiseReductionMode::Nr4,
+    NoiseReductionMode::Nnr,
+    NoiseReductionMode::NnrPremium,
 ];
 const NB_MODES: [NoiseBlankerMode; 4] = [
     NoiseBlankerMode::Off,

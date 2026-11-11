@@ -352,7 +352,13 @@ fn run_inner_with_state_store<I: RuntimeIo>(
         frontend.set_tx_media_priority_active(transmitting);
         #[cfg(test)]
         let rx_transition_started = Instant::now();
-        if transmitting {
+        let demand = frontend.media_demand();
+        let headphones =
+            snapshot.desired.rx_headphones_available && snapshot.desired.rx_headphones_enabled;
+        let audio_needed = demand.audio_stream_enabled || headphones;
+        let receiver_needed = audio_needed || demand.iq_stream_enabled || demand.client_active;
+        rx_dsp.set_audio_output_enabled(audio_needed);
+        if transmitting || !receiver_needed {
             rx_dsp.suspend_for_tx();
         } else {
             rx_dsp.resume_from_tx();
@@ -508,6 +514,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                 )
             });
             current.observed.rx_wbfm_stereo_detected = rx_dsp.wbfm_stereo_detected();
+            current.observed.rx_nnr_model_slot = rx_dsp.nnr_model_slot();
         }
         if last_state.elapsed() >= Duration::from_millis(200) {
             #[cfg(test)]
@@ -543,6 +550,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             let clients = frontend.client_snapshot();
             let ddc_per_second =
                 (received_frames - status_rx_frames) as f64 / last_status.elapsed().as_secs_f64();
+            let tx_performance = runtime.ingress.performance.lock_unpoisoned().clone();
             for path in [ready, perf] {
                 let (phase, clean_idle) = runtime.ingress.host_readiness();
                 let observation = crate::xdma_telemetry::SharedHostObservation {
@@ -550,6 +558,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                     clients: &clients,
                     ddc_per_second,
                     identity: acquisition_identity.as_ref(),
+                    performance: Some((rx_dsp.performance(), &tx_performance)),
                 };
                 if let Err(error) = crate::xdma_telemetry::record_shared_observed_host_status(
                     path,

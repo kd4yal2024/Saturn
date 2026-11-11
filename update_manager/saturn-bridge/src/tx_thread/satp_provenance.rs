@@ -27,12 +27,13 @@ impl Port for MicRateMatcher {
     }
 }
 pub(super) struct Block {
-    pub(super) samples: Vec<f32>,
+    pub(super) samples: [f32; 512],
     pub(super) oldest: Option<u64>, // None = known constructor-primed zeros
     pub(super) stamp: OutputStamp,
 }
 pub(super) struct Provenance<P: Port> {
     port: P,
+    output: Vec<f32>,
     stamp: Option<OutputStamp>,
     invalid: bool,
     pending: VecDeque<(f32, u64)>, // up to 63 original-age packet-tail samples
@@ -68,6 +69,7 @@ impl<P: Port> Provenance<P> {
         }
         Ok(Self {
             port,
+            output: Vec::with_capacity(512),
             stamp: None,
             invalid: false,
             pending: VecDeque::new(),
@@ -209,14 +211,15 @@ impl<P: Port> Provenance<P> {
             self.invalidate();
             return Err(Fault::Stale);
         }
-        let mut samples = Vec::new();
-        self.port.take512(&mut samples);
+        self.output.clear();
+        self.port.take512(&mut self.output);
         self.ring.drain(..512);
         self.check(stamp)?;
-        if samples.len() != 512 || samples.iter().any(|v| !v.is_finite()) {
+        if self.output.len() != 512 || self.output.iter().any(|v| !v.is_finite()) {
             self.invalidate();
             return Err(Fault::NativeFailure);
         }
+        let samples = std::array::from_fn(|i| self.output[i]);
         Ok(Block {
             samples,
             oldest,
