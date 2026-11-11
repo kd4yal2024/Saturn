@@ -79,6 +79,12 @@ try {
   check('Ten categories, search and a live band context',await child(`return d.querySelectorAll('[data-page]').length===10 && !!d.querySelector('.sw-search') && d.querySelector('.sw-context').textContent.includes('MHz')`));
   check('Opening settings creates no socket or audio capture',await evaluate(`window.__sockets===0 && window.__media===0`));
   check('Popup has no opener authority',await child(`return d.defaultView.opener===null`));
+  await search('Band group');
+  await child(`const select=d.querySelector('[data-setting="radio.bandGroup"] select');select.value='swl';select.dispatchEvent(new Event('change',{bubbles:true}));`);
+  check('Settings band group switches the main panel to the SWL tab',await evaluate(`document.getElementById('band-tab-swl').getAttribute('aria-selected')==='true' && document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===15`));
+  await evaluate(`document.getElementById('band-tab-ham').click()`);await pause(350);
+  check('The main Band tab selection mirrors into Settings',await child(`return d.querySelector('[data-setting="radio.bandGroup"] select').value==='ham'`));
+  await search('');
   await child(`d.querySelector('[data-page="transmit"]').click()`);
   check('All ten TX EQ and ten CFC bands are editable here',await child(`return d.querySelectorAll('[data-setting^="transmit.eqBand"] input[type="range"]').length===10 && d.querySelectorAll('[data-setting^="transmit.cfcBand"] input[type="range"]').length===10`));
   await evaluate(`(()=>{window.__relay=[]; const input=document.getElementById('tx-mic-gain');input.disabled=false;for(const type of ['input','change'])input.addEventListener(type,()=>window.__relay.push(type));})()`);

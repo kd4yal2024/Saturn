@@ -251,7 +251,6 @@
       gap: 10px;
     }
     .band-btn[hidden] { display: none !important; }
-    .band-group-field { margin-bottom: 8px; }
     .mode-grid, .band-grid {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -4603,17 +4602,26 @@
       min-width: 0;
     }
 
-    .context-tabs {
-      position: sticky;
-      z-index: 4;
-      top: 0;
+    .context-tabs,
+    .band-group-tabs {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 3px;
       padding: 4px;
       border: 1px solid var(--border-subtle);
       border-radius: var(--r-panel);
       background: color-mix(in srgb, var(--bg-inset) 98%, transparent);
+    }
+
+    .context-tabs {
+      position: sticky;
+      z-index: 4;
+      top: 0;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .band-group-tabs {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      margin-bottom: 8px;
     }
 
     .context-tab {
@@ -7971,39 +7979,45 @@
           <div class="panel-body">
             <div class="field-row">
               <div>
-                <label class="label" for="band-group">Band group</label>
-                <select class="field band-group-field" id="band-group" aria-controls="band-grid">
+                <div class="band-group-tabs" id="band-group-tabs" role="tablist" aria-label="Band group">
+                  <button class="context-tab" id="band-tab-ham" data-band-tab="ham" type="button" role="tab" aria-selected="true" aria-controls="band-group-panel">Ham HF</button>
+                  <button class="context-tab" id="band-tab-swl" data-band-tab="swl" type="button" role="tab" aria-selected="false" aria-controls="band-group-panel" tabindex="-1">SWL</button>
+                </div>
+                <!-- Shared settings control for the Settings pop-out. -->
+                <select id="band-group" aria-label="Band group" hidden>
                   <option value="ham">Ham HF</option>
                   <option value="swl">SWL</option>
                 </select>
-                <div class="band-grid" id="band-grid" role="radiogroup" aria-label="Band">
-                  <button class="band-btn" data-band-group="ham" data-band="1840000" type="button" role="radio" aria-checked="false">160m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="3800000" type="button" role="radio" aria-checked="false">80m</button>
-                  <button class="band-btn" data-band-group="ham" role="radio" aria-checked="false" data-band="5357500" type="button">60m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="7150000" type="button" role="radio" aria-checked="false">40m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="10125000" type="button" role="radio" aria-checked="false">30m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="14200000" type="button" role="radio" aria-checked="true">20m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="18120000" type="button" role="radio" aria-checked="false">17m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="50150000" type="button" role="radio" aria-checked="false">6m</button>
-                  <button class="band-btn" data-band-group="ham" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false">FM</button>
-                  <button class="band-btn" data-band-group="swl" data-band="1000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="LW/MW broadcast · 0.15–1.71 MHz" hidden>LW/MW</button>
-                  <button class="band-btn" data-band-group="swl" data-band="2400000" data-mode="AM" type="button" role="radio" aria-checked="false" title="120m broadcast · 2.3–2.495 MHz" hidden>120m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="3300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="90m broadcast · 3.2–3.4 MHz" hidden>90m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="3950000" data-mode="AM" type="button" role="radio" aria-checked="false" title="75m broadcast · 3.9–4 MHz" hidden>75m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="4850000" data-mode="AM" type="button" role="radio" aria-checked="false" title="60m broadcast · 4.75–5.06 MHz" hidden>60m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="6000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="49m broadcast · 5.9–6.2 MHz" hidden>49m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="7350000" data-mode="AM" type="button" role="radio" aria-checked="false" title="41m broadcast · 7.2–7.45 MHz" hidden>41m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="9600000" data-mode="AM" type="button" role="radio" aria-checked="false" title="31m broadcast · 9.4–9.9 MHz" hidden>31m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="11800000" data-mode="AM" type="button" role="radio" aria-checked="false" title="25m broadcast · 11.6–12.1 MHz" hidden>25m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="13700000" data-mode="AM" type="button" role="radio" aria-checked="false" title="22m broadcast · 13.57–13.87 MHz" hidden>22m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="15300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="19m broadcast · 15.1–15.8 MHz" hidden>19m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="17700000" data-mode="AM" type="button" role="radio" aria-checked="false" title="16m broadcast · 17.48–17.9 MHz" hidden>16m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="18950000" data-mode="AM" type="button" role="radio" aria-checked="false" title="15m broadcast · 18.9–19.02 MHz" hidden>15m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="21600000" data-mode="AM" type="button" role="radio" aria-checked="false" title="13m broadcast · 21.45–21.85 MHz" hidden>13m</button>
-                  <button class="band-btn" data-band-group="swl" data-band="25900000" data-mode="AM" type="button" role="radio" aria-checked="false" title="11m broadcast · 25.67–26.1 MHz" hidden>11m</button>
+                <div id="band-group-panel" role="tabpanel" aria-labelledby="band-tab-ham">
+                  <div class="band-grid" id="band-grid" role="radiogroup" aria-label="Band">
+                    <button class="band-btn" data-band-group="ham" data-band="1840000" type="button" role="radio" aria-checked="false">160m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="3800000" type="button" role="radio" aria-checked="false">80m</button>
+                    <button class="band-btn" data-band-group="ham" role="radio" aria-checked="false" data-band="5357500" type="button">60m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="7150000" type="button" role="radio" aria-checked="false">40m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="10125000" type="button" role="radio" aria-checked="false">30m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="14200000" type="button" role="radio" aria-checked="true">20m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="18120000" type="button" role="radio" aria-checked="false">17m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="50150000" type="button" role="radio" aria-checked="false">6m</button>
+                    <button class="band-btn" data-band-group="ham" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false">FM</button>
+                    <button class="band-btn" data-band-group="swl" data-band="1000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="LW/MW broadcast · 0.15–1.71 MHz" hidden>LW/MW</button>
+                    <button class="band-btn" data-band-group="swl" data-band="2400000" data-mode="AM" type="button" role="radio" aria-checked="false" title="120m broadcast · 2.3–2.495 MHz" hidden>120m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="3300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="90m broadcast · 3.2–3.4 MHz" hidden>90m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="3950000" data-mode="AM" type="button" role="radio" aria-checked="false" title="75m broadcast · 3.9–4 MHz" hidden>75m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="4850000" data-mode="AM" type="button" role="radio" aria-checked="false" title="60m broadcast · 4.75–5.06 MHz" hidden>60m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="6000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="49m broadcast · 5.9–6.2 MHz" hidden>49m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="7350000" data-mode="AM" type="button" role="radio" aria-checked="false" title="41m broadcast · 7.2–7.45 MHz" hidden>41m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="9600000" data-mode="AM" type="button" role="radio" aria-checked="false" title="31m broadcast · 9.4–9.9 MHz" hidden>31m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="11800000" data-mode="AM" type="button" role="radio" aria-checked="false" title="25m broadcast · 11.6–12.1 MHz" hidden>25m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="13700000" data-mode="AM" type="button" role="radio" aria-checked="false" title="22m broadcast · 13.57–13.87 MHz" hidden>22m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="15300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="19m broadcast · 15.1–15.8 MHz" hidden>19m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="17700000" data-mode="AM" type="button" role="radio" aria-checked="false" title="16m broadcast · 17.48–17.9 MHz" hidden>16m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="18950000" data-mode="AM" type="button" role="radio" aria-checked="false" title="15m broadcast · 18.9–19.02 MHz" hidden>15m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="21600000" data-mode="AM" type="button" role="radio" aria-checked="false" title="13m broadcast · 21.45–21.85 MHz" hidden>13m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="25900000" data-mode="AM" type="button" role="radio" aria-checked="false" title="11m broadcast · 25.67–26.1 MHz" hidden>11m</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -8078,7 +8092,7 @@
                 visible[next].focus();
                 visible[next].click();
               });
-              new MutationObserver(sync).observe(grid, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'disabled'] });
+              new MutationObserver(sync).observe(grid, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'disabled', 'hidden'] });
               sync();
             }
             wireRadioGroup('band-grid', '.band-btn');
@@ -8087,6 +8101,8 @@
             const bandGrid = byId('band-grid');
             const canonicalBands = Array.from(bandGrid.querySelectorAll('.band-btn'));
             const bandGroup = byId('band-group');
+            const bandGroupTabs = byId('band-group-tabs');
+            const bandTabs = Array.from(bandGroupTabs.querySelectorAll('[role="tab"]'));
             const recentBandKey = 'saturn.ui.recentBands';
             let recentBands = [];
             try {
@@ -8114,11 +8130,33 @@
               focusedBand?.focus({ preventScroll: true });
             }
             function displayBandGroup() {
+              for (const tab of bandTabs) {
+                const selected = tab.dataset.bandTab === bandGroup.value;
+                tab.setAttribute('aria-selected', String(selected));
+                tab.tabIndex = selected ? 0 : -1;
+                if (selected) byId('band-group-panel').setAttribute('aria-labelledby', tab.id);
+              }
               canonicalBands.forEach(button => { button.hidden = button.dataset.bandGroup !== bandGroup.value; });
               bandGrid.setAttribute('aria-label', bandGroup.value === 'swl' ? 'SWL bands' : 'Ham HF bands');
               applyRecentBandOrder();
             }
-            bandGroup.addEventListener('change', displayBandGroup);
+            for (const [index, tab] of bandTabs.entries()) {
+              tab.addEventListener('click', () => {
+                if (bandGroup.value === tab.dataset.bandTab) return;
+                bandGroup.value = tab.dataset.bandTab;
+                bandGroup.dispatchEvent(new Event('change', { bubbles: true }));
+              });
+              tab.addEventListener('keydown', (event) => {
+                const step = ['ArrowRight', 'ArrowDown'].includes(event.key) ? 1
+                  : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 0;
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? bandTabs.length - 1
+                  : step ? (index + step + bandTabs.length) % bandTabs.length : -1;
+                if (next < 0) return;
+                event.preventDefault();
+                bandTabs[next].focus();
+                bandTabs[next].click();
+              });
+            }
             bandGroup.addEventListener('bandgroupchange', displayBandGroup);
             displayBandGroup();
             bandGrid.addEventListener('click', (event) => {

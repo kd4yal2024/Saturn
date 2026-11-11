@@ -1,7 +1,7 @@
 Saturn Remote Ham / SWL band panel
 
-The Band group selector switches the existing Band panel between Ham HF
-(the existing twelve buttons, including 6m/FM) and fifteen broadcast presets:
+The Ham HF tab shows the existing twelve buttons, including 6m/FM. The SWL
+tab shows fifteen broadcast presets:
 LW/MW, 120m, 90m, 75m, 60m, 49m, 41m, 31m, 25m, 22m, 19m, 16m, 15m,
 13m and 11m. Presets are receive-navigation ranges, not a TX authorization map.
 
@@ -18,9 +18,8 @@ reclassify the current memory. The bank/context choice is saved locally;
 SWL band memories use the existing saved/synced settings and profile path.
 
 Band buttons retain keyboard selection, active highlighting, responsive recent
-band ordering and the existing More bands control. The selector is also indexed
-in the Settings pop-out. The new bundle URL prevents a cached older bundle
-from being paired with the updated template.
+band ordering and the existing More bands control. Band group is also
+available in the Settings pop-out, which stays in sync with the tabs.
 
 Validation: TypeScript, template/bundle seam, strict UI parity audit, full web
 suite, and real Chrome through the shipped runtime. Chrome exercises both

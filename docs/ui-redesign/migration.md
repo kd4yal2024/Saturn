@@ -217,7 +217,7 @@ TX audio path, monitor and transmit controls — **live radio state**: no restor
 | TX tool select | id `tx-tool-select` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Open TX tool | id `tx-tool-open-btn` | Settings only | Transmit → legacy tx panel | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 
-## Radio (28)
+## Radio (29)
 
 Radio path, band, mode and memories — **live radio state**: no restore-defaults here.
 
@@ -229,6 +229,7 @@ Radio path, band, mode and memories — **live radio state**: no restore-default
 | VFO B | id `vfo-b-select-btn` | main screen, pinnable | Radio → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | VFO reference | id `vfo-a-select-btn` | main screen, pinnable | Radio → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Split operation | id `split-toggle-btn` | main screen, pinnable | Radio → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
+| Band group | id `band-group` | main screen, default | Radio → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Band | id `band-grid` | main screen, default | Radio → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | Demodulation mode | id `mode-grid` | main screen, default | Radio → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
 | WFM de-emphasis | id `wbfm-deemphasis` | Settings only | Radio → route to the original control | wired | Settings route covered by browser sweep; original handler retained. Live-radio action requires hardware QA |
@@ -357,7 +358,7 @@ Device, versions, diagnostics
 
 ## Coverage
 
-249 interactive elements carry an id in the template: **179 indexed** and **70 explicitly excluded**, so nothing is unaccounted for.
+252 interactive elements carry an id in the template: **180 indexed** and **72 explicitly excluded**, so nothing is unaccounted for.
 The registry test fails if a template control is neither indexed nor excluded, and also fails on a stale exclusion, so this total is enforced rather than asserted here.
 
 ## Excluded controls, with reasons
@@ -406,7 +407,7 @@ The registry test fails if a template control is neither indexed nor excluded, a
 | `shortcut-close-btn` | Keyboard shortcuts | Closes the shortcut help overlay. |
 | `freq-entry-cancel-btn` | Direct frequency entry | Cancels direct frequency entry. |
 
-### Duplicates of an indexed control (per-tier or quick action) (12)
+### Duplicates of an indexed control (per-tier or quick action) (14)
 
 | Control | Covered by | Reason it is not a separate setting |
 | --- | --- | --- |
@@ -415,6 +416,8 @@ The registry test fails if a template control is neither indexed nor excluded, a
 | `operator-detail-copy-rx-btn` | Operator diagnostics | Copies the same operator log as the diagnostics button. |
 | `vfo-mode-tag` | Demodulation mode | VFO mode shortcut for the mode grid. |
 | `vfo-band-tag` | Band | VFO band shortcut for the band grid. |
+| `band-tab-ham` | Band group | Selects the Ham HF band buttons. |
+| `band-tab-swl` | Band group | Selects the SWL band buttons. |
 | `vfo-antenna-pill` | RX antenna | VFO antenna shortcut for the radio path select. |
 | `rx-att-quick-btn` | Attenuator | VFO-line shortcut for the same attenuator value. |
 | `mobile-att-btn` | Attenuator | Phone-view quick action. |

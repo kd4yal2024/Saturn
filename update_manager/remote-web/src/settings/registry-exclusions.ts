@@ -73,6 +73,8 @@ export const NON_SETTING_CONTROLS: readonly NonSettingControl[] = [
   // Per-tier and quick-action duplicates of indexed controls.
   control({ id: 'vfo-mode-tag', reason: 'duplicate', coveredBy: 'radio.mode', note: 'VFO mode shortcut for the mode grid.' }),
   control({ id: 'vfo-band-tag', reason: 'duplicate', coveredBy: 'radio.band', note: 'VFO band shortcut for the band grid.' }),
+  control({ id: 'band-tab-ham', reason: 'duplicate', coveredBy: 'radio.bandGroup', note: 'Selects the Ham HF band buttons.' }),
+  control({ id: 'band-tab-swl', reason: 'duplicate', coveredBy: 'radio.bandGroup', note: 'Selects the SWL band buttons.' }),
   control({ id: 'vfo-antenna-pill', reason: 'duplicate', coveredBy: 'radio.antenna', note: 'VFO antenna shortcut for the radio path select.' }),
   control({ id: 'rx-att-quick-btn', reason: 'duplicate', coveredBy: 'radio.attenuator', note: 'VFO-line shortcut for the same attenuator value.' }),
   control({ id: 'mobile-att-btn', reason: 'duplicate', coveredBy: 'radio.attenuator', note: 'Phone-view quick action.' }),
