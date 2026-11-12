@@ -8,6 +8,7 @@ mod fftw_wisdom;
 mod native_build_info;
 mod p2;
 mod pa_calibration;
+mod pa_calibration_state;
 mod radio_model;
 #[cfg(feature = "managed-puresignal")]
 mod rf_monitor;
@@ -486,6 +487,13 @@ fn main() -> Result<(), Box<dyn Error>> {
             &rx_state::generic_frequency_ok,
         )
     });
+    let _pa_saver = rx_state_store
+        .as_ref()
+        .map(|store| {
+            pa_calibration_state::Store::new(store.path().parent().unwrap().to_owned())
+                .start(radio_model.clone())
+        })
+        .transpose()?;
     let session = Arc::new(P2Session::bind(config.clone())?);
     let (tci, tci_command_rx) = TciFrontend::bind(&config, radio_model.clone())?;
     let tci = Arc::new(tci);

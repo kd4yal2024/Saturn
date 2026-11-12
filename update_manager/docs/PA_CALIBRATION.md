@@ -22,11 +22,29 @@ Open **TX → PA calibration by band**, also searchable from Settings.
 5. **Legacy curve → Apply profile** explicitly restores the previous mapping.
 
 The complete equipment profile is saved in the normal Saturn Remote settings,
-including the local fallback and Saturn Go settings save. It is restored as an
-ordered setting when that operator reconnects to a supporting Bridge. Older
-per-band operating memories cannot overwrite it. This is not an unattended
-hardware auto-calibration or a new root-owned configuration file. A client
-without the saved profile does not inherit another browser's preferences.
+including the local fallback and Saturn Go settings save. Those copies are
+editable drafts: reconnect and band recall do not automatically send a saved
+profile or replace the host's committed profile. Use **Apply profile** explicitly.
+Older per-band operating memories cannot overwrite the equipment profile.
+
+When `SATURN_BRIDGE_STATE_DIR` is configured, the Bridge restores its own
+`pa-calibration-v1.txt` before opening acquisition. A background worker saves
+changes to the committed PA table every 250 ms and flushes on orderly shutdown.
+A settings `applied` result acknowledges runtime configuration, not synchronous
+disk durability. The file contains only the PA drive table (or explicit Legacy),
+not PTT, power, source, tone generation, PureSignal mode or correction curves.
+This applies to shared P2/Direct XDMA and both Legacy backends. Missing files
+retain the startup Legacy default; malformed, unsupported or symlinked files
+are reported and left untouched. Persistence failures are logged and do not
+inhibit ordinary receive/transmit operation.
+
+For an existing installation whose reviewed table exists only in Saturn Go's
+saved settings, `saturn-bridge/scripts/migrate-pa-preset.py` can copy that table
+once into the host state directory. It requires the exact twelve reviewed gains
+via `--expected-profile`, rejects changed/invalid tables and leaves an existing
+host file untouched. Back up the settings and state first. This is a data-only
+migration before the new Bridge starts; it does not apply an unsolicited client
+configuration or authorize transmission.
 
 The panel's host drive value is a calculated command, not a continuous register
 readback. Direct XDMA verifies the matching DAC register at key assertion; the

@@ -391,6 +391,13 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
             })
         })
     };
+    let _pa_saver = rx_state_store
+        .as_ref()
+        .map(|store| {
+            crate::pa_calibration_state::Store::new(store.path().parent().unwrap().to_owned())
+                .start(radio_model.clone())
+        })
+        .transpose()?;
     let tx_radio = Arc::new(DirectXdmaTxRadio::open(
         config.tx_power_meter_scale,
         radio_model.clone(),

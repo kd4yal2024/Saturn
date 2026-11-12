@@ -543,7 +543,7 @@ export class ManagedPcmSession {
       if (c.startsWith('saturn_ps_auto_att_caps:')) this.autoAttenuationSupported=c==='saturn_ps_auto_att_caps:0,start31-owner-v1';
       const autoEnabled=/^tx_puresignal_auto_attenuate:0,(true|false)$/.exec(c);
       if (autoEnabled && this.autoAttenuationSupported) this.autoAttenuationEnabled=autoEnabled[1]==='true';
-      const att=/^saturn_ps_auto_att:0,([0-9]+),([0-9]+),([0-9]+),(true|false),(off|applying|settling|leveling|stable|limited|fault),([0-9]+),(-1|[0-9]+),(-1|[0-9]+),([0-9]+),(true|false)$/.exec(c);
+      const att=/^saturn_ps_auto_att:0,([0-9]+),([0-9]+),([0-9]+),(true|false),(off|applying|settling|leveling|stable|limited|retained|fault),([0-9]+),(-1|[0-9]+),(-1|[0-9]+),([0-9]+),(true|false)$/.exec(c);
       if (att && this.autoAttenuationSupported && this.owner?.stop===BigInt(att[1]!) && this.owner.config===att[2]
         && Number.isSafeInteger(Number(att[3])) && Number(att[3])>0 && Number(att[6])<=31 && Number(att[7])<=31 && Number(att[8])<=65535) {
         this.autoAtt={stop:BigInt(att[1]!),config:att[2]!,frequencyHz:Number(att[3]),phase:att[5]!,db:Number(att[6]),

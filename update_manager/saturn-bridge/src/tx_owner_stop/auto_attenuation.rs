@@ -258,11 +258,12 @@ impl Servo {
         }
         self.stable_windows = 0;
         // The startup RMS ratio is not WDSP's extrapolated info[4]. Running
-        // out of actuator range cannot establish clipping. Keep maximum ATT,
+        // out of actuator range cannot establish clipping or missing RF. Keep
+        // the reached endpoint when RF is present,
         // require two valid windows, and let the normal controller/native fit
         // evaluate the feedback. All timestamp, continuity, overload, finite
         // and component-rail checks above remain prerequisites on every block.
-        if self.db == 31 && info > 165 {
+        if (self.db == 31 && info > 165) || (self.db == 0 && (1..140).contains(&info)) {
             self.limited_windows = self.limited_windows.saturating_add(1);
             if self.limited_windows >= 2 {
                 self.phase = Phase::Limited;
@@ -458,6 +459,60 @@ mod tests {
         let mut clipped = block(1, (now / 10_000_000) * 1024, now, 258. / 256.);
         clipped.rf[0] = 0.95;
         assert_eq!(s.observe(&clipped, now), Err(Fault::SevereOverdrive));
+    }
+    #[test]
+    fn minimum_attenuation_with_present_weak_rf_is_a_limit_notice_not_a_fault() {
+        let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();
+        s.keyed(0);
+        let mut revision = 1;
+        let mut first = 0;
+        for step in 0..250 {
+            let now = step * 10_000_000;
+            s.tick(now).unwrap();
+            let gain = (91.0 / 256.0) * 10f64.powf(-f64::from(s.db) / 20.0);
+            let b = block(revision, first, now, gain);
+            first += 1024;
+            if let Some(db) = s.observe(&b, now).unwrap() {
+                revision += 1;
+                s.requested(db, revision, now);
+                s.applied(now);
+                first = 0;
+            }
+            if s.ready_ns.is_some() {
+                break;
+            }
+        }
+        assert_eq!(s.db, 0);
+        assert_eq!(s.applied_db, Some(0));
+        assert_eq!(s.info, Some(91));
+        assert_eq!(s.phase, Phase::Limited);
+        assert!(s.ready_ns.is_some());
+    }
+    #[test]
+    fn minimum_attenuation_does_not_accept_absent_rf_or_hide_a_rail() {
+        for gain in [0.0, 4.0] {
+            let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();
+            s.keyed(0);
+            s.requested(0, 2, 0);
+            s.applied(0);
+            let mut result = Ok(None);
+            for step in 3..10 {
+                let now = step * 10_000_000;
+                result = s.observe(&block(2, (step - 3) * 1024, now, gain), now);
+                if result.is_err() || matches!(result, Ok(Some(_))) {
+                    break;
+                }
+            }
+            assert_eq!(
+                result,
+                if gain == 0.0 {
+                    Err(Fault::FeedbackLevel)
+                } else {
+                    Ok(Some(6))
+                }
+            );
+            assert_eq!(s.ready_ns, None);
+        }
     }
     #[test]
     fn discontinuity_nonfinite_and_positive_overload_cannot_enable_fitting() {

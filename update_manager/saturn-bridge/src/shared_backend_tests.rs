@@ -33,6 +33,7 @@ enum Case {
     AutoCorrection,
     AutoAttSingle,
     AutoAttLimit,
+    AutoAttLowLimit,
     AutoAttRelease,
     AutoAttMissing,
     AutoAttReconfigure,
@@ -65,6 +66,7 @@ impl Case {
             Self::AutoCorrection
                 | Self::AutoAttSingle
                 | Self::AutoAttLimit
+                | Self::AutoAttLowLimit
                 | Self::AutoAttRelease
                 | Self::AutoAttMissing
                 | Self::AutoAttReconfigure
@@ -193,6 +195,12 @@ impl RuntimeIo for Io {
             assert_eq!(config.ddc0_frequency_hz, initial.desired.iq_center_hz);
             assert!(!initial.desired.tx_enabled && initial.desired.tx_phase == TxPhase::Rx);
             assert!(!initial.desired.pure_signal_enabled);
+            assert_eq!(
+                initial.desired.tx_pa_calibration,
+                crate::pa_calibration::PaCalibration::Bands(
+                    crate::pa_calibration::G2_STARTING_GAINS
+                )
+            );
             if backend == RadioBackend::Xdma {
                 assert_eq!(initial.desired.rx_ddc_index, 6);
             }
@@ -463,19 +471,31 @@ impl RuntimeIo for Io {
                         }
                         if status.phase == Phase::Active {
                             assert!(ingress.leveling_verified.load(Ordering::Acquire) > 0);
-                            if case == Case::AutoAttLimit {
+                            if matches!(case, Case::AutoAttLimit | Case::AutoAttLowLimit) {
                                 let att = ingress.auto_leveling_snapshot().unwrap();
-                                assert_eq!(scope.attenuation_db, 31);
+                                assert_eq!(
+                                    scope.attenuation_db,
+                                    if case == Case::AutoAttLowLimit { 0 } else { 31 }
+                                );
                                 if auto_generations.len() > 1 {
                                     assert_eq!(att.phase, "retained");
-                                    assert_eq!(att.applied_db, Some(31));
+                                    assert_eq!(
+                                        att.applied_db,
+                                        Some(if case == Case::AutoAttLowLimit { 0 } else { 31 })
+                                    );
                                     assert_eq!(
                                         att.info, None,
                                         "old startup ratio is not a new measurement"
                                     );
                                 } else {
                                     assert_eq!(att.phase, "limited");
-                                    assert!(att.info.is_some_and(|level| level > 165));
+                                    assert!(att.info.is_some_and(|level| {
+                                        if case == Case::AutoAttLowLimit {
+                                            (1..140).contains(&level)
+                                        } else {
+                                            level > 165
+                                        }
+                                    }));
                                 }
                             } else {
                                 assert!(scope.attenuation_db < 31, "servo must actually adjust");
@@ -628,7 +648,7 @@ impl RuntimeIo for Io {
                             // Actual ingress settings, not a direct test-side model edit.
                             c.text("vfo:0,0,7300000;");
                             c.text("rx_antenna:0,3;");
-                            c.text("rx_attenuation:0,20;tx_puresignal_attenuation:0,13;");
+                            c.text("rx_attenuation:0,20;tx_puresignal_attenuation:0,13;tx_pa_calibration:0,legacy;");
                         }
                         if case == Case::ReceiveSpectrum {
                             c.text("saturn_display:spectrum,1024,50;");
@@ -1102,6 +1122,7 @@ impl RuntimeIo for Io {
                                     | Case::AutoCorrection
                                     | Case::AutoAttSingle
                                     | Case::AutoAttLimit
+                                    | Case::AutoAttLowLimit
                                     | Case::AutoSustained
                             )
                         {
@@ -1193,6 +1214,8 @@ impl RuntimeIo for Io {
                                         wave.amplify_feedback(1000.);
                                     } else if case == Case::AutoAttLimit {
                                         wave.amplify_feedback(18.);
+                                    } else if case == Case::AutoAttLowLimit {
+                                        wave.amplify_feedback(0.2);
                                     }
                                 }
                             }
@@ -1239,6 +1262,7 @@ impl RuntimeIo for Io {
                         | Case::AutoCorrection
                         | Case::AutoAttSingle
                         | Case::AutoAttLimit
+                        | Case::AutoAttLowLimit
                         | Case::AutoSustained
                 ) {
                     2
@@ -1422,6 +1446,8 @@ impl RuntimeIo for Io {
                             self.wave.amplify_feedback(1000.);
                         } else if self.case == Case::AutoAttLimit {
                             self.wave.amplify_feedback(18.);
+                        } else if self.case == Case::AutoAttLowLimit {
+                            self.wave.amplify_feedback(0.2);
                         }
                     }
                 }
@@ -1545,10 +1571,15 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         saved.sync_vfo_routes();
         let settings = crate::rx_state::capture(&saved);
         store.save(&settings).unwrap();
+        crate::pa_calibration_state::Store::new(store.path().parent().unwrap().to_owned())
+            .save(crate::pa_calibration::PaCalibration::Bands(
+                crate::pa_calibration::G2_STARTING_GAINS,
+            ))
+            .unwrap();
         io.expected_rx = Some(settings);
     }
     let mut selected_options = options();
-    if case == Case::AutoAttLimit {
+    if matches!(case, Case::AutoAttLimit | Case::AutoAttLowLimit) {
         // Same host component margin as the reported G2 run, not a relaxed
         // full-scale fixture guard. Native fitting must pass at this margin.
         selected_options
@@ -1628,6 +1659,12 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         assert_eq!(restored.vfo_b_hz, Some(7_215_000));
         assert_eq!(restored.rx_antenna, Some(3));
         assert_eq!(restored.rx_attenuation_db, Some(20));
+        let pa = crate::pa_calibration_state::Store::new(store.path().parent().unwrap().to_owned());
+        assert_eq!(
+            pa.load().unwrap(),
+            Some(crate::pa_calibration::PaCalibration::Legacy),
+            "real committed PA transaction must survive owner shutdown"
+        );
         let text = std::fs::read_to_string(store.path()).unwrap();
         assert!(!text.contains("tx_enabled") && !text.contains("pure_signal"));
     }
@@ -1676,6 +1713,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
                 | Case::AutoCorrection
                 | Case::AutoAttSingle
                 | Case::AutoAttLimit
+                | Case::AutoAttLowLimit
                 | Case::AutoAttRelease
                 | Case::AutoAttReconfigure
                 | Case::AutoAttDisconnect
@@ -2212,5 +2250,13 @@ fn actual_run_inner_faulted_receive_tuning_programs_ddc6() {
 fn actual_run_inner_max_attenuation_unclipped_feedback_fits_and_rearms() {
     for direct in [false, true] {
         exercise(direct, Case::AutoAttLimit);
+    }
+}
+
+#[test]
+#[ignore = "serial matched WDSP; minimum-ATT weak feedback through actual P2/XDMA runtime; no RF"]
+fn actual_run_inner_min_attenuation_weak_feedback_fits_and_rearms() {
+    for direct in [false, true] {
+        exercise(direct, Case::AutoAttLowLimit);
     }
 }

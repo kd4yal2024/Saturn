@@ -65,6 +65,13 @@ describe('selectable managed PCM controller', () => {
     h.session.disconnect();expect(h.session.status().autoAttenuationSupported).toBe(false);
     expect(h.session.status().autoAttStatus).toBeUndefined();
   });
+  it('retains minimum-limit and warm retained attenuation reports without inventing a new measurement',()=>{
+    const h=setup();h.ready();
+    h.session.text('saturn_ps_auto_att_caps:0,start31-owner-v1;tx_puresignal_auto_attenuate:0,true;saturn_ps_auto_att:0,2,11,3897000,true,limited,0,0,91,6,true;',h.epoch);
+    expect(h.session.status().autoAttStatus).toMatchObject({phase:'limited',db:0,appliedDb:0,info:91});
+    h.session.text('saturn_ps_auto_att:0,2,11,3897000,true,retained,0,0,-1,6,true;',h.epoch);
+    expect(h.session.status().autoAttStatus).toMatchObject({phase:'retained',db:0,appliedDb:0,info:null});
+  });
   it('allows a negotiated Auto ATT toggle after completed fault cleanup without clearing the fault or keying',()=>{
     const h=setup();h.ready();
     h.session.text('saturn_ps_auto_att_caps:0,start31-owner-v1;tx_puresignal_auto_attenuate:0,true;saturn_rx_tuning_caps:0,fault-latched-v1;saturn_tx_owner:shared,2,ReadyOff,3,11,tci,false,SevereOverdrive;saturn_tx_fault_ack_state:0,3,true;',h.epoch);

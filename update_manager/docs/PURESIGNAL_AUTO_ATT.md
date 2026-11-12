@@ -34,24 +34,26 @@ For each fresh authorized PS transmission with Auto ATT enabled:
    step within 0–31 dB. Wait for the acquisition completion, then 30 ms of
    original observation time before measuring at the new gain. At most 12
    adjustment steps are permitted.
-5. Require two in-range windows, or two valid above-target windows while already
-   at maximum attenuation. The latter reports `limited`, retains 31 dB and does
-   not claim that the level reached its target. Return the original key receipt
+5. Require two in-range windows, or two valid windows at an actuator limit:
+   above target at 31 dB,
+   or present but below target at 0 dB. An endpoint reports `limited`, retains
+   its applied attenuation and does not claim that the level reached its target. Return the original key receipt
    and admit only
    observations after the new feedback-ready boundary plus ordinary settling.
    WDSP Single/Auto fitting may then begin. Hold gain for the rest of this TX;
    this version is not a continuous mid-correction attenuator servo.
 
-The maximum-attenuation case is an actuator-limit notice, not a hardware overload
-measurement. The startup RMS ratio differs from pinned WDSP 2.10's native
+Either attenuation endpoint is an actuator-limit notice, not a hardware overload
+measurement. The startup RMS ratio differs from pinned WDSP's native
 `info[4]`, which uses envelope extrapolation at normalized reference amplitude
 one. A ratio above target at 31 dB therefore does not itself justify latching
 `FeedbackLevel`. Both windows must pass the unchanged age, route, acquisition
 revision, continuity, finite-sample, positive-overload and component-rail checks.
 The normal controller then runs its own admission checks and WDSP decides
 whether a fit is usable. Missing feedback and actual rail/overload faults remain
-stop conditions. The lower attenuation limit and adjustment-step limit are not
-relaxed. This does not qualify RF input headroom or amplifier ramp timing.
+stop conditions. At 0 dB, absent RF (zero ratio) still faults; present weak RF
+can proceed to native admission without claiming a usable fit. The adjustment-step limit
+is unchanged. This does not qualify RF input headroom or amplifier ramp timing.
 
 All gain changes preserve original sample timestamps. Each pair block carries
 its acquisition-request revision, stamped before enqueue. Old-gain queued
@@ -82,11 +84,13 @@ saturn_ps_auto_att:0,<stop>,<config>,<frequencyHz>,<enabled>,<phase>,<requestedD
 ```
 
 `appliedDb` and `ratioEstimate` use -1 when unknown. Phases are off, applying,
-settling, leveling, stable, limited and fault. Messages are scoped to the current
-stop
-and committed configuration. `limited` means maximum attenuation with the
-startup estimate still above target; it is neither `stable` nor proof of an
-accepted native fit. Updated Remote clients display this distinction and label
+settling, leveling, stable, limited, retained and fault. Messages are scoped to
+the current stop and committed configuration. `limited` means either maximum
+attenuation with the startup estimate above target, or minimum attenuation with
+present feedback below target; it is neither `stable` nor proof of an accepted
+native fit. `retained` denotes the existing warm-release path using the previous
+applied attenuation, without inventing a new ratio estimate. Updated Remote
+clients display this distinction and label
 the estimate as a startup ratio. Applied gain is acquisition-owner completion
 information, not independently measured analog attenuation. Correction graphs
 use that applied gain rather than the saved manual preset. Raw paired captures
@@ -105,6 +109,12 @@ and owner join. Servo tests cover silence, envelope minima, delayed revisions,
 stale/future data, gaps, nonfinite samples and positive ADC evidence. Browser
 checks cover honest capability/selection, applied-gain display, per-band recall,
 manual editing and fault recovery.
+
+The minimum-attenuation regression reproduces a startup estimate of 91, requires
+two valid windows and checks that missing RF still faults and a real rail hit
+still requests increased attenuation. Real-WDSP runtime tests cover both actual
+backend adapters, accepted correction, normal release and an authorized second
+generation at retained 0 dB. These fixtures do not qualify weak physical feedback.
 
 The maximum-attenuation regression reproduces a startup estimate of 258 and
 requires two valid windows before admission. A subsequent component at the

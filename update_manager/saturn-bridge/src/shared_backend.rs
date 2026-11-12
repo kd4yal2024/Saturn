@@ -201,6 +201,15 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             RadioBackend::P2 => crate::rx_state::generic_frequency_ok(hz),
         })
     });
+    // PA data has a separate format; restoring it grants no output authority.
+    // Derive it from the injected state store so fixtures cannot read host data.
+    let _pa_saver = rx_state_store
+        .as_ref()
+        .map(|store| {
+            crate::pa_calibration_state::Store::new(store.path().parent().unwrap().to_owned())
+                .start(model.clone())
+        })
+        .transpose()?;
     let initial_receive = model.lock_unpoisoned().desired.clone();
     config.ddc0_frequency_hz = initial_receive.iq_center_hz;
     let (radio, mut acquisition) = io.open(&mut config, backend, &model)?;

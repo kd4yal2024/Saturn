@@ -106,6 +106,9 @@ describe('automatic band operating settings', () => {
     m.autoAttenuationSupported=true;m.autoAttenuationEnabled=true;
     m.autoAttStatus={phase:'stable',db:12,appliedDb:12,info:152,frequencyHz:7_200_000,keyed:true};
     sync();expect(checkbox.checked).toBe(true);expect(checkbox.disabled).toBe(false);
+    m.autoAttStatus={phase:'limited',db:0,appliedDb:0,info:91,frequencyHz:3_897_000,keyed:true};sync();expect(status.textContent).toContain('at minimum attenuation');
+    m.autoAttStatus={phase:'limited',db:31,appliedDb:31,info:258,frequencyHz:7_200_000,keyed:true};sync();expect(status.textContent).toContain('at maximum attenuation');
+    m.autoAttStatus={phase:'stable',db:12,appliedDb:12,info:152,frequencyHz:7_200_000,keyed:true};
     f.state.txPhase='keyed';m.phase='streaming';m.ownerPhase='Active';sync();expect(checkbox.disabled).toBe(true);
     expect(slider.value).toBe('12');expect(slider.disabled).toBe(true);expect(f.state.pureSignalAttenuationDb).toBe(18);
     f.state.txPhase='rx';m.phase='ready';m.ownerPhase='ReadyOff';m.autoAttenuationEnabled=false;sync();expect(slider.value).toBe('18');expect(slider.disabled).toBe(false);
