@@ -79,7 +79,10 @@ impl PaCalibration {
             _ => None,
         }
     }
-    pub(crate) fn drive(self, watts: u8, frequency: u32, legacy_full_scale: u8) -> u8 {
+    // The third argument calibrates the Legacy curve's 100-W endpoint. It is
+    // not a physical DAC ceiling: the per-band profile replaces that curve.
+    // Both policies clamp requested watts to 100 and encoded drive to u8.
+    pub(crate) fn drive(self, watts: u8, frequency: u32, legacy_drive_at_100w: u8) -> u8 {
         if watts == 0 {
             return 0;
         }
@@ -93,7 +96,7 @@ impl PaCalibration {
                     .floor()
                     .clamp(1.0, 255.0) as u8
             }
-            None => legacy_drive(watts, legacy_full_scale),
+            None => legacy_drive(watts, legacy_drive_at_100w),
         }
     }
 }

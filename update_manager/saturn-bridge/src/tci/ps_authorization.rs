@@ -51,6 +51,13 @@ impl TciFrontend {
     }
 }
 impl OperatorIngress {
+    /// Latest state is replaceable telemetry, never a transaction receipt.
+    pub(crate) fn status_reply(&self, text: String) {
+        let client = self.operator.load(Ordering::SeqCst);
+        if let Some(c) = self.clients.lock_unpoisoned().get(&client) {
+            c.outbound.enqueue(OutboundMessage::Text(text));
+        }
+    }
     pub(crate) fn media_reply(&self, text: String, cancel: impl FnOnce()) {
         let client = self.operator.load(Ordering::SeqCst);
         if client != 0 {
@@ -183,6 +190,34 @@ impl OperatorIngress {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn status_flood_preserves_authorization_but_receipt_overflow_still_revokes() {
+        let ingress = OperatorIngress::fixture();
+        let permission = ingress.settings_permission(7).unwrap();
+        let cancelled = AtomicBool::new(false);
+        for n in 0..1000 {
+            ingress.status_reply(format!(
+                "saturn_tx_owner:shared,{n},Active,1,2,tci,false,none;"
+            ));
+            ingress.status_reply(format!(
+                "saturn_ps_auto_att:0,1,2,7200000,true,stable,12,12,{n},3,true;"
+            ));
+        }
+        assert!(permission.valid());
+        for _ in 0..64 {
+            assert!(
+                ingress.settings_reply(7, "tx_config:0,1,applied,2;".into(), || cancelled
+                    .store(true, Ordering::SeqCst))
+            );
+        }
+        assert!(!cancelled.load(Ordering::SeqCst));
+        assert!(
+            !ingress.settings_reply(7, "tx_config:0,2,applied,3;".into(), || cancelled
+                .store(true, Ordering::SeqCst))
+        );
+        assert!(cancelled.load(Ordering::SeqCst));
+        assert!(!permission.valid());
+    }
     #[test]
     fn credential_liveness_is_not_registry_mutex_availability() {
         let ingress = OperatorIngress::fixture();

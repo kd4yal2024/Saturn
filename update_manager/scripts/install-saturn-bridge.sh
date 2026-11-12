@@ -33,6 +33,9 @@ SATURN_BRIDGE_BUILD_ONLY="${SATURN_BRIDGE_BUILD_ONLY:-0}"
 SATURN_BRIDGE_UNIT_ONLY="${SATURN_BRIDGE_UNIT_ONLY:-0}"
 SATURN_BRIDGE_OUTPUT_BIN="${SATURN_BRIDGE_OUTPUT_BIN:-}"
 SATURN_BRIDGE_WDSP_FLAVOR="${SATURN_BRIDGE_WDSP_FLAVOR:-wdsp2}"
+case "$SATURN_BRIDGE_WDSP_FLAVOR" in
+  2.00|2.10) printf 'ERROR: WDSP %s is not WDSP 2.11; select 2.11 or wdsp2 explicitly.\n' "$SATURN_BRIDGE_WDSP_FLAVOR" >&2; exit 1 ;;
+esac
 # Explicit shared-owner build; runtime owner selection remains a separate setting.
 SATURN_BRIDGE_MANAGED_PURESIGNAL="${SATURN_BRIDGE_MANAGED_PURESIGNAL:-0}"
 SATURN_BRIDGE_REVIEWED_WDSP_DIR="${SATURN_BRIDGE_REVIEWED_WDSP_DIR:-}"
@@ -333,7 +336,7 @@ build_bridge() {
 
   if flag_enabled "$SATURN_BRIDGE_MANAGED_PURESIGNAL"; then
     [[ -n "$SATURN_BRIDGE_REVIEWED_WDSP_DIR" ]] || die "Managed PureSignal requires SATURN_BRIDGE_REVIEWED_WDSP_DIR"
-    [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.10" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.11" ]] || die "Managed PureSignal requires reviewed WDSP 2.11"
+    [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.11" ]] || die "Managed PureSignal requires reviewed WDSP 2.11"
     need_file "$SATURN_BRIDGE_REVIEWED_WDSP_DIR/libwdsp.a" "reviewed PureSignal native archive"
     need_file "$SATURN_BRIDGE_REVIEWED_WDSP_DIR/wdsp.h" "reviewed PureSignal native header"
     cargo_args+=(--features managed-puresignal)
@@ -345,7 +348,7 @@ build_bridge() {
     )
   else
   case "$SATURN_BRIDGE_WDSP_FLAVOR" in
-    wdsp2|2.00|2.10|2.11)
+    wdsp2|2.11)
       build_wdsp2
       native_env+=(
         SATURN_WDSP_DIR="$SATURN_WDSP2_BUILD_DIR"
@@ -396,7 +399,7 @@ verify_built_bridge() {
   local built_bin
   built_bin="$(built_bridge_path)"
   need_file "$built_bin" "built saturn-bridge binary"
-  if [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.00" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.10" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.11" ]]; then
+  if [[ "$SATURN_BRIDGE_WDSP_FLAVOR" == "wdsp2" || "$SATURN_BRIDGE_WDSP_FLAVOR" == "2.11" ]]; then
     local symbol symbols
     symbols="$(nm -a "$built_bin")"
     for symbol in SetRXAWBFMdmph SetTXAPHROTAutoMode pscc SetPSControl create_rmatchV xrmatchIN xrmatchOUT; do

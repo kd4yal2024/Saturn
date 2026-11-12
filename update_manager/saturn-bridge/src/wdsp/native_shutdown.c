@@ -16,6 +16,15 @@ static pthread_mutex_t saturn_workers_mutex = PTHREAD_MUTEX_INITIALIZER;
 extern HANDLE __real__beginthread(void (*)(void *), unsigned, void *);
 extern void __real_CloseChannel(int);
 
+/* flushChannel clears flushflag only after releasing both channel locks and
+ * completing flush_main/flush_iobuffs. Exchange-off alone is insufficient. */
+int saturn_channel_flush_complete(int channel) {
+    if (channel < 0 || channel >= MAX_CHANNELS) return 0;
+    return ch[channel].iob.pc && ch[channel].state == 0
+        && !(__atomic_load_n(&ch[channel].flushflag, __ATOMIC_SEQ_CST) & 1)
+        && !(__atomic_load_n(&ch[channel].exchange, __ATOMIC_SEQ_CST) & 1);
+}
+
 static void *saturn_channel_main(void *arg) {
     SATURN_CHANNEL_WORKER *worker = arg;
     char name[16];

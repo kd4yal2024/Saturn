@@ -228,6 +228,7 @@ struct SettingsTail {
 pub(crate) struct SharedIngress {
     pub(crate) performance: Arc<Mutex<crate::xdma_telemetry::SharedTxPerformance>>,
     audio_drops: Arc<AtomicU64>,
+    published_audio_drops: Arc<AtomicU64>,
     pub(crate) signal_capture: Arc<OnceLock<crate::tx_signal_capture::shared::Producer>>,
     two_tone_limits: Arc<OnceLock<TwoToneLimits>>,
     generated_trials_only: Arc<AtomicBool>,
@@ -356,7 +357,7 @@ impl SharedIngress {
         *prior = Some(value);
         drop(prior);
         self.operator
-            .media_reply(Self::auto_attenuation_message(value), || self.release());
+            .status_reply(Self::auto_attenuation_message(value));
     }
     fn auto_attenuation_message(
         (s, stop, config, frequency, enabled): (
@@ -1983,6 +1984,7 @@ impl SharedIngress {
             Self {
                 performance: Arc::new(Mutex::new(Default::default())),
                 audio_drops: Arc::new(AtomicU64::new(0)),
+                published_audio_drops: Arc::new(AtomicU64::new(0)),
                 signal_capture: Arc::new(OnceLock::new()),
                 commands,
                 audio,
@@ -2055,7 +2057,7 @@ impl SharedIngress {
         );
         let owner_reply = {
             let mut published = self.owner_status.lock_unpoisoned();
-            let publication_key = format!("{fields},audio_drops={}", self.audio_drop_count());
+            let publication_key = fields.clone();
             if published.1 == publication_key {
                 None
             } else {
@@ -2177,11 +2179,18 @@ impl SharedIngress {
             Err(fault) => self.stop(fault),
             _ => {}
         }
+        let drops = self.audio_drop_count();
+        let drops_changed = self.published_audio_drops.swap(drops, Ordering::Relaxed) != drops;
         if let Some(text) = owner_reply {
-            self.operator.media_reply(
-                format!("{text}{}", self.ps_mode_message().unwrap_or_default()),
-                || self.release(),
-            );
+            self.operator.status_reply(format!(
+                "{text}{}",
+                self.ps_mode_message().unwrap_or_default()
+            ));
+        } else if drops_changed {
+            self.operator.status_reply(format!(
+                "saturn_tx_audio_drops:0,{},{config_id},{drops};",
+                status.stop_id
+            ));
         }
     }
     pub(crate) fn owner_status_message(&self) -> Option<String> {

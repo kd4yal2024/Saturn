@@ -53,6 +53,43 @@ fn rear_ptt_command(
     );
 }
 #[test]
+fn hardware_ptt_read_failure_revokes_claim_without_disconnect_and_requires_release() {
+    let (front, commands) = rear_ptt_frontend();
+    let t = Instant::now();
+    rear_ptt_press(&front, t);
+    rear_ptt_command(&front, &front.hardware_commands, 7, "saturn_ptt:0,1;");
+    let TciCommand::HardwarePttArm(permit) = commands.try_recv().unwrap() else {
+        panic!("missing arm")
+    };
+    assert!(permit.live());
+    assert!(
+        !permit.claim(),
+        "the parser has already claimed this one-use edge"
+    );
+    front.hardware_ptt_read_failed(
+        t + Duration::from_millis(11),
+        &"injected status read failure",
+    );
+    assert!(!permit.live());
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::SetTxEnabled(false))
+    ));
+    assert!(front.clients.lock_unpoisoned().contains_key(&7));
+    assert_eq!(front.operator_client_id.load(Ordering::SeqCst), 7);
+    front.observe_hardware_ptt(true, t + Duration::from_millis(20));
+    front.service_hardware_ptt(t + Duration::from_millis(30));
+    assert!(commands.try_recv().is_err());
+    assert_eq!(front.hardware_ptt.lock().unwrap().next, 1);
+    rear_ptt_press(&front, t + Duration::from_millis(40));
+    rear_ptt_command(&front, &front.hardware_commands, 7, "saturn_ptt:0,2;");
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(TciCommand::HardwarePttArm(_))
+    ));
+    front.observe_hardware_ptt(false, t + Duration::from_millis(60));
+}
+#[test]
 fn hardware_ptt_release_cancels_an_actual_queued_arm() {
     let (front, commands) = rear_ptt_frontend();
     let t = Instant::now();

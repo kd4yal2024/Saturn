@@ -426,7 +426,10 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                 Acquisition::Direct(rx) => {
                     let now = Instant::now();
                     if frontend.hardware_ptt_poll_due(now) {
-                        frontend.observe_hardware_ptt(rx.read_ptt_input()?, now);
+                        match rx.read_ptt_input() {
+                            Ok(pressed) => frontend.observe_hardware_ptt(pressed, now),
+                            Err(error) => frontend.hardware_ptt_read_failed(now, &error),
+                        }
                     }
                     // Apply RX controls after completed stop/native cleanup,
                     // even when a TX fault remains latched. Startup/TX readiness

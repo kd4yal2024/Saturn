@@ -8,14 +8,24 @@ NATIVE_SOURCE_ROOT="${SATURN_BRIDGE_NATIVE_SOURCE_ROOT:-${BRIDGE_DIR}/target/nat
 WDSP2_SOURCE_DIR="${WDSP2_SOURCE_DIR:-${NATIVE_SOURCE_ROOT}/OpenHPSDR-wdsp/wdsp 2.11/Source}"
 PIHPSDR_WDSP_DIR="${PIHPSDR_WDSP_DIR:-${NATIVE_SOURCE_ROOT}/pihpsdr/wdsp}"
 BUILD_DIR="${WDSP2_BUILD_DIR:-${BRIDGE_DIR}/target/wdsp2-linux-arm}"
-TARGET_CPU="${SATURN_WDSP_TARGET_CPU:-cortex-a72}"
 TARGET_ARCH="${SATURN_WDSP_TARGET_ARCH:-$(uname -m)}"
+case "$TARGET_ARCH" in
+  aarch64|arm64|armv7l|armv8l) default_cpu=cortex-a72; target_flag=-mcpu ;;
+  x86_64|amd64) default_cpu=x86-64; target_flag=-march ;;
+  *) echo "ERROR: unsupported WDSP target architecture: $TARGET_ARCH" >&2; exit 1 ;;
+esac
+TARGET_CPU="${SATURN_WDSP_TARGET_CPU:-$default_cpu}"
 NNR_PROFILE="${SATURN_WDSP_NNR_PROFILE:-0}"
 [[ "$NNR_PROFILE" == 0 || "$NNR_PROFILE" == 1 ]] || { echo "ERROR: SATURN_WDSP_NNR_PROFILE must be 0 or 1" >&2; exit 1; }
 
 if [[ ! "$TARGET_CPU" =~ ^[A-Za-z0-9._+-]+$ ]]; then
   echo "ERROR: invalid SATURN_WDSP_TARGET_CPU: ${TARGET_CPU}" >&2
   exit 1
+fi
+
+if [[ "${1:-}" == --print-target ]]; then
+  printf '%s %s %s=%s\n' "$TARGET_ARCH" "$TARGET_CPU" "$target_flag" "$TARGET_CPU"
+  exit 0
 fi
 
 if [[ ! -d "${WDSP2_SOURCE_DIR}" ]]; then
@@ -252,11 +262,7 @@ mapfile -t sources < <(find . -maxdepth 1 -name '*.c' -printf '%f\n' | sort)
 # Do not add unsafe floating-point optimizations: WDSP numerical behavior is
 # part of the radio-quality contract and is deliberately unchanged here.
 cflags=(-pthread -O3 -D_GNU_SOURCE -Wno-parentheses -Wcast-align)
-case "$TARGET_ARCH" in
-  aarch64|arm64) cflags+=("-mcpu=${TARGET_CPU}") ;;
-  x86_64) cflags+=("-march=${TARGET_CPU}") ;;
-  *) echo "ERROR: unsupported WDSP target architecture: $TARGET_ARCH" >&2; exit 1 ;;
-esac
+cflags+=("${target_flag}=${TARGET_CPU}")
 if [[ "$NNR_PROFILE" == 1 ]]; then cflags+=(-DNNET_PROFILE); fi
 if [[ -d "${PIHPSDR_WDSP_DIR}/../rnnoise/include" ]]; then
   cflags+=("-I${PIHPSDR_WDSP_DIR}/../rnnoise/include")

@@ -23,6 +23,25 @@ function setup(capture?: ManagedCaptureFactory) {
 }
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
+  it('bounds adjacent unsent navigation with band snapshots and keeps real receipt barriers', () => {
+    const h=setup();h.ready();
+    h.session.sendControl('tx_mic_gain:0,0;'); // in flight, must not be replaced
+    for(let n=0;n<100;n++) {
+      h.session.sendControl(`vfo:0,0,${7200000+n};dds:0,${7200000+n};modulation:0,LSB;tx_drive:0,40;`,{navigation:true});
+      h.session.sendControl(`vfo:0,0,${7200001+n};dds:0,${7200001+n};`,{navigation:true});
+    }
+    expect(h.session.status().pendingSettings).toBe(2);
+    expect(h.session.status().phase).not.toBe('fault');
+    h.session.text('tx_config:0,1,queued,12;saturn_tx_owner:shared,2,ReadyOff,2,12,tci,true,none;tx_config:0,1,applied,12;',h.epoch);
+    h.advance(1);
+    expect(h.control.at(-1)).toBe('vfo:0,0,7200100;dds:0,7200100;modulation:0,LSB;tx_drive:0,40;');
+    h.session.sendControl('tx_mic_gain:0,-3;'); // explicit action is a barrier
+    h.session.sendControl('vfo:0,0,7300000;dds:0,7300000;',{navigation:true});
+    expect(h.session.status().pendingSettings).toBe(3);
+    h.session.sendControl('trx:0,false;');
+    expect(h.session.status().pendingSettings).toBe(1); // sent navigation still needs its terminal receipt
+    expect(h.media).toHaveLength(0);
+  });
   it('reports host PCM skips without retiring authority and rejects old scoped counters',()=>{
     const h=setup();h.ready();
     h.session.text('saturn_tx_audio_drops:0,2,11,3;',h.epoch);

@@ -155,15 +155,15 @@ describe('automatic band operating settings', () => {
     expect(f.state.txMicGainDb).toBe(0); expect(f.state.rxAntenna).toBe(2);
     expect(f.state.rxAttenuationDb).toBe(10); expect(f.state.rxFilterShiftHz).toBe(-150);
     expect(f.state.rxSsqlEnabled).toBe(true); expect(f.state.rxSsqlThreshold).toBe(37);
-    expect(f.state.preferredRxHeadphones).toBe(true); expect(f.state.preferredTxMonitor).toBe(true);
+    expect(f.state.preferredRxHeadphones).toBe(false); expect(f.state.preferredTxMonitor).toBe(false);
     expect(f.state.txMonitorLevelDb).toBe(-18); expect(f.state.cfcEnabled).toBe(true);
     expect(f.state.preferredPureSignalMode).toBe('auto');
     expect(f.state.waterfallPalette).toBe('ember'); expect(f.state.displayZoom).toBe(4);
     expect(f.state.vfoA).toBe(7_210_000); // tuning destination, not old saved frequency
     const commands = f.sent.join('');
     expect(commands).toContain('tx_drive:0,60;'); expect(commands).toContain('tx_mic_gain:0,0.0;');
-    expect(commands).toContain('rx_attenuation:0,10;'); expect(commands).toContain('rx_headphones:0,true;');
-    expect(commands).toContain('tx_monitor:0,true;'); expect(commands).toContain('tx_puresignal_mode:0,auto;');
+    expect(commands).toContain('rx_attenuation:0,10;'); expect(commands).toContain('rx_headphones:0,false;');
+    expect(commands).toContain('tx_monitor:0,false;'); expect(commands).toContain('tx_puresignal_mode:0,auto;');
     expect(commands).not.toContain('tx_two_tone:0,true;'); expect(commands).not.toContain('trx:0,true');
     f.api.setFrequency(14_250_000);
     expect(f.state.mode).toBe('USB'); expect(f.state.txDrive).toBe(25);
@@ -198,7 +198,10 @@ describe('automatic band operating settings', () => {
     Object.assign(f.state, { preferredRxHeadphones: true, preferredTxMonitor: true, txMonitorLevelDb: -12,
       rxAttenuationDb: 17, rxFilterShiftHz: 240, preferredPureSignalMode: 'auto', pureSignalEnabled: true });
     f.api.saveRadioPrefs();
-    const next = fixture(); next.state.bandMemory = normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!));
+    const next = fixture();
+    // Device choices are loaded from global preferences, not a band entry.
+    next.api.applyRadioPrefsObject(JSON.parse(f.storage.get('radioPrefs')!));
+    next.state.bandMemory = normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!));
     next.api.applyBandMemoryForFrequency(7_200_000);
     expect(next.state.rxHeadphonesEnabled).toBe(false); expect(next.state.txMonitorEnabled).toBe(false);
     expect(next.state.preferredRxHeadphones).toBe(true);
@@ -211,6 +214,31 @@ describe('automatic band operating settings', () => {
     expect(next.api.currentRadioPrefs().rxHeadphonesEnabled).toBe(true);
   });
 
+  it('does not replay absent or stale client PA calibration over the host profile',()=>{
+    const f=fixture();f.state.txPaCalibrationSupported=true;
+    for(const profile of [null,Array(12).fill(42)]) {
+      f.state.txPaCalibration=profile;f.sent.length=0;
+      f.api.sendCurrentRadioPrefsToBridge();
+      f.api.sendCurrentRadioPrefsToBridge(f.api.currentRadioPrefs(),{restoreTx:true});
+      expect(f.sent.join('')).not.toContain('tx_pa_calibration:');
+    }
+  });
+  it('keeps local outputs global across old band memories and never re-arms MON on reconnect',()=>{
+    const f=fixture();Object.assign(f.state,{preferredRxHeadphones:true,preferredTxMonitor:false,txMonitorLevelDb:-24});
+    f.state.bandMemory=normalizeBandMemory({'20m':{frequency:14200000,radioPrefs:{rxHeadphonesEnabled:false,txMonitorEnabled:true,txMonitorLevelDb:-6}}});
+    f.api.setFrequency(14200000);
+    expect(f.state.preferredRxHeadphones).toBe(true);expect(f.state.preferredTxMonitor).toBe(false);expect(f.state.txMonitorLevelDb).toBe(-24);
+    f.state.preferredTxMonitor=true;f.sent.length=0;f.api.sendCurrentRadioPrefsToBridge();
+    expect(f.sent).toContain('tx_monitor:0,false;');expect(f.state.preferredTxMonitor).toBe(false);
+  });
+  it('manual tuning out of SWL resolves overlapping amateur ranges without stealing explicit SWL recall',()=>{
+    const f=fixture();Object.assign(f.state,{vfoA:6000000,dds:6000000,bandMemoryGroup:'swl'});
+    f.state.bandMemory=normalizeBandMemory({'40m':{frequency:7200000,radioPrefs:{mode:'LSB'}},'SWL 41m':{frequency:7350000,radioPrefs:{mode:'AM'}}});
+    f.api.setFrequency(7250000);expect(f.state.bandMemoryGroup).toBe('ham');expect(f.state.mode).toBe('LSB');
+    Object.assign(f.state,{vfoA:7350000,dds:7350000,bandMemoryGroup:'swl',mode:'AM'});
+    f.api.setFrequency(7340000);expect(f.state.bandMemoryGroup).toBe('swl');expect(f.state.mode).toBe('AM');
+    f.api.setFrequency(7250000,false,{absolute:true});expect(f.state.bandMemoryGroup).toBe('ham');expect(f.state.mode).toBe('LSB');
+  });
   it('keeps viewer/receive-validation sessions from rewriting band memories', () => {
     const f = fixture(); f.state.remoteClientRole = 'viewer'; f.api.saveRadioPrefs();
     expect(f.storage.has('bandMemory')).toBe(false);

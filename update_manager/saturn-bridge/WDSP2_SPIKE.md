@@ -249,3 +249,41 @@ build is compared with another G2 build, not with a cross build. A compiler that
 emits debug information also embeds the build directory, so the build path must
 match as well. GCC without `-g` gave bit-identical objects and archive from two
 different directories.
+
+## Follow-up to the 15-finding source review (2026-11-12)
+
+Baseline: deployed source `94b7ad82bd957147ba0a5bcb0659658ee830d4e7`.
+The supplied review covered the earlier `91a4c773..fdcbe15d` range. Review
+and tests below are offline; the running G2 release/configuration is unchanged.
+
+| Finding | Disposition |
+| --- | --- |
+| Band-profile drive bypasses the Legacy endpoint | Intentional calibration policy, clarified in `pa_calibration.rs`. `legacy_drive_at_100w` is a Legacy calibration endpoint, not a measured DAC hardware ceiling. A band profile replaces that curve. Existing tests cover monotonicity, zero drive, 100-W request saturation and encoded-byte bounds. Reinstating a universal byte-68 cap would undo the requested 10/11-m PA calibration. No claim that a commanded watt value measures RF power. |
+| RF clipping evaluated before acquisition/gain settling | Fixed: validate timestamps, continuity, known overload, finiteness and reference rail first; interpret RF level only after acquisition completion and its original-observation settling boundary. Added old-gain/new-revision rail regressions. |
+| Readiness survives a gain request; completed status regresses | Fixed: a gain request clears readiness/applied readback/info. Held-key completion also requires preparation, matching applied gain and Stable/Limited state. Completed startup leveling retains its status. |
+| Native try-lock contention discards a feedback block | Fixed: retain exactly one deferred block; retry it before dequeuing another, preserve age and recycle/discard it on cancellation. Actual scheduling tests cover recovery without SequenceGap, release, staleness and completed cleanup. |
+| Owner/audio-drop and Auto ATT telemetry consumes receipt FIFO | Fixed: latest owner/ATT/drop snapshots use coalesced control slots; audio-drop changes no longer advance owner-state serials. Actual media-authority edges and settings receipts retain their bounded FIFO and revocation policy. Flood tests preserve authorization; receipt overflow still revokes. |
+| Band recall persists local hardware outputs / re-arms MON | Fixed: new band entries omit headphone/MON settings and old entries cannot override global device choices. Reconnect explicitly leaves MON off; global headphone choice and monitor level remain available. |
+| Client reconnect/band restore overwrites host PA profile | Fixed: generic preference restoration never sends a PA profile. Only explicit PA Apply/Reset changes it. Tests cover absent and stale client profiles. |
+| Band-edge tuning fills settings queue | Fixed: adjacent unsent absolute navigation and derived band snapshots coalesce together. A later fine tune retains its pending snapshot. Explicit settings remain barriers, sent transactions retain receipts, and release cancels unsent navigation. |
+| A historical SWL selection captures overlapping Ham tuning | Fixed: ordinary jumps resolve Ham first; tuning within an explicitly selected SWL band retains that context. Absolute keypad entry resolves independently. Explicit Ham/SWL button memories remain distinct. |
+| ARM32 rejected / x86 inherits Cortex CPU | Fixed: armv7l/armv8l and ARM64 use Cortex-A72 defaults; x86_64/amd64 use x86-64. Explicit CPU overrides remain supported. Target validation precedes build-directory mutation. Entry-point tests cover defaults, overrides and invalid targets; no ARM32 executable was run. |
+| Default mic gain changed from -12 to 0 dB | Intentional operator-requested unity default. Saved gain values remain honored; no automatic +12 dB adjustment is applied to existing profiles. |
+| Channel destruction waits for its own missing exchanges | Fixed for RX/Legacy destruction: begin OFF without blocking, advance zero-input exchanges, then wait for build-matched flush completion before close. Managed lifecycle already polls native completion cooperatively. Real WDSP regression verifies RX and active Legacy TX flushes; delayed-worker test retains join-before-free. Unsupported native builds retain the existing conservative flush fallback. |
+| One rear-PTT read error terminates RX runtime | Fixed in both Direct XDMA loops: invalidate the input and cancel its claimed press, retain receive operation and log counted failures. A valid released observation is required before a new press. Unrelated acquisition failures remain errors. |
+| Explicit WDSP 2.00/2.10 silently labeled 2.11 | Fixed: explicit older-version selectors fail before provisioning. Generic `wdsp2` and explicit `2.11` select the pinned build. Managed archive/header digest checks already reject unreviewed archives independently of the label. |
+| Repeated full preference normalization | Fixed: RX/monitor scalar clamps and PS-mode normalization are shared helpers; applying a few fields no longer constructs two complete normalized profiles. |
+
+The existing cancellation-boundary fixture also now uses its deterministic
+adapter key clock, matching the virtual milliseconds advanced by the owner.
+This corrects a test clock mismatch; production timing rules are unchanged.
+
+Validation: managed stub suite (85 library, 725 binary, 15 active integration
+tests); full web suite (1,072 tests); TypeScript, template seam, UI parity,
+migration, production asset build; Chrome Ham/SWL (20) and settings (47) checks.
+Nine focused real-WDSP cases run in fresh processes, including normal
+release/re-arm retention and actual RX/Legacy close. The 22-case production runtime
+replay passed using both backend fixtures. A first run hit an output-age
+watchdog while the separate NNR profiling test competed for CPU; its failure
+and completed cleanup are retained alongside the isolated successful rerun. These results do not establish physical RF
+shutdown timing, RF power calibration, overload coverage or RF IMD.

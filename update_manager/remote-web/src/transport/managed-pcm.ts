@@ -313,7 +313,7 @@ export class ManagedPcmSession {
     }
     this.publish();
   }
-  sendControl(text: string): void {
+  sendControl(text: string, { navigation = false }: { navigation?: boolean } = {}): void {
     if (!this.control) throw new Error('managed_disconnected');
     if (text.split(';').some(c => /^(?:trx:0,false|saturn_ps_measurement:0,stop)$/.test(c.trim()))) {
       this.settingsQueue = []; this.tuningEchoTargets.clear();
@@ -321,18 +321,29 @@ export class ManagedPcmSession {
     const tune = tuningKey(text);
     const attenuation = feedbackAttenuationKey(text);
     const autoAtt = autoAttenuationKey(text);
-    const key = tune ?? attenuation ?? autoAtt ?? powerKey(text);
+    // Replace adjacent UNSENT absolute navigation only. Explicit settings
+    // remain barriers; transmitted transactions still need their receipts.
+    const navigationCommands = text.split(';').map(c => c.trim()).filter(Boolean);
+    const navigationTune = navigationCommands.filter(c => tuningKey(c)).join(';');
+    const navigationPrefs = navigationCommands.filter(c => !tuningKey(c)).join(';');
+    navigation = navigation && !!navigationTune
+      && !navigationCommands.some(c => /^(?:trx|tx_source|tx_audio_source|saturn_|tx_two_tone)/.test(c));
+    const key = navigation ? 'navigation' : tune ?? attenuation ?? autoAtt ?? powerKey(text);
     if (this.selected && managedSettingsMessage(text)) {
       if (['fault', 'unsupported', 'unavailable'].includes(this.phase)
         && !((tune || (attenuation && this.faultedAttenuationSupported && this.manualAttenuationSupported)
           || (autoAtt && this.autoAttenuationSupported)) && this.faultedTuningReady())) return;
-      if (tune) {
-      for (const c of text.split(';').map(c => c.trim()).filter(Boolean)) {
-        this.tuningEchoTargets.set(c.slice(0, c.lastIndexOf(',')), c);
-      }
+      if (tune || navigation) {
+        for (const c of (navigation ? navigationTune : text).split(';').map(c => c.trim()).filter(Boolean)) {
+          this.tuningEchoTargets.set(c.slice(0, c.lastIndexOf(',')), c);
+        }
       }
       const tail = this.settingsQueue.at(-1);
-      if (key && tail?.key === key) tail.text = text;
+      if (key && tail?.key === key) {
+        const retainedPrefs = navigation && !navigationPrefs
+          ? tail.text.split(';').filter(c => c.trim() && !tuningKey(c.trim())).join(';') : '';
+        tail.text = retainedPrefs ? `${navigationTune};${retainedPrefs};` : text;
+      }
       else {
         if (this.settingsQueue.length >= 32) { this.fail('Local settings queue limit; unsent settings cancelled'); return; }
         this.settingsQueue.push({text, key});

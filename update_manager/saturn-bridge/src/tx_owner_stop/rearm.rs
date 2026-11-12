@@ -608,7 +608,14 @@ impl OwnerStopAdapter<'_> {
                 if prepared {
                     servo.applied(now)
                 }
-                if servo.ready_ns.is_some() {
+                if prepared
+                    && servo.ready_ns.is_some()
+                    && matches!(
+                        servo.phase,
+                        auto_attenuation::Phase::Stable | auto_attenuation::Phase::Limited
+                    )
+                    && servo.applied_db == Some(servo.db)
+                {
                     self.rearm.held_key = None;
                     return Ok(Some(receipt));
                 }

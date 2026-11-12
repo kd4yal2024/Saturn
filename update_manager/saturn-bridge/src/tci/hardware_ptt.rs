@@ -62,6 +62,14 @@ pub(crate) struct HardwarePttInput {
     blocked: bool,
 }
 impl HardwarePttInput {
+    fn read_failed(&mut self) {
+        // Unknown is not a release observation. Retire the current edge and
+        // require a real released input before accepting a subsequent press.
+        self.raw = None;
+        self.observed = None;
+        self.changed = None;
+        self.blocked = true;
+    }
     pub(crate) fn observe(&mut self, pressed: bool, now: Instant) {
         if self.raw.is_none() {
             self.blocked = pressed;
@@ -110,9 +118,22 @@ pub(crate) struct HardwarePttRouting {
     pub(crate) owner: u64,
     pub(crate) lease: Option<HardwarePttPermit>,
     pub(crate) last_poll: Option<Instant>,
+    read_failures: u64,
 }
 
 impl super::TciFrontend {
+    pub(crate) fn hardware_ptt_read_failed(&self, now: Instant, error: &dyn std::fmt::Display) {
+        let count = {
+            let mut p = self.hardware_ptt.lock().unwrap_or_else(|e| e.into_inner());
+            p.input.read_failed();
+            p.read_failures = p.read_failures.saturating_add(1);
+            p.read_failures
+        };
+        self.service_hardware_ptt(now);
+        if count.is_power_of_two() {
+            eprintln!("saturn-bridge: rear PTT read failed (count={count}): {error}; input inhibited until observed release, RX continues");
+        }
+    }
     pub(crate) fn hardware_ptt_poll_due(&self, now: Instant) -> bool {
         let mut p = self.hardware_ptt.lock().unwrap_or_else(|e| e.into_inner());
         if p.last_poll
@@ -214,6 +235,21 @@ impl super::TciFrontend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_read_releases_and_requires_observed_release_before_repress() {
+        let t = Instant::now();
+        let mut p = HardwarePttInput::default();
+        p.observe(false, t);
+        p.observe(true, t);
+        assert_eq!(p.tick(t + PRESS_DEBOUNCE), Some(true));
+        p.read_failed();
+        assert_eq!(p.tick(t + PRESS_DEBOUNCE), Some(false));
+        p.observe(true, t + PRESS_DEBOUNCE);
+        assert_eq!(p.tick(t + PRESS_DEBOUNCE * 2), None);
+        p.observe(false, t + PRESS_DEBOUNCE * 2);
+        p.observe(true, t + PRESS_DEBOUNCE * 3);
+        assert_eq!(p.tick(t + PRESS_DEBOUNCE * 4), Some(true));
+    }
     #[test]
     fn held_startup_needs_release_then_a_debounced_fresh_press() {
         let t = Instant::now();

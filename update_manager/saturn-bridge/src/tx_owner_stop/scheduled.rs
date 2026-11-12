@@ -36,6 +36,8 @@ use std::{
 #[derive(Default)]
 struct Trace {
     exchanges: u64,
+    guard_busy: bool,
+    guard_calls: u64,
     renders: u64,
     nonzero_renders: u64,
     fits: u64,
@@ -1580,6 +1582,176 @@ fn scheduled_retained_audio_expired_samples_still_fault_and_complete_cleanup() {
     }
 }
 
+#[test]
+fn scheduled_leveling_contention_retains_block_age_and_continuity_and_services_stop() {
+    use crate::tx_thread::feedback_owner::Link;
+    for case in ["recover", "release", "stale"] {
+        let d = DirectFixture::with_key_clock();
+        d.fifo_ready();
+        let (mut iq, mut mic) = queues();
+        let mut m = model();
+        m.desired.tx_drive = 5;
+        m.desired.pure_signal_auto_attenuate = true;
+        let mut owner = OwnerStopAdapter::direct(d.radio.clone(), &mut iq, &mut mic).unwrap();
+        owner.enable_offline_handoff(&m, 5).unwrap();
+        let link = Link::new();
+        owner.attach_feedback_owner(link.clone(), 20).unwrap();
+        owner
+            .enable_auto_attenuation(0.67, 0.95, 150_000_000)
+            .unwrap();
+        let trace = Rc::new(RefCell::new(Trace {
+            guard_busy: true,
+            ..Trace::default()
+        }));
+        let life = controller(
+            Fake {
+                trace: trace.clone(),
+            },
+            owner,
+            Backend::DirectXdma,
+        );
+        let (commands, rx) = mpsc::sync_channel(16);
+        let (audio, arx) = mpsc::sync_channel(16);
+        let (fb, frx) = mpsc::sync_channel(4);
+        let mut r = OwnerLoop::new(
+            life,
+            rx,
+            arx,
+            frx,
+            Instant::now(),
+            Timing {
+                mic_age_ns: 150_000_000,
+                source_stall_ns: 500_000_000,
+                tx_duration_ns: 2_000_000_000,
+            },
+        )
+        .unwrap();
+        let issuer = OperatorIngress::fixture();
+        let (ingress, _unused_receivers) = crate::tx_thread::ps_ingress::SharedIngress::channels(
+            OperatorIngress::fixture(),
+            r.cancel_handle(),
+            Arc::new(Mutex::new(m.clone())),
+        );
+        ingress.enable_auto_attenuation().unwrap();
+        r.attach_ingress(ingress);
+        let mut now = 0;
+        for _ in 0..20 {
+            now += 1_000_000;
+            r.turn(now);
+        }
+        commands
+            .try_send(TxCommand::PureSignalOwnerConfig(Box::new(
+                Configuration::at_ingress(r.snapshot(), m, cfg(11), TxAudioSource::Tci),
+            )))
+            .unwrap();
+        for _ in 0..20 {
+            now += 1_000_000;
+            r.turn(now);
+        }
+        send_arm(&mut r, &commands, &issuer);
+        for _ in 0..50 {
+            now += 1_000_000;
+            send_audio(&mut r, &audio, now);
+            r.turn(now);
+            let request = link.desired();
+            if link.may_apply(request) {
+                link.complete(request);
+            }
+            if r.life.offline_owner().startup_leveling_active() {
+                break;
+            }
+        }
+        assert!(r.life.offline_owner().startup_leveling_active(), "{case}");
+        let request = link.desired();
+        let scope = request.scope.unwrap();
+        // A new gain request must retire an old ready ticket even when the
+        // acquisition layout already appears prepared on this owner turn.
+        {
+            let owner = r.life.offline_owner();
+            let servo = owner.rearm.auto_att.as_mut().unwrap();
+            servo.phase = super::auto_attenuation::Phase::Stable;
+            servo.ready_ns = Some(now);
+            servo.requested(31, request.serial, now);
+        }
+        now += 1_000_000;
+        r.turn(now);
+        assert!(r.life.offline_owner().startup_leveling_active());
+        assert_eq!(r.life.status().phase, Phase::AwaitingKey);
+
+        let make = |first, at| {
+            let mut b = PairBlock::default();
+            b.pairs = 1024;
+            b.acquisition_revision = request.serial;
+            b.meta = BlockMeta {
+                fence: scope.fence,
+                interval: Interval {
+                    fence: scope.fence,
+                    first,
+                    end: first + 1024,
+                },
+                backend: Backend::DirectXdma,
+                route: 20,
+                observed_ns: at,
+                sequence: None,
+                sequence_packets: 0,
+                rate_hz: 192000,
+                overload: [None; 3],
+            };
+            for i in 0..1024 {
+                b.tx[2 * i] = 0.3;
+                b.rf[2 * i] = 0.18;
+            }
+            Box::new(b)
+        };
+        now += 1_000_000;
+        fb.try_send(make(0, now)).unwrap();
+        r.turn(now);
+        assert_eq!(trace.borrow().guard_calls, 1);
+        if case == "recover" {
+            trace.borrow_mut().guard_busy = false;
+            now += 1_000_000;
+            fb.try_send(make(1024, now)).unwrap();
+            r.turn(now);
+            now += 1_000_000;
+            r.turn(now);
+            assert_eq!(
+                r.life.status().primary_fault,
+                None,
+                "retained block cannot create a false SequenceGap"
+            );
+            assert_eq!(trace.borrow().guard_calls, 3);
+            r.cancel_handle().release();
+        } else if case == "release" {
+            r.cancel_handle().release();
+        } else {
+            now += 151_000_000;
+        }
+        for _ in 0..60 {
+            now += 1_000_000;
+            r.turn(now);
+            let request = link.desired();
+            if request.scope.is_none() && link.may_apply(request) {
+                link.complete(request);
+            }
+            if r.life.status().phase == Phase::ReadyOff {
+                break;
+            }
+        }
+        assert_eq!(r.life.status().phase, Phase::ReadyOff, "{case}");
+        assert!(r.life.status().cleanup_completed_ns.is_some());
+        assert_eq!(
+            r.life.status().primary_fault,
+            if case == "stale" {
+                Some(Fault::Stale)
+            } else {
+                None
+            },
+            "{case}"
+        );
+        d.assert_off();
+    }
+}
+
 // A control/media stall can deliver valid PCM in bursts while acquisition
 // preparation is pending. The bounded ingress FIFO must not be drained into
 // an already-full, smaller local staging buffer before rendering can resume.
@@ -1781,6 +1953,12 @@ impl CooperativeNative for Fake {
     }
 }
 impl ScheduledNative for Fake {
+    fn startup_leveling_guard(&mut self) -> Result<bool, Fault> {
+        let mut t = self.trace.borrow_mut();
+        t.guard_calls += 1;
+        Ok(!t.guard_busy)
+    }
+
     fn measurement_mic_gain(&mut self, _: bool) -> Result<(), Fault> {
         Ok(())
     }
@@ -1942,7 +2120,9 @@ fn unexplained_output_revocation_remains_latched_after_later_release() {
     cancellation_boundary_case("raw-close");
 }
 fn cancellation_boundary_case(case: &str) {
-    let d = DirectFixture::new();
+    // This test advances virtual milliseconds without sleeping. Use the same
+    // clock for the actual adapter's multi-step key preparation.
+    let d = DirectFixture::with_key_clock();
     d.fifo_ready();
     let (mut iq, mut mic) = queues();
     let mut m = model();

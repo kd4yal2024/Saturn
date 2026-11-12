@@ -531,7 +531,10 @@ fn run_inner(mut config: BridgeConfig, ready_path: &Path) -> Result<(), Box<dyn 
         while !STOP_REQUESTED.load(Ordering::Relaxed) {
             let now = Instant::now();
             if tci.hardware_ptt_poll_due(now) {
-                tci.observe_hardware_ptt(rx.read_ptt_input()?, now);
+                match rx.read_ptt_input() {
+                    Ok(pressed) => tci.observe_hardware_ptt(pressed, now),
+                    Err(error) => tci.hardware_ptt_read_failed(now, &error),
+                }
             }
             tci.service_hardware_ptt(now);
             let mut did_work = false;

@@ -1104,6 +1104,18 @@ fn control_coalesce_key(message: &OutboundMessage) -> Option<String> {
 
 fn tci_text_coalesce_key(text: &str) -> Option<String> {
     let text = text.trim();
+    // These host snapshots include generation/configuration/serial in their
+    // values. Coalesce the whole snapshot, including its bundled mode report.
+    // Transaction receipts and media authority edges use their own FIFO.
+    for name in [
+        "saturn_tx_owner",
+        "saturn_ps_auto_att",
+        "saturn_tx_audio_drops",
+    ] {
+        if text.starts_with(&format!("{name}:")) {
+            return Some(name.to_string());
+        }
+    }
     if text.matches(';').count() > 1 {
         return None;
     }
@@ -1618,6 +1630,30 @@ pub(crate) fn send_outbound<S: io::Read + io::Write>(
 mod control_key_tests {
     use super::*;
 
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    #[test]
+    fn telemetry_flood_uses_latest_slots_without_consuming_receipt_capacity() {
+        let out = ClientOutbound::new();
+        for n in 0..1000 {
+            out.enqueue(OutboundMessage::Text(format!(
+                "saturn_tx_owner:shared,{n},Active,1,2,tci,false,none;saturn_ps_mode:0,2,auto;"
+            )));
+            out.enqueue(OutboundMessage::Text(format!(
+                "saturn_ps_auto_att:0,1,2,7200000,true,stable,12,12,{n},3,true;"
+            )));
+        }
+        let q = out.queues.lock_unpoisoned();
+        assert_eq!(q.control.len(), 2);
+        assert!(q.transactions.is_empty());
+        assert!(
+            matches!(&q.control[0].message, OutboundMessage::Text(t) if t.contains("shared,999,"))
+        );
+        drop(q);
+        for _ in 0..64 {
+            assert!(out.enqueue_transaction_reply("tx_config:0,1,applied,2;".into()));
+        }
+        assert!(!out.enqueue_transaction_reply("tx_config:0,2,applied,3;".into()));
+    }
     #[test]
     fn cached_control_scan_matches_original_scan_and_queue_order() {
         let outbound = ClientOutbound::new();

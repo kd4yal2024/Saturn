@@ -8,7 +8,7 @@ import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
  */
 
 import {
-  normalizeRadioPrefs,
+  clampRxAttenuationDb, clampRxFilterShiftHz, clampRxSsqlThreshold, clampTxMonitorLevelDb, normalizePureSignalMode,
   clampSampleRateHz,
   clampRxAdc,
   clampRxAntenna,
@@ -207,24 +207,14 @@ export function applyRadioPrefsToState(
 ): void {
   if (!prefs || typeof prefs !== 'object') return;
 
-  const additional = normalizeRadioPrefs({
-    rxAttenuationDb: Number(prefs.rxAttenuationDb ?? state.rxAttenuationDb ?? 0),
-    rxFilterShiftHz: Number(prefs.rxFilterShiftHz ?? 0),
-    rxSsqlEnabled: Boolean(prefs.rxSsqlEnabled ?? state.rxSsqlEnabled),
-    rxSsqlThreshold: Number(prefs.rxSsqlThreshold ?? state.rxSsqlThreshold ?? 0),
-    rxHeadphonesEnabled: Boolean(prefs.rxHeadphonesEnabled ?? state.preferredRxHeadphones ?? state.rxHeadphonesEnabled),
-    txMonitorEnabled: Boolean(prefs.txMonitorEnabled ?? state.preferredTxMonitor ?? state.txMonitorEnabled),
-    txMonitorLevelDb: Number(prefs.txMonitorLevelDb ?? state.txMonitorLevelDb ?? -30),
-  });
-  state.rxAttenuationDb = additional.rxAttenuationDb;
-  state.rxSsqlEnabled = additional.rxSsqlEnabled;
-  state.rxSsqlThreshold = additional.rxSsqlThreshold;
-  // Preferences are distinct from host acknowledgements/capability. Reconnect
-  // clears actual output state without erasing the operator's saved choice.
-  state.preferredRxHeadphones = additional.rxHeadphonesEnabled;
-  state.preferredTxMonitor = additional.txMonitorEnabled;
-  state.txMonitorLevelDb = additional.txMonitorLevelDb;
-  state.preferredTxMonitorLevelDb = additional.txMonitorLevelDb;
+  state.rxAttenuationDb = clampRxAttenuationDb(Number(prefs.rxAttenuationDb ?? state.rxAttenuationDb ?? 0));
+  state.rxSsqlEnabled = Boolean(prefs.rxSsqlEnabled ?? state.rxSsqlEnabled);
+  state.rxSsqlThreshold = clampRxSsqlThreshold(Number(prefs.rxSsqlThreshold ?? state.rxSsqlThreshold ?? 0));
+  // Saved device preferences remain distinct from actual host output state.
+  state.preferredRxHeadphones = Boolean(prefs.rxHeadphonesEnabled ?? state.preferredRxHeadphones ?? state.rxHeadphonesEnabled);
+  state.preferredTxMonitor = Boolean(prefs.txMonitorEnabled ?? state.preferredTxMonitor ?? state.txMonitorEnabled);
+  state.txMonitorLevelDb = clampTxMonitorLevelDb(Number(prefs.txMonitorLevelDb ?? state.txMonitorLevelDb ?? -30));
+  state.preferredTxMonitorLevelDb = state.txMonitorLevelDb;
   state.sampleRate = clampSampleRateHz(prefs.sampleRate ?? state.sampleRate);
   state.rxAdc = clampRxAdc(prefs.rxAdc ?? state.rxAdc);
   state.rxAntenna = clampRxAntenna(prefs.rxAntenna ?? state.rxAntenna);
@@ -251,7 +241,7 @@ export function applyRadioPrefsToState(
   state.agcGain = clampAgcGain(prefs.agcGain ?? state.agcGain);
   state.filterLow = clampFilterLowHz(scalarPref(prefs.filterLow, state.filterLow));
   state.filterHigh = clampFilterHighHz(scalarPref(prefs.filterHigh, state.filterHigh));
-  state.rxFilterShiftHz = additional.rxFilterShiftHz;
+  state.rxFilterShiftHz = clampRxFilterShiftHz(Number(prefs.rxFilterShiftHz ?? 0));
   state.txDrive = clampTxDriveWatts(prefs.txDrive ?? state.txDrive);
   if (Object.prototype.hasOwnProperty.call(prefs, "txPaCalibration")) state.txPaCalibration = normalizePaCalibration(prefs.txPaCalibration);
   state.txMicGainDb = clampTxMicGainDb(prefs.txMicGainDb ?? state.txMicGainDb);
@@ -269,13 +259,9 @@ export function applyRadioPrefsToState(
   state.txPhaseRotatorCornerHz = clampTxPhaseRotatorCornerHz(
     prefs.txPhaseRotatorCornerHz ?? state.txPhaseRotatorCornerHz,
   );
-  const ps = normalizeRadioPrefs({
-    pureSignalEnabled: Boolean(prefs.pureSignalEnabled ?? state.pureSignalEnabled),
-    ...(prefs.pureSignalMode === 'auto' || prefs.pureSignalMode === 'single' || prefs.pureSignalMode === 'off'
-      ? { pureSignalMode: prefs.pureSignalMode } : {}),
-  });
-  state.pureSignalEnabled = ps.pureSignalEnabled;
-  state.preferredPureSignalMode = ps.pureSignalMode;
+  const psMode = normalizePureSignalMode(prefs.pureSignalMode, prefs.pureSignalEnabled ?? state.pureSignalEnabled);
+  state.pureSignalEnabled = psMode !== 'off';
+  state.preferredPureSignalMode = psMode;
   state.pureSignalAutoAttenuate = Boolean(
     prefs.pureSignalAutoAttenuate ?? state.pureSignalAutoAttenuate,
   );

@@ -454,15 +454,44 @@ fn feed_slew_flush_blocks(
             );
         }
         if error == 0 && output_buffer.first().map(|s| s.is_nan()).unwrap_or(true) {
-            // Exchange cleared: the flush is signaled. Give the flushChannel
-            // thread a moment to finish flush_iobuffs before a subsequent
-            // state-1 transition could race its exec_bypass write (the window
-            // is microseconds; real re-arm latency is human-scale).
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            return true;
+            // Exchange cleared only signals the flush. Observe its actual
+            // completion in matched builds; older builds retain their delay
+            // fallback before a subsequent state-1 transition.
+            #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+            {
+                unsafe extern "C" {
+                    fn saturn_channel_flush_complete(channel: i32) -> i32;
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+                loop {
+                    if unsafe { saturn_channel_flush_complete(channel_id) } == 1 {
+                        return true;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+            #[cfg(not(all(feature = "managed-puresignal", not(saturn_bridge_stub_native))))]
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                return true;
+            }
         }
     }
     false
+}
+
+/// The feeding owner must advance the OFF slew before asking WDSP to wait.
+/// Otherwise dmode=1 waits for exchanges that this same thread cannot perform.
+fn prepare_channel_close(channel: i32, input_len: usize, output: &mut [f64]) {
+    unsafe {
+        SetChannelState(channel, 0, 0);
+    }
+    if !feed_slew_flush_blocks(channel, input_len, output, 512) {
+        eprintln!("saturn-bridge: channel {channel} close flush did not complete; retaining native bounded shutdown fallback");
+    }
 }
 
 /// Complex samples per `xrmatchIN` call: browser frames of any length are
@@ -1476,6 +1505,11 @@ impl WdspRxEngine {
 impl Drop for WdspRxEngine {
     fn drop(&mut self) {
         if self.input_sample_rate_hz != 0 {
+            prepare_channel_close(
+                self.channel_id,
+                self.input_buffer.len(),
+                &mut self.output_buffer,
+            );
             unsafe {
                 if self.nb_initialized {
                     destroy_anbEXT(self.channel_id);
@@ -1854,6 +1888,11 @@ impl WdspTxEngine {
             self.dexp_initialized = false;
         }
         if self.channel_open {
+            prepare_channel_close(
+                self.channel_id,
+                self.input_buffer.len(),
+                &mut self.output_buffer,
+            );
             unsafe {
                 SetPSMox(self.channel_id, 0);
                 SetChannelState(self.channel_id, 0, 1);
@@ -2509,6 +2548,11 @@ impl Drop for WdspTxEngine {
             self.dexp_initialized = false;
         }
         if self.channel_open {
+            prepare_channel_close(
+                self.channel_id,
+                self.input_buffer.len(),
+                &mut self.output_buffer,
+            );
             unsafe {
                 SetChannelState(self.channel_id, 0, 1);
                 CloseChannel(self.channel_id);
@@ -2692,6 +2736,30 @@ mod tests {
     };
     use crate::radio_model::{DemodMode, PureSignalState, RadioModel};
 
+    #[cfg(all(feature = "managed-puresignal", not(saturn_bridge_stub_native)))]
+    #[test]
+    #[ignore = "serial real-WDSP close test; no devices or RF"]
+    fn rx_and_legacy_tx_close_advance_and_observe_completed_native_flush() {
+        unsafe extern "C" {
+            fn fftw_set_timelimit(seconds: f64);
+            fn saturn_channel_flush_complete(channel: i32) -> i32;
+        }
+        unsafe {
+            fftw_set_timelimit(0.01);
+        }
+        let model = RadioModel::new(2, 7_200_000, 0, 384, 24, 2048, true, 4096, true);
+        let mut rx = WdspRxEngine::new(&model).unwrap();
+        super::prepare_channel_close(rx.channel_id, rx.input_buffer.len(), &mut rx.output_buffer);
+        assert_eq!(unsafe { saturn_channel_flush_complete(rx.channel_id) }, 1);
+        drop(rx);
+        let mut tx = WdspTxEngine::new(&model);
+        unsafe {
+            super::SetChannelState(tx.channel_id, 1, 0);
+        }
+        super::prepare_channel_close(tx.channel_id, tx.input_buffer.len(), &mut tx.output_buffer);
+        assert_eq!(unsafe { saturn_channel_flush_complete(tx.channel_id) }, 1);
+        drop(tx);
+    }
     #[test]
     fn noise_reduction_capabilities_match_the_effective_native_algorithm() {
         use crate::radio_model::NoiseReductionMode::*;

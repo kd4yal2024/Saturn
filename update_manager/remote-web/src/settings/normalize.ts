@@ -285,19 +285,25 @@ export function normalizeWsUrlPreference(raw: unknown, env: WsUrlEnvironment): s
   }
 }
 
+export function clampRxAttenuationDb(value: unknown): number { return Math.max(0, Math.min(31, Math.round(safeFiniteNumber(value, 0)))); }
+export function clampRxFilterShiftHz(value: unknown): number { return Math.max(-12000, Math.min(12000, Math.round(safeFiniteNumber(value, 0)))); }
+export function clampRxSsqlThreshold(value: unknown): number { return Math.max(0, Math.min(100, safeFiniteNumber(value, 0))); }
+export function clampTxMonitorLevelDb(value: unknown): number { return Math.max(-60, Math.min(-6, safeFiniteNumber(value, -30))); }
+export function normalizePureSignalMode(mode: unknown, enabled: unknown): 'off' | 'single' | 'auto' {
+  return mode === 'auto' ? 'auto' : mode === 'single' ? 'single' : mode === 'off' ? 'off' : enabled ? 'single' : 'off';
+}
+
 export function normalizeRadioPrefs(input: DeepPartial<RadioPrefs> | null | undefined): RadioPrefs {
   const source = input || {};
-  const pureSignalMode = source.pureSignalMode === 'auto' ? 'auto'
-    : source.pureSignalMode === 'single' ? 'single' : source.pureSignalMode === 'off' ? 'off'
-    : source.pureSignalEnabled ? 'single' : 'off';
+  const pureSignalMode = normalizePureSignalMode(source.pureSignalMode, source.pureSignalEnabled);
   return {
-    rxAttenuationDb: Math.max(0, Math.min(31, Math.round(safeFiniteNumber(source.rxAttenuationDb, 0)))),
-    rxFilterShiftHz: Math.max(-12000, Math.min(12000, Math.round(safeFiniteNumber(source.rxFilterShiftHz, 0)))),
+    rxAttenuationDb: clampRxAttenuationDb(source.rxAttenuationDb),
+    rxFilterShiftHz: clampRxFilterShiftHz(source.rxFilterShiftHz),
     rxSsqlEnabled: Boolean(source.rxSsqlEnabled),
-    rxSsqlThreshold: Math.max(0, Math.min(100, safeFiniteNumber(source.rxSsqlThreshold, 0))),
+    rxSsqlThreshold: clampRxSsqlThreshold(source.rxSsqlThreshold),
     rxHeadphonesEnabled: Boolean(source.rxHeadphonesEnabled),
     txMonitorEnabled: Boolean(source.txMonitorEnabled),
-    txMonitorLevelDb: Math.max(-60, Math.min(-6, safeFiniteNumber(source.txMonitorLevelDb, -30))),
+    txMonitorLevelDb: clampTxMonitorLevelDb(source.txMonitorLevelDb),
     sampleRate: clampSampleRateHz(source.sampleRate),
     rxAdc: clampRxAdc(source.rxAdc),
     rxAntenna: clampRxAntenna(source.rxAntenna),

@@ -104,6 +104,9 @@ impl Servo {
         self.db = db;
         self.revision = revision;
         self.phase = Phase::Applying;
+        self.ready_ns = None;
+        self.applied_db = None;
+        self.info = None;
         self.applied = now;
         self.next_pair = None;
         self.next_sequence = None;
@@ -196,6 +199,13 @@ impl Servo {
         if tx.iter().any(|x| x.abs() >= self.rail) {
             return Err(Fault::SevereOverdrive);
         }
+        // A revision identifies the requested layout, not the analogue gain
+        // at capture time. Wait for acquisition completion AND settling before
+        // interpreting RF level. Known overload/nonfinite/reference faults above
+        // remain authoritative throughout the transition.
+        if self.phase == Phase::Applying || b.meta.observed_ns < self.boundary {
+            return Ok(None);
+        }
         if rf.iter().any(|x| x.abs() >= self.rail) {
             if self.db == 31 {
                 return Err(Fault::SevereOverdrive);
@@ -208,7 +218,7 @@ impl Servo {
             }
             return Ok(Some(self.db.saturating_add(6).min(31)));
         }
-        if self.phase == Phase::Applying || b.meta.observed_ns < self.boundary {
+        if matches!(self.phase, Phase::Stable | Phase::Limited) {
             return Ok(None);
         }
         self.phase = Phase::Waiting;
@@ -331,6 +341,41 @@ mod tests {
         assert!((140..=165).contains(&s.info.unwrap()));
     }
     #[test]
+    fn gain_transition_cannot_reinterpret_old_rail_samples_or_reuse_readiness() {
+        let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();
+        s.keyed(0);
+        s.phase = Phase::Stable;
+        s.ready_ns = Some(10);
+        s.requested(31, 2, 20);
+        assert_eq!(s.ready_ns, None);
+        assert_eq!(s.applied_db, None);
+        assert_eq!(s.observe(&block(2, 0, 21, 4.), 21), Ok(None));
+        s.applied(22);
+        assert_eq!(s.observe(&block(2, 1024, 23, 4.), 23), Ok(None));
+        assert_eq!(
+            s.observe(
+                &block(2, 2048, 22 + STEP_SETTLE_NS, 4.),
+                22 + STEP_SETTLE_NS
+            ),
+            Err(Fault::SevereOverdrive)
+        );
+    }
+    #[test]
+    fn completed_leveling_keeps_its_status_until_an_explicit_gain_change() {
+        for phase in [Phase::Stable, Phase::Limited] {
+            let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();
+            s.keyed(0);
+            s.phase = phase;
+            s.ready_ns = Some(INITIAL_SETTLE_NS);
+            assert_eq!(
+                s.observe(&block(1, 0, INITIAL_SETTLE_NS, 0.6), INITIAL_SETTLE_NS),
+                Ok(None)
+            );
+            assert_eq!(s.phase, phase);
+            assert_eq!(s.ready_ns, Some(INITIAL_SETTLE_NS));
+        }
+    }
+    #[test]
     fn silence_and_two_tone_minima_do_not_run_attenuation_down() {
         let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();
         s.keyed(0);
@@ -375,7 +420,7 @@ mod tests {
         let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();
         s.keyed(0);
         assert_eq!(
-            s.observe(&block(1, 0, 1, 4.), 1),
+            s.observe(&block(1, 0, INITIAL_SETTLE_NS, 4.), INITIAL_SETTLE_NS),
             Err(Fault::SevereOverdrive)
         );
         let mut s = Servo::new(1, 0.67, 0.95, 150_000_000).unwrap();

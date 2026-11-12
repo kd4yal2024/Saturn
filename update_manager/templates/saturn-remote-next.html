@@ -13492,7 +13492,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateFrequencyEntryPreview(`${formatFrequency(hz)} ${state.mode} is outside the configured band plan. Press ${frequencyEntryUnitLabel(unit)} again to commit.`);
         return;
       }
-      setFrequency(hz);
+      setFrequency(hz, false, { absolute: true });
       logEvent(`VFO set by keypad: ${formatFrequency(hz)}`);
       closeFrequencyEntry();
     }
@@ -14132,7 +14132,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function currentBandMemoryEntry() {
       return {
         frequency: activeVfoFrequency() || state.dds,
-        radioPrefs: (() => { const prefs = currentRadioPrefs(); delete prefs.txPaCalibration; return prefs; })(),
+        radioPrefs: (() => { const prefs = currentRadioPrefs(); delete prefs.txPaCalibration; delete prefs.rxHeadphonesEnabled; delete prefs.txMonitorEnabled; delete prefs.txMonitorLevelDb; return prefs; })(),
         displayPrefs: currentDisplayPrefs(),
         displayZoom: Math.max(1, Math.min(32, Number(state.displayZoom) || 1)),
       };
@@ -14155,7 +14155,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!memory || typeof memory !== "object") return false;
       state.applyingBandMemory = true;
       try {
-        applyRadioPrefsObject({ ...memory.radioPrefs, txPaCalibration: state.txPaCalibration });
+        const bandPrefs = { ...memory.radioPrefs };
+        delete bandPrefs.rxHeadphonesEnabled; delete bandPrefs.txMonitorEnabled; delete bandPrefs.txMonitorLevelDb;
+        applyRadioPrefsObject({ ...bandPrefs, txPaCalibration: state.txPaCalibration });
         applyDisplayPrefsObject(memory.displayPrefs);
         if (Number.isFinite(Number(memory.displayZoom))) {
           state.displayZoom = Math.max(1, Math.min(32, Number(memory.displayZoom)));
@@ -16049,8 +16051,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const activeIndex = state.activeVfo === "B" ? 1 : 0;
       const shouldRememberBand = options.rememberBand !== false;
       const shouldSend = options.send !== false;
-      const crossedBand = shouldRememberBand && bandKeyForFrequency(activeFrequency) !== bandKeyForFrequency(nextHz);
-      if (crossedBand) rememberCurrentBandSettings();
+      const currentKey = bandKeyForFrequency(activeFrequency);
+      const keepSwl = !options.absolute && state.bandMemoryGroup === "swl"
+        && currentKey.startsWith("SWL ") && currentKey === _bandKeyForFrequency(nextHz, "swl");
+      const destinationGroup = keepSwl ? "swl" : "ham";
+      const destinationKey = _bandKeyForFrequency(nextHz, destinationGroup);
+      const crossedBand = shouldRememberBand && bandKeyForFrequency(activeFrequency) !== destinationKey;
+      if (crossedBand || options.absolute) rememberCurrentBandSettings();
+      if (shouldRememberBand) state.bandMemoryGroup = destinationGroup;
       const recalledBand = crossedBand && applyBandMemoryForFrequency(nextHz);
       shiftDisplayForCenterChange(nextHz);
       if (activeIndex === 0) state.vfoA = nextHz;
@@ -16066,9 +16074,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       }
       if (shouldSend) {
-        sendTci(`vfo:0,${activeIndex},${nextHz};dds:0,${nextHz};${syncBoth ? `vfo:0,${activeIndex === 0 ? 1 : 0},${nextHz};` : ""}`);
+        const tuneCommand = `vfo:0,${activeIndex},${nextHz};dds:0,${nextHz};${syncBoth ? `vfo:0,${activeIndex === 0 ? 1 : 0},${nextHz};` : ""}`;
+        if (recalledBand) sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true, tuneCommand });
+        else sendTci(tuneCommand, { navigation: true });
       }
-      if (shouldSend && recalledBand) sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
       if (shouldSend && shouldRememberBand) scheduleRemoteSettingsSave();
     }
 
@@ -18540,7 +18549,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function managedPcmSelected() { return managedPcm.status().selected; }
     window.setInterval(() => managedPcm.tick(), 100);
 
-    function sendTci(text) {
+    function sendTci(text, options = {}) {
       if (!state.connected || !state.ws || state.ws.readyState !== WebSocket.OPEN) {
         return;
       }
@@ -18549,7 +18558,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       // Reconnect retains the user's selection but disconnect clears its
       // command channel. Only this connection's ready snapshot can select
       // managed routing; pending discovery permits RX queries/release only.
-      if (txPathNegotiator.path === "managed") managedPcm.sendControl(text);
+      if (txPathNegotiator.path === "managed") managedPcm.sendControl(text, options);
       else state.ws.send(text);
     }
 
@@ -18887,16 +18896,17 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       sendTci(_next.buildTwoToneCommands(state).join(""));
     }
 
-    function restoreLocalAudioPreferences(prefs = currentRadioPrefs()) {
+    function restoreLocalAudioPreferences(prefs = currentRadioPrefs(), { reconnect = false } = {}) {
       if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator") return;
       if (state.rxHeadphonesSupported) sendTci(`rx_headphones:0,${Boolean(prefs.rxHeadphonesEnabled)};`);
+      if (reconnect) state.preferredTxMonitor = false;
       if (state.txMonitorSupported) {
         sendTci(`tx_monitor_level:0,${prefs.txMonitorLevelDb};`);
-        sendTci(`tx_monitor:0,${Boolean(prefs.txMonitorEnabled)};`);
+        sendTci(`tx_monitor:0,${!reconnect && Boolean(prefs.txMonitorEnabled)};`);
       }
     }
 
-    function sendCurrentRadioPrefsToBridge(prefs = currentRadioPrefs(), { restoreTx = false } = {}) {
+    function sendCurrentRadioPrefsToBridge(prefs = currentRadioPrefs(), { restoreTx = false, tuneCommand = "" } = {}) {
       if (!state.connected || !state.bridgeReady) {
         return;
       }
@@ -18906,8 +18916,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       const managed = managedPcmSelected();
       const capabilities = managed ? managedPcm.status() : null;
-      const pa = state.txPaCalibrationSupported ? [_next.paCalibrationCommand(state.txPaCalibration ?? null)] : [];
-      const commands = [...pa, ..._next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false })].filter(command => {
+      // Host PA calibration changes only through explicit Apply/Reset actions.
+      const commands = _next.buildAllRadioPrefsCommands({ ...prefs, twoToneEnabled: false }).filter(command => {
+        if (command.startsWith("tx_pa_calibration:")) return false;
         if (!managed) return true;
         // Native two-tone is an authorized action. Auto ATT is a negotiated,
         // ordered setting, saved/restored per band without keying the radio.
@@ -18920,8 +18931,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           ? "tx_puresignal_mode:0,auto;" : command);
       // Managed TX reads committed host settings; reconnect must not replay
       // stale TX preferences or an unreviewed generated-source configuration.
-      sendTci((managedPcmSelected() && !restoreTx ? commands.filter(c => !_next.managedSettingsMessage(c) || c.startsWith("tx_pa_calibration:")) : commands).join(""));
-      restoreLocalAudioPreferences(prefs);
+      sendTci(tuneCommand + (managedPcmSelected() && !restoreTx ? commands.filter(c => !_next.managedSettingsMessage(c)) : commands).join(""), { navigation: Boolean(tuneCommand) });
+      restoreLocalAudioPreferences(prefs, { reconnect: !restoreTx });
     }
 
     function rxAudioStartCommand() {

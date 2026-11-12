@@ -334,6 +334,7 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     commands: Receiver<TxCommand>,
     audio: Receiver<Audio>,
     feedback: Receiver<Box<PairBlock>>,
+    deferred_feedback: Option<Box<PairBlock>>,
     origin: Instant,
     timing: Timing,
     selected: TxAudioSource,
@@ -410,6 +411,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             commands: commands.into(),
             audio: audio.into(),
             feedback: feedback.into(),
+            deferred_feedback: None,
             origin,
             timing,
             selected: TxAudioSource::Tci,
@@ -615,6 +617,11 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         audio_permit_matches(stamp, current, self.life.status().phase)
     }
     fn discard_local(&mut self) {
+        if let Some(block) = self.deferred_feedback.take() {
+            if let Some(ingress) = &self.ingress {
+                ingress.recycle_feedback_buffer(block);
+            }
+        }
         self.last_output_at = None;
         self.satp_started = false;
         self.mic.clear();
@@ -1504,7 +1511,11 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             }
         }
         if !self.feedback_closed {
-            match self.feedback.try_recv() {
+            match self
+                .deferred_feedback
+                .take()
+                .map_or_else(|| self.feedback.try_recv(), Ok)
+            {
                 Ok(block) => {
                     // Producer observation is before enqueue, but may be
                     // after this turn's initial tick. Read the consumer clock
@@ -1531,23 +1542,25 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
                             i.leveling_verified.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    match disabled.and_then(|verified| {
-                        if verified {
-                            self.life.offline_owner().level_feedback(&block, now)
-                        } else {
-                            Ok(true)
-                        }
-                    }) {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            if self.life.submit(&block, now).is_err() {
-                                self.counters.rejected += 1;
+                    if matches!(disabled, Ok(false)) {
+                        // Keep exactly one original block across native try-lock
+                        // contention. It cannot be skipped, retimed or overtaken.
+                        self.deferred_feedback = Some(block);
+                    } else {
+                        match disabled
+                            .and_then(|_| self.life.offline_owner().level_feedback(&block, now))
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                if self.life.submit(&block, now).is_err() {
+                                    self.counters.rejected += 1;
+                                }
                             }
+                            Err(fault) => self.output_error(fault, now),
                         }
-                        Err(fault) => self.output_error(fault, now),
-                    }
-                    if let Some(ingress) = &self.ingress {
-                        ingress.recycle_feedback_buffer(block);
+                        if let Some(ingress) = &self.ingress {
+                            ingress.recycle_feedback_buffer(block);
+                        }
                     }
                 }
                 Err(TryRecvError::Disconnected) => {

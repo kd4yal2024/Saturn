@@ -63,15 +63,18 @@ static void cycle(int channel, int wait_for_entry) {
     assert(frees==before);
     /* The sole owner advances zero input until WDSP's flush completes. */
     assert(!ch[channel].state && ch[channel].flushflag);
+    assert(!saturn_channel_flush_complete(channel));
     ch[channel].flushflag=0;
     pthread_mutex_lock(&gate); may_exit=1; pthread_cond_broadcast(&changed); pthread_mutex_unlock(&gate);
     int joined=0;
     for(int i=0;i<10000 && !joined;i++) { int s=saturn_channel_shutdown_poll(channel); assert(s>=0); joined=s; if(!joined) usleep(100); }
-    assert(joined==1 && finished); __wrap_CloseChannel(channel); assert(frees==before+1);
+    assert(joined==1 && finished); assert(saturn_channel_flush_complete(channel)); __wrap_CloseChannel(channel); assert(frees==before+1);
     assert(!pthread_mutex_destroy(&ch[channel].csDSP));
     assert(!sem_destroy(&sem));
 }
 int main(void) {
+    assert(!saturn_channel_flush_complete(-1));
+    assert(!saturn_channel_flush_complete(1));
     assert(saturn_channel_shutdown_poll(-1)==-1);
     assert(saturn_channel_shutdown_poll(1)==-1);
     assert(__wrap__beginthread(unrelated,0,NULL)==(HANDLE)42 && delegated==1);

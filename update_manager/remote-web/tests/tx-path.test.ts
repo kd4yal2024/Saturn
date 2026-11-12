@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 describe('host-driven default TX path', () => {
   it('actual page sends receive discovery after managed disconnect without old authority or an exception', () => {
     const html=readFileSync(new URL('../../templates/saturn-remote-next.html',import.meta.url),'utf8');
-    const body=html.slice(html.indexOf('    function sendTci(text) {'),html.indexOf('    function sendBridgeRttPing()'));
+    const body=html.slice(html.indexOf('    function sendTci(text, options = {}) {'),html.indexOf('    function sendBridgeRttPing()'));
     const session=new ManagedPcmSession({now:()=>0,changed:()=>{},capture:async()=>{throw new Error('no capture');}});
     session.select(true);session.disconnect();
     const sent: string[]=[];
