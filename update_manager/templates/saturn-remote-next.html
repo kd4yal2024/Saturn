@@ -9987,6 +9987,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         this.ctx = null;
         this.program = null;
         this.vertexBuffer = null;
+        this.traceScratch = null;
+        this.vertexScratch = null;
         this.fillVertices = null;
         this.positionLocation = -1;
         this.colorLocation = null;
@@ -10109,7 +10111,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         this.resize();
-        const renderedBins = _next.smoothSpectrumTrace(bins, state.spectrumTraceSmoothing);
+        if (this.traceScratch?.length !== bins.length) this.traceScratch = new Float32Array(bins.length);
+        const renderedBins = _next.smoothSpectrumTrace(bins, state.spectrumTraceSmoothing, this.traceScratch);
         const traceColor = _next.normalizeSpectrumTraceColor(state.spectrumTraceColor);
         const colorValue = Number.parseInt(traceColor.slice(1), 16);
         const red = ((colorValue >> 16) & 0xff) / 255;
@@ -10125,7 +10128,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           return;
         }
         const gl = this.gl;
-        const vertices = new Float32Array(renderedBins.length * 2);
+        if (this.vertexScratch?.length !== renderedBins.length * 2) this.vertexScratch = new Float32Array(renderedBins.length * 2);
+        const vertices = this.vertexScratch;
         for (let i = 0; i < renderedBins.length; i += 1) {
           const x = (i / (renderedBins.length - 1)) * 2 - 1;
           const normalized = (renderedBins[i] - floorDb) / Math.max(1, ceilingDb - floorDb);
@@ -10525,8 +10529,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (!this.supported || !bins || bins.length === 0) {
           return;
         }
-        const renderedBins = _next.smoothWaterfallBins(bins, this.smoothedBins, smoothing);
-        this.smoothedBins = new Float32Array(renderedBins);
+        if (this.smoothingScratch?.length !== bins.length) this.smoothingScratch = new Float32Array(bins.length);
+        const renderedBins = _next.smoothWaterfallBins(bins, this.smoothedBins, smoothing, this.smoothingScratch);
+        // History owns its storage; it must not alias renderer or worker input.
+        if (this.smoothedBins?.length !== renderedBins.length) this.smoothedBins = new Float32Array(renderedBins.length);
+        this.smoothedBins.set(renderedBins);
         if (this.ctx) {
           this.pendingBins = renderedBins;
           this.pendingFloorDb = floorDb;
@@ -15995,8 +16002,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return state.displayZoom;
     }
 
+    let visibleDisplayScratch = null;
     function visibleBinsForDisplay(bins) {
-      return _visibleBinsForDisplay(bins, effectiveDisplayZoom());
+      const zoom = effectiveDisplayZoom();
+      const length = bins?.length ? Math.max(2, Math.floor(bins.length / Math.max(1, zoom))) : 0;
+      if (length && visibleDisplayScratch?.length !== Math.min(length, bins.length)) visibleDisplayScratch = new Float32Array(Math.min(length, bins.length));
+      // Synchronous display-only borrow. History and averaging copy before
+      // the next draw; raw RX Measure uses _visibleBinsForDisplay directly.
+      return _visibleBinsForDisplay(bins, zoom, visibleDisplayScratch);
     }
 
     function shiftBinsHorizontally(bins, shiftBins) {
@@ -21447,6 +21460,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
     }
 
+    const startedSabWorklets = new WeakSet();
     function writeRxAudioFrameToSab(left, right) {
       if (!state.rxRingF32 || !state.rxCtrlU32) {
         return false;
@@ -21476,7 +21490,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         wr = (wr + 1) % cap;
       }
       Atomics.store(ctrl, CTRL_WRITE_IDX, wr);
-      state.rxWorkletNode?.port.postMessage({ type: "stream-start" });
+      const node = state.rxWorkletNode;
+      if (node && !startedSabWorklets.has(node)) {
+        node.port.postMessage({ type: "stream-start" });
+        startedSabWorklets.add(node);
+      }
       return true;
     }
 

@@ -65,6 +65,7 @@ impl Drop for OpusLibrary {
 struct Encoder {
     library: OpusLibrary,
     state: *mut c_void,
+    packet_buffer: [u8; MAX_PACKET_BYTES],
 }
 unsafe impl Send for Encoder {}
 impl Encoder {
@@ -82,7 +83,11 @@ impl Encoder {
         if state.is_null() || error != 0 {
             return None;
         }
-        let encoder = Self { library, state };
+        let encoder = Self {
+            library,
+            state,
+            packet_buffer: [0; MAX_PACKET_BYTES],
+        };
         let bitrate = if channels == 1 { 24_000 } else { 80_000 };
         let settings_ok = unsafe {
             (encoder.library.ctl)(state, OPUS_SET_BITRATE_REQUEST, bitrate) == 0
@@ -96,22 +101,23 @@ impl Encoder {
         }
     }
 
-    fn encode(&mut self, pcm: &[f32]) -> Option<Vec<u8>> {
-        let mut packet = vec![0u8; MAX_PACKET_BYTES];
+    fn encode(&mut self, pcm: &[f32]) -> Option<Arc<[u8]>> {
         let length = unsafe {
             (self.library.encode)(
                 self.state,
                 pcm.as_ptr(),
                 FRAME_SAMPLES as c_int,
-                packet.as_mut_ptr(),
+                self.packet_buffer.as_mut_ptr(),
                 MAX_PACKET_BYTES as c_int,
             )
         };
         if length <= 0 {
             return None;
         }
-        packet.truncate(length as usize);
-        Some(packet)
+        // One immutable payload per encoded frame, shared across recipients.
+        // The encoder's scratch buffer can immediately be reused; queued
+        // packets never borrow it. Per-client wire framing remains separate.
+        Some(Arc::from(&self.packet_buffer[..length as usize]))
     }
 }
 impl Drop for Encoder {
@@ -135,6 +141,19 @@ struct Queue {
     last_offer_at: Option<Instant>,
 }
 impl Queue {
+    fn take_frame(
+        &mut self,
+        count: usize,
+        frame: &mut Vec<f32>,
+        recipients: &mut Vec<Weak<ClientOutbound>>,
+    ) {
+        frame.clear();
+        frame.extend(self.samples.drain(..count));
+        recipients.clear();
+        // A joiner promoted by this drain must not receive the mixed frame.
+        recipients.extend(self.recipients.iter().cloned());
+        self.account_for_front_removal(count);
+    }
     /// Advances every pending joiner's backlog by `removed` and promotes any
     /// that reach zero into `recipients`. Must be called with exactly how
     /// many samples just left the front of `self.samples`, from the *same*
@@ -358,8 +377,10 @@ fn worker_loop(
 ) {
     let frame_len = FRAME_SAMPLES * channels as usize;
     let mut health = EncodeHealth::new();
+    let mut frame = Vec::with_capacity(frame_len);
+    let mut recipients = Vec::new();
     loop {
-        let (frame, recipients, frame_epoch) = {
+        let frame_epoch = {
             let (mutex, wake) = &*shared;
             let mut queue = mutex.lock_unpoisoned();
             while queue.samples.len() < frame_len {
@@ -367,14 +388,12 @@ fn worker_loop(
                     .wait(queue)
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
             }
-            let drained = queue.samples.drain(..frame_len).collect::<Vec<_>>();
             // Snapshot who is live *before* accounting for this drain: a
             // joiner this exact drain promotes must wait for the next frame,
             // never the one that still contains the audio they were staged
             // to avoid.
-            let recipients = queue.recipients.clone();
-            queue.account_for_front_removal(frame_len);
-            (drained, recipients, epoch.load(Ordering::Acquire))
+            queue.take_frame(frame_len, &mut frame, &mut recipients);
+            epoch.load(Ordering::Acquire)
         };
         if tx_priority.load(Ordering::Acquire) {
             continue;
@@ -391,7 +410,7 @@ fn worker_loop(
             continue;
         };
         health.record(true);
-        for outbound in recipients {
+        for outbound in &recipients {
             if tx_priority.load(Ordering::Acquire) || epoch.load(Ordering::Acquire) != frame_epoch {
                 break;
             }
@@ -802,6 +821,14 @@ mod tests {
                 .encode(&pcm)
                 .expect("libopus encoder must accept 20 ms PCM");
             assert!(!packet.is_empty());
+            let retained = packet.to_vec();
+            let later = encoder.encode(&vec![0.; pcm.len()]).unwrap();
+            assert_eq!(
+                &*packet,
+                retained.as_slice(),
+                "reusing encoder scratch must not mutate a queued packet"
+            );
+            assert!(!Arc::ptr_eq(&packet, &later));
             let frame = super::super::build_tci_opus_audio_frame(0, RATE_HZ, channels, &packet, 1);
             assert_eq!(frame.len(), 64 + packet.len());
             assert_eq!(
@@ -843,5 +870,39 @@ mod tests {
             assert_eq!(decoded, FRAME_SAMPLES as c_int);
             assert!(output.iter().any(|sample| sample.abs() > 0.01));
         }
+    }
+
+    #[test]
+    fn reused_frame_keeps_pre_join_audio_out_of_new_listener() {
+        let ingress = test_ingress(1);
+        let a = ClientOutbound::new();
+        let b = ClientOutbound::new();
+        ingress.offer(&vec![1.; FRAME_SAMPLES / 2], vec![a.clone()]);
+        ingress.offer(&vec![2.; FRAME_SAMPLES / 2], vec![a.clone(), b.clone()]);
+        let mut frame = Vec::with_capacity(FRAME_SAMPLES);
+        let storage = frame.as_ptr();
+        let mut recipients = Vec::new();
+        {
+            let mut queue = ingress.shared.0.lock_unpoisoned();
+            queue.take_frame(FRAME_SAMPLES, &mut frame, &mut recipients);
+            assert_eq!(recipients.len(), 1);
+            assert!(recipients[0].ptr_eq(&Arc::downgrade(&a)));
+            assert!(frame[..FRAME_SAMPLES / 2].iter().all(|x| *x == 1.));
+            assert!(frame[FRAME_SAMPLES / 2..].iter().all(|x| *x == 2.));
+        }
+        ingress.offer(&vec![3.; FRAME_SAMPLES], vec![a, b.clone()]);
+        ingress
+            .shared
+            .0
+            .lock_unpoisoned()
+            .take_frame(FRAME_SAMPLES, &mut frame, &mut recipients);
+        assert_eq!(
+            frame.as_ptr(),
+            storage,
+            "fixed-size PCM scratch must be reused"
+        );
+        assert!(frame.iter().all(|x| *x == 3.));
+        assert_eq!(recipients.len(), 2);
+        assert!(recipients.iter().any(|r| r.ptr_eq(&Arc::downgrade(&b))));
     }
 }

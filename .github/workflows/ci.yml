@@ -327,6 +327,9 @@ jobs:
       - name: Test explicit PA preset migration
         run: python3 tests/test-pa-preset-migration.py
 
+      - name: Test read-only thread CPU accounting
+        run: python3 tests/test-thread-profile.py
+
       - name: Test unified provisioning contract
         run: tests/test-provisioning-contract.sh
 

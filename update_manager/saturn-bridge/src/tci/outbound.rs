@@ -60,7 +60,7 @@ pub(crate) enum OutboundMessage {
         receiver: u32,
         sample_rate: u32,
         channels: u32,
-        packet: Vec<u8>,
+        packet: Arc<[u8]>,
         sequence: u32,
     },
     /// Server-computed WAN display row. `sequence` is 0 while queued and is

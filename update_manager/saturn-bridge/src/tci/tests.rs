@@ -1026,7 +1026,7 @@ fn outbound_byte_total_stays_exact_through_every_queue_operation() {
                     receiver: 0,
                     sample_rate: 48_000,
                     channels: 1,
-                    packet: vec![0; 20 + (random() % 200) as usize],
+                    packet: vec![0; 20 + (random() % 200) as usize].into(),
                     sequence: 0,
                 });
             }
@@ -1703,7 +1703,7 @@ fn outbound_scheduler_keeps_only_eighty_milliseconds_of_opus() {
             receiver: 0,
             sample_rate: 48_000,
             channels: 2,
-            packet: vec![1, 2, 3],
+            packet: vec![1, 2, 3].into(),
             sequence,
         });
     }
@@ -5545,7 +5545,7 @@ fn failed_shared_opus_profile_falls_back_on_control_and_drains_media() {
                 receiver: 0,
                 sample_rate: 48_000,
                 channels: 2,
-                packet: vec![1, 2, 3],
+                packet: vec![1, 2, 3].into(),
                 sequence: 0,
             });
         fallback_failed_rx_opus_clients(&mut clients, |_| false);

@@ -45,6 +45,7 @@ export { signedPassbandFromUiCuts as displayPassband } from '../radio/passband';
 export function visibleBinsForDisplay(
   bins: Float32Array | null,
   displayZoom: number,
+  output?: Float32Array,
 ): Float32Array | null {
   if (!bins || bins.length === 0) return bins;
   // Do not force 128 bins into a narrower ruler span on WAN/TX zoom.
@@ -57,7 +58,10 @@ export function visibleBinsForDisplay(
           Math.floor((bins.length - visibleCount) / 2),
           Math.floor((bins.length - visibleCount) / 2) + visibleCount,
         );
-  const oriented = new Float32Array(source.length);
+  // An explicitly supplied output is borrowed by its owner until its next
+  // use. Default callers (including measurement) keep an independent result.
+  const oriented = output?.length === source.length && output.buffer !== bins.buffer
+    ? output : new Float32Array(source.length);
   for (let i = 0; i < source.length; i += 1) {
     oriented[i] = source[source.length - 1 - i] ?? 0;
   }
@@ -90,12 +94,13 @@ export function shiftBinsHorizontally(
  * This is intentionally separate from temporal spectrum averaging so smoothing
  * does not add latency to tuning or waterfall updates.
  */
-export function smoothSpectrumTrace(bins: Float32Array, amount: number): Float32Array {
+export function smoothSpectrumTrace(bins: Float32Array, amount: number, output?: Float32Array): Float32Array {
   const strength = Math.max(0, Math.min(100, Number.isFinite(amount) ? amount : 0)) / 100;
   if (strength <= 0 || bins.length < 3) return bins;
 
   const radius = Math.max(1, Math.min(6, Math.ceil(strength * 6)));
-  const smoothed = new Float32Array(bins.length);
+  const smoothed = output?.length === bins.length && output.buffer !== bins.buffer
+    ? output : new Float32Array(bins.length);
   let sum = 0;
   let start = 0;
   let end = Math.min(bins.length - 1, radius);
@@ -128,6 +133,7 @@ export function smoothWaterfallBins(
   bins: Float32Array,
   previous: Float32Array | null,
   amount: number,
+  output?: Float32Array,
 ): Float32Array {
   const strength = Math.max(0, Math.min(100, Number.isFinite(amount) ? amount : 0)) / 100;
   if (strength <= 0) {
@@ -135,7 +141,8 @@ export function smoothWaterfallBins(
   }
   if (!previous || previous.length !== bins.length) return bins;
   const previousWeight = strength * 0.5;
-  const smoothed = new Float32Array(bins.length);
+  const smoothed = output?.length === bins.length && output.buffer !== bins.buffer && output.buffer !== previous.buffer
+    ? output : new Float32Array(bins.length);
   for (let i = 0; i < bins.length; i += 1) {
     const current = bins[i] ?? 0;
     const old = previous[i] ?? current;

@@ -136,3 +136,48 @@ cadence boundary. It skips obsolete periods rather than emitting a catch-up
 FFT followed immediately by another FFT. A deterministic regression covers
 on-time work, a boundary and multiple missed intervals. Display transport,
 FFT resolution and canonical capture samples are unchanged.
+
+## First allocation slice
+
+Display orientation and smoothing accept optional caller-owned output arrays.
+The ordinary helpers still return independent arrays unless an output is
+explicitly supplied. The template borrows orientation scratch only for the
+synchronous draw: numerical history and temporal averaging copy before the next
+use. RX Measure continues to use the owned, full-precision helper. Spectrum
+vertices and waterfall smoothing/history have separate renderer-owned buffers;
+size changes replace those buffers. Inputs and overlapping views cannot be used
+as smoothing scratch. Geometry, FFT sizes, windowing and display defaults stay
+the same.
+
+The RX Opus worker reuses its PCM, recipient-list and encoder output scratch.
+It creates one immutable encoded payload per frame, shared by recipient queues.
+Client wire framing and sequence numbers remain independent; queue limits,
+pre-join exclusion and TX-priority/epoch checks retain their meaning. This is
+not an end-to-end zero-copy path. Codec settings, 20 ms packets and browser audio
+queue targets are unchanged. The optional SAB producer sends `stream-start`
+once after the first data publication for each worklet; reconnecting with a new
+node sends a fresh notification. The default postMessage path is unchanged.
+
+For a current host CPU baseline, while the desired workload is already running:
+
+```sh
+python3 update_manager/scripts/saturn-thread-profile.py \
+  --pid "$(systemctl show saturn-bridge -p MainPID --value)" \
+  --seconds 12 --output /tmp/saturn-thread-baseline.json
+```
+
+The tool reads Linux task accounting and the public performance record. It does
+not send radio commands, change scheduling or attach a sampler. TID start times
+prevent reuse from mixing counters; process exit/restart invalidates the run.
+CPU percentages use one core as 100%. Short-lived threads between observations
+can be missed. Public histogram percentiles remain cumulative process-lifetime
+values; this tool does not turn them into window-specific latency percentiles
+or collect call stacks. It records observed workload transitions so mixed runs
+can be identified. Label standby separately from active audio/IQ, heavy DSP,
+3D and PS workloads; a quiet channel worker does not establish its loaded cost.
+
+Browser before/after runs must use equal FFT/zoom, quality, smoothing, workload
+and renderer, without concurrent test/build jobs. Report the allocation scope,
+audio progress/underruns, source delivery and latency tails, including regressions.
+Software-renderer results do not qualify the operating Windows GPU or justify
+promoting worker/transport defaults.
