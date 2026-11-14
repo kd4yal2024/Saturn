@@ -12,6 +12,11 @@ memory and broadcast FM. Moving those buttons preserves their existing memory
 keys and settings. General 11m is separate from SWL 11m around 25.9 MHz. Use
 General → 11m to return to the last 27 MHz frequency and settings.
 
+On reconnect, the host's current readback does not replace an existing band
+memory. The first band recall still uses the saved setup. Local tuning records
+the new frequency immediately; explicit radio/display edits become the current
+setup for that band. No extra Save action is needed.
+
 Connected recall sends the destination frequency and operating preferences in
 one ordered settings transaction. The requested memory is retained while the
 host applies it. Autosave waits for pending settings to complete, and another

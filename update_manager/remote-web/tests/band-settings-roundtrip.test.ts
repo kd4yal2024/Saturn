@@ -29,7 +29,7 @@ function fixture() {
   const storage = new Map<string, string>();
   const sent: string[] = [], logs: string[] = [], tasks: Array<() => void> = [];
   const names = ['bandKeyForFrequency', 'bandPanelGroupForKey', 'setBandPanelGroup', 'saveBandPanelPreferences', 'currentRadioPrefs', 'applyRadioPrefsObject', 'currentDisplayPrefs',
-    'currentBandMemoryEntry', 'rememberCurrentBandSettings', 'applyBandMemoryForFrequency',
+    'currentBandMemoryEntry', 'rememberCurrentBandSettings', 'noteBandDisplayEdit', 'applyBandMemoryForFrequency',
     'frequencyTuneCommand', 'recallBandFrequency', 'setFrequency', 'recallFrequencyEntryBand', 'recallOperationsBandMemory', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
     'sendCurrentRadioPrefsToBridge'];
   const context = {
@@ -67,6 +67,46 @@ function bandButtonRecall(f: ReturnType<typeof fixture>) {
 }
 
 describe('automatic band operating settings', () => {
+  it('does not replace saved 11m settings with the initial host defaults after reconnect', () => {
+    const f=fixture(),recall=bandButtonRecall(f);
+    Object.assign(f.state,{vfoA:27_385_000,vfoB:27_385_000,dds:27_385_000,txDrive:10,mode:'LSB',bandMemoryPristineConnection:true});
+    f.state.bandMemory=normalizeBandMemory({'11m':{frequency:27_435_000,radioPrefs:{mode:'LSB',txDrive:60,txFilterLow:50,txFilterHigh:3850}},'40m':{frequency:7_262_000,radioPrefs:{mode:'USB',txDrive:50}}});
+    recall({dataset:{band:'7150000',bandGroup:'ham'}});
+    expect(normalizeBandMemory(f.state.bandMemory)['11m']?.frequency).toBe(27_435_000);
+    expect(normalizeBandMemory(f.state.bandMemory)['11m']?.radioPrefs.txDrive).toBe(60);
+    recall({dataset:{band:'27385000',bandGroup:'general'}});
+    expect(f.state.vfoA).toBe(27_435_000);expect(f.state.txDrive).toBe(60);expect(f.state.txFilterHigh).toBe(3850);
+  });
+  it('records a fresh VFO target immediately without replacing saved preferences with reconnect defaults',()=>{
+    const f=fixture(),recall=bandButtonRecall(f);
+    Object.assign(f.state,{vfoA:27_385_000,dds:27_385_000,txDrive:10,bandMemoryPristineConnection:true});
+    f.state.bandMemory=normalizeBandMemory({'11m':{frequency:27_435_000,radioPrefs:{mode:'LSB',txDrive:60}}});
+    f.api.setFrequency(27_405_000);
+    expect(normalizeBandMemory(f.state.bandMemory)['11m']?.frequency).toBe(27_405_000);
+    expect(normalizeBandMemory(f.state.bandMemory)['11m']?.radioPrefs.txDrive).toBe(60);
+    expect(JSON.parse(JSON.stringify(f.context.currentRemoteSettings())).bandMemory['11m'].frequency).toBe(27_405_000);
+    recall({dataset:{band:'7150000',bandGroup:'ham'}});recall({dataset:{band:'27385000',bandGroup:'general'}});
+    expect(f.state.vfoA).toBe(27_405_000);expect(f.state.txDrive).toBe(60);
+  });
+  it('uses the current memory when an Operations button still holds an older entry',()=>{
+    const f=fixture();
+    Object.assign(f.state,{vfoA:27_385_000,dds:27_385_000,txDrive:10,bandMemoryPristineConnection:true});
+    f.state.bandMemory=normalizeBandMemory({'11m':{frequency:27_435_000,radioPrefs:{mode:'LSB',txDrive:60}}});
+    const oldEntry=f.state.bandMemory['11m'];
+    f.api.setFrequency(27_405_000);f.api.recallOperationsBandMemory('11m',oldEntry);
+    expect(f.state.vfoA).toBe(27_405_000);expect(f.state.txDrive).toBe(60);expect(f.state.bandPanelGroup).toBe('general');
+  });
+  it('keeps intentional radio and display edits made before the first recall',()=>{
+    for(const edit of ['radio','display']){
+      const f=fixture(),recall=bandButtonRecall(f);
+      f.state.bandMemory=normalizeBandMemory({'40m':{frequency:7_210_000,radioPrefs:{txDrive:60},displayZoom:3}});
+      Object.assign(f.state,{bandMemoryPristineConnection:true,txDrive:30,displayZoom:8});
+      if(edit==='radio')f.api.saveRadioPrefs();
+      else f.api.noteBandDisplayEdit({target:{closest:()=>({id:'display-zoom'})}});
+      recall({dataset:{band:'14200000',bandGroup:'ham'}});recall({dataset:{band:'7150000',bandGroup:'ham'}});
+      expect(f.state.txDrive).toBe(30);expect(f.state.displayZoom).toBe(8);
+    }
+  });
   it('does not save the previous band settings under a new frequency while connected owner cleanup is pending', () => {
     const f = fixture();
     Object.assign(f.state, { vfoA: 27_385_000, vfoB: 27_385_000, dds: 27_385_000,

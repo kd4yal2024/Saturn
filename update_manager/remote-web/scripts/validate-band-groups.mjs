@@ -188,8 +188,8 @@ try {
   connectedSettings=true;
   await evaluate(`(() => {
     clearTimeout(remoteSettingsSaveTimer);remoteSettingsSaveTimer=null;
-    Object.assign(state,{activeVfo:'A',vfoA:27385000,vfoB:27385000,dds:27385000,bandMemoryGroup:'ham',mode:'LSB',txDrive:60,rxAttenuationDb:0});
-    const prefs=currentRadioPrefs();state.bandMemory=sanitizeBandMemory({
+    Object.assign(state,{activeVfo:'A',vfoA:27385000,vfoB:27385000,dds:27385000,bandMemoryGroup:'ham',mode:'LSB',txDrive:10,rxAttenuationDb:0,bandMemoryPristineConnection:true});
+    const prefs={...currentRadioPrefs(),txDrive:60};state.bandMemory=sanitizeBandMemory({
       '11m':{frequency:27385000,radioPrefs:prefs,displayPrefs:currentDisplayPrefs(),displayZoom:6},
       '40m':{frequency:7262000,radioPrefs:{...prefs,mode:'USB',txDrive:50,rxAttenuationDb:10},displayPrefs:currentDisplayPrefs(),displayZoom:3}
     });
@@ -197,7 +197,7 @@ try {
     const send=text=>{if(typeof text!=='string'||/trx:0,true|saturn_tx_arm:|saturn_ps_two_tone:/.test(text))throw Error('RF action forbidden in band fixture');window.__bandWire.push(text);if(_next.managedSettingsMessage(text))window.__bandPending.push(text)};
     state.ws={readyState:WebSocket.OPEN,bufferedAmount:0,send,close(){}};state.connected=true;state.bridgeReady=true;state.remoteClientRole='operator';
     managedPcm.select(true);managedPcmEpoch=managedPcm.connect(send,()=>{throw Error('TX media forbidden')});
-    const hello='saturn_tx_media_caps:psg1,pcm,owner1,transactions1;tx_codec_accept:0,pcm;saturn_ps_control_caps:0,measurement-only;saturn_tx_owner:shared,1,ReadyOff,1,1,tci,true,none;saturn_tx_committed_drive:0,1,60;ready;';
+    const hello='saturn_tx_media_caps:psg1,pcm,owner1,transactions1;tx_codec_accept:0,pcm;saturn_ps_control_caps:0,measurement-only;saturn_tx_owner:shared,1,ReadyOff,1,1,tci,true,none;saturn_tx_committed_drive:0,1,10;ready;';
     txPathNegotiator=new _next.TxPathNegotiator('auto');txPathNegotiator.observe(hello);txPathNegotiator.takeSnapshot();
     managedPcm.text(hello,managedPcmEpoch);managedPcm.filterTuningEcho(hello);managedPcm.setOperator(true);
     window.__completeBand=()=>{
@@ -213,8 +213,9 @@ try {
     setBandPanelGroup('ham');updateUi();
   })()`);
   await clickBand('ham','7150000');
+  check('First band departure preserves saved 11m power instead of initial host defaults',await evaluate(`state.bandMemory['11m'].radioPrefs.txDrive===60`));
   const atomicBandRecall=await evaluate(`__bandPending[0].includes('vfo:0,0,7262000;')&&__bandPending[0].includes('tx_drive:0,50;')&&__bandPending[0].includes('modulation:0,USB;')`);
-  await evaluate(`handleTciText('vfo:0,0,27385000;dds:0,27385000;modulation:0,LSB;tx_drive:0,60;rx_attenuation:0,0;')`);
+  await evaluate(`handleTciText('vfo:0,0,27385000;dds:0,27385000;modulation:0,LSB;tx_drive:0,10;rx_attenuation:0,0;')`);
   await pause(850);
   check('Pending host readback cannot overwrite destination band memory',await evaluate(`state.bandMemory['40m'].radioPrefs.mode==='USB'&&state.bandMemory['40m'].radioPrefs.txDrive===50`));
   check('Connected band recall sends tuning and saved settings in one transaction',atomicBandRecall);

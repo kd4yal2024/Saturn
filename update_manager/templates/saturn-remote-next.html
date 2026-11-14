@@ -10819,6 +10819,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return true;
     }
     function saveTerrainSettings() {
+      noteBandDisplayEdit();
       persistLocalSettingsFallback(currentRemoteSettings());
       scheduleRemoteSettingsSave();
     }
@@ -12763,14 +12764,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function recallOperationsBandMemory(key, entry) {
-      const targetHz = Number(entry?.frequency);
-      if (!Number.isFinite(targetHz) || targetHz <= 0) return;
       if (state.frequencyLock) {
         recordOperatorFault("Frequency lock blocks memory recall", "warn");
         updateUi();
         return;
       }
       rememberCurrentBandSettings({ requireSettled: true });
+      // The drawer can still display an older entry between its refreshes.
+      const targetHz = Number((state.bandMemory[key] || entry)?.frequency);
+      if (!Number.isFinite(targetHz) || targetHz <= 0) return;
       state.bandMemoryGroup = key.startsWith("SWL ") ? "swl" : "ham";
       setBandPanelGroup(bandPanelGroupForKey(key));
       recallBandFrequency(targetHz);
@@ -14151,24 +14153,39 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
     }
 
-    function rememberCurrentBandSettings({ requireSettled = false } = {}) {
+    function rememberCurrentBandSettings({ requireSettled = false, frequencyOnly = false } = {}) {
       if (receiveOnlyValidationSession || state.applyingBandMemory) return;
       if (state.connected && state.remoteClientRole !== "operator") return;
       // A rejected recall left the host on its previous setup. It must not
       // replace the requested memories while the operator chooses another band.
-      if (requireSettled && managedPcmSelected() && managedPcm.status().phase === "fault") return;
+      const faulted = requireSettled && managedPcmSelected() && managedPcm.status().phase === "fault";
+      if (faulted && !frequencyOnly) return;
       const key = bandKeyForFrequency(activeVfoFrequency() || state.dds);
       if (!key) return;
+      const pristine = requireSettled && state.bandMemoryPristineConnection && state.bandMemory[key];
+      // Initial host readback describes the running radio, not an operator edit
+      // of this band's saved setup. Preserve that memory until recall/edit.
+      if (pristine && !frequencyOnly) return;
       const pending = requireSettled && managedPcmSelected() && managedPcm.status().pendingSettings > 0;
-      const requested = pending ? state.bandMemory[key] : null;
+      const requested = frequencyOnly || pending || pristine || faulted ? state.bandMemory[key] : null;
       // Frequency follows the latest local tuning target even while settings
       // are pending; unrelated intermediate host preferences must not replace
       // the band's already recorded requested setup.
       state.bandMemory[key] = requested
         ? { ...requested, frequency: activeVfoFrequency() || state.dds }
         : currentBandMemoryEntry();
+      if (!requireSettled) state.bandMemoryPristineConnection = false;
+      // Knob/drag events update the draft in memory. Debounced save, recall
+      // and page exit serialize it, avoiding a full-map JSON write per step.
+      if (frequencyOnly) return;
       try { localStorage.setItem(BAND_MEMORY_KEY, JSON.stringify(state.bandMemory)); }
       catch (e) { console.warn("band memory save failed", e); }
+    }
+
+    function noteBandDisplayEdit(event) {
+      if (!state.connected || !state.bridgeReady || state.remoteClientRole !== "operator") return;
+      const id = event?.target?.closest?.("input,select,button")?.id || "";
+      if (!event || /^(display-|terrain-|waterfall-|spectrum-)/.test(id)) state.bandMemoryPristineConnection = false;
     }
 
     function applyBandMemoryForFrequency(hz) {
@@ -16113,7 +16130,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const destinationGroup = keepSwl ? "swl" : "ham";
       const destinationKey = _bandKeyForFrequency(nextHz, destinationGroup);
       const crossedBand = shouldRememberBand && bandKeyForFrequency(activeFrequency) !== destinationKey;
-      if (crossedBand || options.absolute) rememberCurrentBandSettings();
+      if (crossedBand || options.absolute) rememberCurrentBandSettings({ requireSettled: true });
       if (shouldRememberBand) state.bandMemoryGroup = destinationGroup;
       const recalledBand = crossedBand && applyBandMemoryForFrequency(nextHz);
       shiftDisplayForCenterChange(nextHz);
@@ -16124,6 +16141,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         state.vfoA = nextHz;
         state.vfoB = nextHz;
       }
+      if (shouldRememberBand) rememberCurrentBandSettings({ requireSettled: !recalledBand, frequencyOnly: !recalledBand });
       if (options.lightweight) {
         updateTuneVisuals();
       } else {
@@ -16168,11 +16186,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const nextHz = snapTuneFrequencyHz(tunedFrequencyFromDisplayPoint(clientX, element, clientY));
       if (nextHz === activeVfoFrequency() && !immediate) return nextHz;
       const crossedBand = bandKeyForFrequency(activeVfoFrequency()) !== bandKeyForFrequency(nextHz);
-      if (crossedBand) rememberCurrentBandSettings();
+      if (crossedBand) rememberCurrentBandSettings({ requireSettled: true });
       setFrequency(nextHz, false, { send: false, rememberBand: false, lightweight: true });
       if (crossedBand && applyBandMemoryForFrequency(nextHz)) {
+        rememberCurrentBandSettings();
         sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
-      }
+      } else rememberCurrentBandSettings({ requireSettled: true, frequencyOnly: true });
       if (immediate) {
         if (state.panadapterTuneTimer) { clearTimeout(state.panadapterTuneTimer); state.panadapterTuneTimer = null; }
         sendPanadapterTuneNow(nextHz);
@@ -16200,6 +16219,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const zoomInput = $("display-zoom");
       if (zoomInput) zoomInput.value = `${next}`;
       if (persist) {
+        noteBandDisplayEdit();
         localStorage.setItem("saturn.remote.displayZoom", `${next}`);
         persistLocalSettingsFallback(currentRemoteSettings());
         scheduleRemoteSettingsSave();
@@ -16218,6 +16238,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function persistCurrentDisplayZoom() {
+      noteBandDisplayEdit();
       localStorage.setItem("saturn.remote.displayZoom", `${state.displayZoom}`);
       persistLocalSettingsFallback(currentRemoteSettings());
       scheduleRemoteSettingsSave();
@@ -20977,6 +20998,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent("Connect diagnostic: connect ignored because socket is already pending/live");
         return;
       }
+      state.bandMemoryPristineConnection = true;
       state.rxNoiseReductionCapabilities = null;
       state.rxNoiseReductionEffective = null;
       state.rxNnrModelSlot = null;
@@ -22597,6 +22619,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           && state.txPhase !== "keyed" && !state.ptt && (!managed || (managed.phase === "ready" && !managed.pendingSettings && !managed.measurementActive))) });
     }
     function initInteractions() {
+      for (const event of ["input", "change", "click"]) document.addEventListener(event, noteBandDisplayEdit);
       paCalibrationPanel = new _next.PaCalibrationPanel($("tx-pa-calibration"), profile => {
         state.txPaCalibration = profile;
         saveRadioPrefs();
