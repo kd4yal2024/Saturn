@@ -11,18 +11,27 @@ import assert from 'node:assert/strict';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = process.argv.find(arg => arg.startsWith('--output='))?.slice(9) || mkdtempSync(join(tmpdir(), 'saturn-band-groups-'));
 mkdirSync(output, { recursive: true });
-const source = readFileSync(resolve(root, '../templates/saturn-remote-next.html'), 'utf8');
+const source = readFileSync(process.argv.find(arg => arg.startsWith('--template='))?.slice(11) || resolve(root, '../templates/saturn-remote-next.html'), 'utf8');
 const bundle = readFileSync(resolve(root, 'dist/saturn-remote-next.js'));
+assert.equal(source.split('    void init();').length,2,'one production initialization marker');
 const html = source.replace('<head>', `<head><script>
 if(!sessionStorage.getItem('band-fixture-seeded')){localStorage.clear();sessionStorage.setItem('band-fixture-seeded','1');localStorage.setItem('saturn.remote.freqLock','0')}
 window.__sockets=0;window.__media=0;
 const NativeWebSocket=window.WebSocket;
 window.WebSocket=class extends NativeWebSocket{constructor(...args){super(...args);window.__sockets++}};
 if(navigator.mediaDevices?.getUserMedia){const capture=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);navigator.mediaDevices.getUserMedia=(...args)=>{window.__media++;return capture(...args)}};
-</script>`);
-const server = createServer((req, res) => {
+</script>`).replace('    void init();','    void init().then(() => { window.__bandPageReady = true; });');
+let connectedSettings = false;
+const settingsWrites = [];
+const server = createServer(async (req, res) => {
   if (req.url?.startsWith('/remote-assets/remote-next.js')) { res.setHeader('Content-Type','text/javascript'); res.end(bundle); }
   else if (req.url === '/') { res.setHeader('Content-Type','text/html'); res.end(html); }
+  else if (connectedSettings && req.url === '/remote_settings') {
+    if (req.method === 'POST') { let raw='';for await (const chunk of req) raw+=chunk;settingsWrites.push(JSON.parse(raw)); }
+    const settings=settingsWrites.at(-1);
+    if(!settings){res.writeHead(404);res.end('{}');return;}
+    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({status:'ok',settings}));
+  }
   else { res.writeHead(404); res.end('offline browser fixture'); }
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));
@@ -76,7 +85,7 @@ const clickBand = async (group, name) => {
 };
 const attenuation = async db => evaluate(`(()=>{const el=document.getElementById('rx-attenuation');el.value='${db}';el.dispatchEvent(new Event('change',{bubbles:true}));})()`);
 const ready = async () => {
-  for(let i=0;i<100;i++){await pause(50);if(await evaluate(`document.readyState==='complete' && !!document.getElementById('rx-eq-band-10')`).catch(()=>false))return true;}
+  for(let i=0;i<100;i++){await pause(50);if(await evaluate(`window.__bandPageReady===true`).catch(()=>false))return true;}
   return false;
 };
 try {
@@ -164,9 +173,56 @@ try {
   await selectGroup('swl');
   const mobile=await command('Page.captureScreenshot',{format:'png'},session);writeFileSync(join(output,'swl-phone.png'),Buffer.from(mobile.data,'base64'));
   check('Band navigation opened no connection, microphone or TX session',await evaluate(`window.__sockets===0 && window.__media===0 && state.txPhase==='rx' && !state.twoToneEnabled`));
+  // Exercise the connected production controller, state parser, callbacks,
+  // autosave and HTTP persistence. Only host replies are simulated; there is
+  // no radio connection and TX/microphone authorization is never supplied.
+  connectedSettings=true;
+  await evaluate(`(() => {
+    clearTimeout(remoteSettingsSaveTimer);remoteSettingsSaveTimer=null;
+    Object.assign(state,{activeVfo:'A',vfoA:27385000,vfoB:27385000,dds:27385000,bandMemoryGroup:'ham',mode:'LSB',txDrive:60,rxAttenuationDb:0});
+    const prefs=currentRadioPrefs();state.bandMemory=sanitizeBandMemory({
+      '11m':{frequency:27385000,radioPrefs:prefs,displayPrefs:currentDisplayPrefs(),displayZoom:6},
+      '40m':{frequency:7262000,radioPrefs:{...prefs,mode:'USB',txDrive:50,rxAttenuationDb:10},displayPrefs:currentDisplayPrefs(),displayZoom:3}
+    });
+    window.__bandHost={...state};window.__bandWire=[];window.__bandPending=[];window.__bandConfig=1;window.__bandSerial=1;
+    const send=text=>{if(typeof text!=='string'||/trx:0,true|saturn_tx_arm:|saturn_ps_two_tone:/.test(text))throw Error('RF action forbidden in band fixture');window.__bandWire.push(text);if(_next.managedSettingsMessage(text))window.__bandPending.push(text)};
+    state.ws={readyState:WebSocket.OPEN,bufferedAmount:0,send,close(){}};state.connected=true;state.bridgeReady=true;state.remoteClientRole='operator';
+    managedPcm.select(true);managedPcmEpoch=managedPcm.connect(send,()=>{throw Error('TX media forbidden')});
+    const hello='saturn_tx_media_caps:psg1,pcm,owner1,transactions1;tx_codec_accept:0,pcm;saturn_ps_control_caps:0,measurement-only;saturn_tx_owner:shared,1,ReadyOff,1,1,tci,true,none;saturn_tx_committed_drive:0,1,60;ready;';
+    txPathNegotiator=new _next.TxPathNegotiator('auto');txPathNegotiator.observe(hello);txPathNegotiator.takeSnapshot();
+    managedPcm.text(hello,managedPcmEpoch);managedPcm.filterTuningEcho(hello);managedPcm.setOperator(true);
+    window.__completeBand=()=>{
+      const text=window.__bandPending.shift();if(!text)return false;
+      const config=++window.__bandConfig,serial=++window.__bandSerial;
+      handleTciText('tx_config:0,'+config+',queued,'+config+';');
+      window.__bandHost=_next.applyTciText(text,window.__bandHost).state;const h=window.__bandHost;
+      handleTciText('saturn_tx_owner:shared,'+serial+',ReadyOff,'+serial+','+config+',tci,true,none;saturn_tx_committed_drive:0,'+config+','+h.txDrive+';'
+        +'vfo:0,0,'+h.vfoA+';vfo:0,1,'+h.vfoB+';dds:0,'+h.dds+';modulation:0,'+h.mode+';tx_drive:0,'+h.txDrive+';rx_attenuation:0,'+h.rxAttenuationDb+';tx_config:0,'+config+',applied,'+config+';');
+      return true;
+    };
+    setBandPanelGroup('ham');updateUi();
+  })()`);
+  await clickBand('ham','7150000');
+  const atomicBandRecall=await evaluate(`__bandPending[0].includes('vfo:0,0,7262000;')&&__bandPending[0].includes('tx_drive:0,50;')&&__bandPending[0].includes('modulation:0,USB;')`);
+  await evaluate(`handleTciText('vfo:0,0,27385000;dds:0,27385000;modulation:0,LSB;tx_drive:0,60;rx_attenuation:0,0;')`);
+  await pause(850);
+  check('Pending host readback cannot overwrite destination band memory',await evaluate(`state.bandMemory['40m'].radioPrefs.mode==='USB'&&state.bandMemory['40m'].radioPrefs.txDrive===50`));
+  check('Connected band recall sends tuning and saved settings in one transaction',atomicBandRecall);
+  check('HTTP autosave waits for the connected settings receipts',settingsWrites.length===0);
+  await clickBand('ham','27385000');
+  check('Rapid return preserves the previous destination memory despite old echoes',await evaluate(`state.bandMemory['40m'].radioPrefs.mode==='USB'&&state.bandMemory['40m'].radioPrefs.txDrive===50`));
+  for(let n=0;n<20;n++){await evaluate(`__completeBand()`);await pause(120);if(await evaluate(`managedPcm.status().pendingSettings===0`))break;}
+  check('Connected band queue completes without fault or keying',await evaluate(`managedPcm.status().phase==='ready'&&managedPcm.status().pendingSettings===0&&state.txPhase==='rx'&&state.txDrive===60&&state.mode==='LSB'`));
+  for(let n=0;n<40 && !settingsWrites.length;n++)await pause(100);
+  check('Settled HTTP save retains distinct 11m and 40m settings',settingsWrites.at(-1)?.bandMemory?.['11m']?.radioPrefs?.txDrive===60&&settingsWrites.at(-1)?.bandMemory?.['40m']?.radioPrefs?.txDrive===50&&settingsWrites.at(-1)?.bandMemory?.['40m']?.radioPrefs?.mode==='USB');
+  check('Connected fixture requested no RF, microphone or TX media',await evaluate(`__sockets===0&&__media===0&&state.txPhase==='rx'&&__bandWire.every(s=>!s.includes('trx:0,true'))`));
+  await evaluate(`state.connected=false;state.ws=null;managedPcm.disconnect()`);
+  await command('Page.reload',{},session);check('Connected band memories reload from HTTP storage',await ready());
+  await clickBand('ham','7150000');check('Reloaded 40m memory keeps its own committed settings',await evaluate(`state.vfoA===7262000&&state.mode==='USB'&&state.txDrive===50&&state.rxAttenuationDb===10`));
+  await clickBand('ham','27385000');check('Reloaded 11m memory keeps its own committed settings',await evaluate(`state.vfoA===27385000&&state.mode==='LSB'&&state.txDrive===60&&state.rxAttenuationDb===0`));
   writeFileSync(join(output,'report.json'),JSON.stringify({passed:true,checks,source:'actual shipped Remote runtime; offline browser, no radio connected'},null,2)+'\n');
   console.log(`Ham/SWL band panel: ${checks.length} checks passed. ${output}`);
 } catch(error){
   const bandState = await evaluate(`({frequency:state.vfoA,mode:state.mode,attenuation:state.rxAttenuationDb,watts:state.txDrive,mic:state.txMicGainDb,zoom:state.displayZoom,memoryGroup:state.bandMemoryGroup,memory:state.bandMemory,activeBand:document.querySelector('#band-grid .band-btn.active')?.dataset.band,keypadBand:frequencyEntryBandForHz(state.vfoA)?.label})`).catch(()=>null);
-  writeFileSync(join(output,'report.json'),JSON.stringify({passed:false,checks,error:String(error),bandState},null,2)+'\n');throw error;
+  writeFileSync(join(output,'report.json'),JSON.stringify({passed:false,checks,error:String(error),bandState,settingsWrites},null,2)+'\n');throw error;
 } finally { clearTimeout(watchdog);chrome.kill();server.close(); }

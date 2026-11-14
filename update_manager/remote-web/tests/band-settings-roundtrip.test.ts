@@ -6,7 +6,9 @@ import { radioPrefsFromState, displayPrefsFromState } from '../src/state/prefs-f
 import { applyRadioPrefsToState, applyDisplayPrefsToState } from '../src/state/apply-prefs';
 import { normalizeBandMemory, normalizeRadioPrefs } from '../src/settings/normalize';
 import { buildAllRadioPrefsCommands } from '../src/tci/commands';
-import { managedSettingsMessage } from '../src/transport/managed-pcm';
+import { ManagedPcmSession, managedSettingsMessage } from '../src/transport/managed-pcm';
+import { applyTciText } from '../src/tci/apply';
+import type { TciRadioState } from '../src/tci/state';
 import { bandKeyForFrequency, normalizeBandGroup, HAM_BAND_EDGES_HZ, SWL_BANDS } from '../src/radio/band';
 import { PureSignalReports, pureSignalTestView } from '../src/puresignal/test-view';
 import type { ManagedPcmStatus } from '../src/transport/managed-pcm';
@@ -28,7 +30,7 @@ function fixture() {
   const sent: string[] = [], logs: string[] = [], tasks: Array<() => void> = [];
   const names = ['bandKeyForFrequency', 'saveBandPanelPreferences', 'currentRadioPrefs', 'applyRadioPrefsObject', 'currentDisplayPrefs',
     'currentBandMemoryEntry', 'rememberCurrentBandSettings', 'applyBandMemoryForFrequency',
-    'setFrequency', 'recallFrequencyEntryBand', 'recallOperationsBandMemory', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
+    'frequencyTuneCommand', 'recallBandFrequency', 'setFrequency', 'recallFrequencyEntryBand', 'recallOperationsBandMemory', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
     'sendCurrentRadioPrefsToBridge'];
   const context = {
     state, console, txPowerDraft: new TxPowerDraft(), receiveOnlyValidationSession: false, REMOTE_FIXED_RX_ADC: 0,
@@ -65,6 +67,59 @@ function bandButtonRecall(f: ReturnType<typeof fixture>) {
 }
 
 describe('automatic band operating settings', () => {
+  it('does not save the previous band settings under a new frequency while connected owner cleanup is pending', () => {
+    const f = fixture();
+    Object.assign(f.state, { vfoA: 27_385_000, vfoB: 27_385_000, dds: 27_385_000,
+      mode: 'LSB', txDrive: 60, rxAttenuationDb: 0, rxHeadphonesSupported: false, txMonitorSupported: false });
+    f.state.bandMemory = normalizeBandMemory({ '40m': { frequency: 7_262_000,
+      radioPrefs: { mode: 'USB', txDrive: 50, rxAttenuationDb: 10 } } });
+    const begin = template.indexOf('      changed: status => {');
+    const end = template.indexOf('\n      },\n    });', begin);
+    if (begin < 0 || end <= begin) throw Error('Missing production managed status callback');
+    const changed = runInNewContext(`status => {${template.slice(begin + '      changed: status => {'.length, end)}\n}`, {
+      ...f.context, scheduleUiRefresh: vi.fn(), setPtt: vi.fn(),
+    });
+    let now = 0;
+    const wire: string[] = [];
+    const session = new ManagedPcmSession({ now: () => now, capture: vi.fn(), changed });
+    session.select(true);
+    const epoch = session.connect(s => { if (managedSettingsMessage(s)) wire.push(s); }, () => { throw Error('No TX media in band recall'); });
+    session.setOperator(true);
+    let serial = 1, config = 1;
+    const receive = (text: string) => {
+      session.text(text, epoch);
+      const parsed = applyTciText(session.filterTuningEcho(text), f.state as unknown as TciRadioState);
+      Object.assign(f.state, parsed.state);
+      session.setOperator(true);
+    };
+    receive('saturn_tx_media_caps:psg1,pcm,owner1,transactions1;tx_codec_accept:0,pcm;ready;saturn_tx_owner:shared,1,ReadyOff,1,1,tci,true,none;saturn_tx_committed_drive:0,1,60;');
+    f.context.managedPcm = session as typeof f.context.managedPcm;
+    Object.assign(f.context, { sendTci: (text: string, options?: { navigation?: boolean }) => session.sendControl(text, options) });
+    let host = { ...f.state };
+    const completeNext = () => {
+      const text = wire.shift();
+      if (!text) throw Error('No pending control transaction');
+      const id = ++config;
+      receive(`tx_config:0,${id},queued,${config};`);
+      host = applyTciText(text, host as unknown as TciRadioState).state as unknown as typeof host;
+      receive(`saturn_tx_owner:shared,${++serial},ReadyOff,${serial},${config},tci,true,none;`
+        + `saturn_tx_committed_drive:0,${config},${host.txDrive};`
+        + `vfo:0,0,${host.vfoA};vfo:0,1,${host.vfoB};dds:0,${host.dds};`
+        + `modulation:0,${host.mode};tx_drive:0,${host.txDrive};rx_attenuation:0,${host.rxAttenuationDb};`
+        + `tx_config:0,${id},applied,${config};`);
+    };
+    bandButtonRecall(f)({ dataset: { band: '7150000', bandGroup: 'ham' } });
+    completeNext(); // First real owner commit: callbacks, parsed echoes, receipt.
+    now = 800;
+    session.tick();
+    f.tasks.at(-1)!(); // The production 750-ms autosave runs before a later commit.
+    const saved = normalizeBandMemory(f.state.bandMemory);
+    expect(saved['40m']?.radioPrefs.mode).toBe('USB');
+    expect(saved['40m']?.radioPrefs.txDrive).toBe(50);
+    expect(saved['11m']?.radioPrefs.txDrive).toBe(60);
+    expect(session.status().phase).not.toBe('fault');
+  });
+
   it('retains 27 MHz 11m settings through 40m and reload without colliding with SWL 11m', () => {
     const f = fixture(), recall = bandButtonRecall(f);
     recall({ dataset: { band: '25900000', bandGroup: 'swl', mode: 'AM' } });
@@ -501,7 +556,7 @@ describe('automatic band operating settings', () => {
     expect(normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!))['20m']?.radioPrefs.txDrive).toBe(25);
   });
 
-  it('exports the actual 80m → 40m → 80m recall messages for the native runtime contract test', () => {
+  it('exports actual 11m, 40m and 80m recall messages for the native runtime contract test', () => {
     const result: Record<string, Array<{band: string; frequency: number; watts: number; mic: number; messages: string[]}>> = {};
     for (const backend of ['direct', 'p2']) {
       const f = fixture(), rate = backend === 'direct' ? 384000 : 192000;
@@ -512,14 +567,19 @@ describe('automatic band operating settings', () => {
       f.state.bandMemory['40m'] = { frequency: 7_218_000,
         radioPrefs: normalizeRadioPrefs({ ...radioPrefsFromState(f.state), rxAntenna: 2, rxAttenuationDb: 10, sampleRate: rate, mode: 'LSB', txDrive: 5,
           txMicGainDb: 3, pureSignalAutoAttenuate: true }), displayPrefs: {}, displayZoom: 3 };
+      f.state.bandMemory['11m'] = { frequency: 27_435_000,
+        radioPrefs: normalizeRadioPrefs({ ...radioPrefsFromState(f.state), mode: 'LSB', txDrive: 3, txMicGainDb: -2 }),
+        displayPrefs: {}, displayZoom: 5 };
       result[backend] = [];
       for (const [band, button, frequency, watts, mic] of [
-        ['40m', '7200000', 7_218_000, 5, 3], ['80m', '3750000', 3_899_000, 4, 0],
+        ['11m', '27385000', 27_435_000, 3, -2], ['40m', '7200000', 7_218_000, 5, 3],
+        ['11m', '27385000', 27_435_000, 3, -2], ['80m', '3750000', 3_899_000, 4, 0],
         ['40m', '7200000', 7_218_000, 5, 3], ['80m', '3750000', 3_899_000, 4, 0],
       ] as const) {
         f.sent.length = 0;
         f.api.recallFrequencyEntryBand({ dataset: { freqBand: button, freqMode: 'LSB' } });
         const wire = f.sent.join('');
+        expect(f.sent).toHaveLength(1);
         expect(wire).not.toContain('NaN');
         expect(wire).not.toContain('tx_puresignal_auto_attenuate:');
         expect(wire).not.toMatch(/tx_two_tone(?:_|:)/);
@@ -529,7 +589,7 @@ describe('automatic band operating settings', () => {
         result[backend]!.push({ band, frequency, watts, mic, messages: [...f.sent] });
       }
     }
-    const wireFixture = '# backend\tband\tfrequency\twatts\tmicDb\tmessage1\tmessage2\n' + Object.entries(result).flatMap(([backend, steps]) =>
+    const wireFixture = '# backend\tband\tfrequency\twatts\tmicDb\tmessage1\n' + Object.entries(result).flatMap(([backend, steps]) =>
       steps.map(step => [backend, step.band, step.frequency, step.watts, step.mic, ...step.messages].join('\t'))).join('\n') + '\n';
     const path = new URL('./fixtures/managed-band-recall.tsv', import.meta.url);
     if (process.env.SATURN_UPDATE_BAND_FIXTURE === '1') writeFileSync(path, wireFixture);

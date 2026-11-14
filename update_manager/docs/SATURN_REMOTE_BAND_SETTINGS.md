@@ -11,6 +11,13 @@ The HF-bank 11m memory includes 27 MHz; it is separate from the SWL 11m
 broadcast memory around 25.9 MHz. Use the HF-bank 11m button to return to the
 last 27 MHz frequency and settings.
 
+Connected recall sends the destination frequency and operating preferences in
+one ordered settings transaction. The requested memory is retained while the
+host applies it. Autosave waits for pending settings to complete, and another
+band recall does not replace a memory with intermediate host readback. This
+keeps rapid band changes from saving the previous band's mode or power under
+the new band's frequency. Applied/rejected results remain host reports.
+
 Memories include frequency, RX antenna and attenuation, mode, RX/TX filters and
 RX filter shift, receiver volume, squelch, AGC, NR/NB/notch processing, RX/TX EQ,
 TX power target and microphone gain, CFC/gate/DEXP/processor/CESSB, phase rotator,

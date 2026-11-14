@@ -12768,13 +12768,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
         return;
       }
-      rememberCurrentBandSettings();
+      rememberCurrentBandSettings({ requireSettled: true });
       state.bandMemoryGroup = key.startsWith("SWL ") ? "swl" : "ham";
       saveBandPanelPreferences();
-      setFrequency(targetHz, true, { rememberBand: false });
-      if (applyBandMemoryForFrequency(targetHz)) {
-        sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
-      }
+      recallBandFrequency(targetHz);
       resumeRxMediaAfterBandChange("operations memory");
       persistLocalSettingsFallback(currentRemoteSettings());
       scheduleRemoteSettingsSave();
@@ -13518,18 +13515,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!Number.isFinite(buttonHz) || buttonHz <= 0) {
         return;
       }
-      rememberCurrentBandSettings();
+      rememberCurrentBandSettings({ requireSettled: true });
       const newBandKey = _bandKeyForFrequency(buttonHz, "ham");
       const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
       const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
       state.bandMemoryGroup = "ham";
       saveBandPanelPreferences();
-      const requestedMode = button.dataset.freqMode;
-      const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
-      setFrequency(targetHz, true, { rememberBand: false });
-      if (applyBandMemoryForFrequency(targetHz) || modeChanged) {
-        sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
-      }
+      recallBandFrequency(targetHz, button.dataset.freqMode);
       resumeRxMediaAfterBandChange("band recall");
       persistLocalSettingsFallback(currentRemoteSettings());
       scheduleRemoteSettingsSave();
@@ -14154,9 +14146,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
     }
 
-    function rememberCurrentBandSettings() {
+    function rememberCurrentBandSettings({ requireSettled = false } = {}) {
       if (receiveOnlyValidationSession || state.applyingBandMemory) return;
       if (state.connected && state.remoteClientRole !== "operator") return;
+      if (requireSettled && managedPcmSelected() && managedPcm.status().pendingSettings > 0) return;
       const key = bandKeyForFrequency(activeVfoFrequency() || state.dds);
       if (!key) return;
       state.bandMemory[key] = currentBandMemoryEntry();
@@ -14182,6 +14175,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       } finally { state.applyingBandMemory = false; }
       logEvent(`Applied ${key} band memory`);
       return true;
+    }
+
+    function recallBandFrequency(hz, requestedMode) {
+      const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
+      setFrequency(hz, true, { rememberBand: false, send: false });
+      const recalled = applyBandMemoryForFrequency(hz);
+      // Preserve the requested snapshot before any host readback can arrive.
+      // Tuning and the recalled preferences are one ordered owner transaction.
+      rememberCurrentBandSettings();
+      const tuneCommand = frequencyTuneCommand(hz, true);
+      const prefs = currentRadioPrefs();
+      if (recalled || modeChanged) sendCurrentRadioPrefsToBridge(prefs, { restoreTx: true, tuneCommand });
+      else sendTci(tuneCommand, { navigation: true });
+      logEvent(`Band recall requested: ${bandKeyForFrequency(hz) || "unassigned"}, ${hz} Hz, ${prefs.mode}, ${prefs.txDrive} W, RX ATT ${prefs.rxAttenuationDb} dB, TX filter ${prefs.txFilterLow}–${prefs.txFilterHigh} Hz`);
     }
 
     // normalizeStreamMode now comes from bundle destructuring
@@ -15836,9 +15843,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       remoteSettingsSaveTimer = window.setTimeout(() => {
         remoteSettingsSaveTimer = null;
+        // Intermediate readbacks may still describe the previous band. Keep
+        // one deferred save until the ordered settings have completed.
+        if (managedPcmSelected() && managedPcm.status().pendingSettings > 0) {
+          scheduleRemoteSettingsSave(REMOTE_SETTINGS_SAVE_DEBOUNCE_MS);
+          return;
+        }
         // Startup profiles load before the first radio snapshot. Their stored
         // band map must not be replaced using the page's placeholder VFO.
-        if (state.connected && state.bridgeReady) rememberCurrentBandSettings();
+        if (state.connected && state.bridgeReady) rememberCurrentBandSettings({ requireSettled: true });
         void saveRemoteSettingsToServer(false);
       }, Math.max(0, Number(delayMs) || 0));
     }
@@ -16069,6 +16082,11 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return _snapTuneFrequencyHz(hz, PANADAPTER_TUNE_STEP_HZ);
     }
 
+    function frequencyTuneCommand(hz, syncBoth = false) {
+      const activeIndex = state.activeVfo === "B" ? 1 : 0;
+      return `vfo:0,${activeIndex},${hz};dds:0,${hz};${syncBoth ? `vfo:0,${activeIndex === 0 ? 1 : 0},${hz};` : ""}`;
+    }
+
     function setFrequency(hz, syncBoth = false, options = {}) {
       const nextHz = Math.max(0, Math.round(hz));
       const activeFrequency = state.activeVfo === "B" ? state.vfoB : state.vfoA;
@@ -16098,7 +16116,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         updateUi();
       }
       if (shouldSend) {
-        const tuneCommand = `vfo:0,${activeIndex},${nextHz};dds:0,${nextHz};${syncBoth ? `vfo:0,${activeIndex === 0 ? 1 : 0},${nextHz};` : ""}`;
+        const tuneCommand = frequencyTuneCommand(nextHz, syncBoth);
         if (recalledBand) sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true, tuneCommand });
         else sendTci(tuneCommand, { navigation: true });
       }
@@ -23402,18 +23420,13 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           const group = _next.normalizeBandGroup(button.dataset.bandGroup);
           // Save before reading the destination: it may be the current band,
           // whose last tune/settings have not reached the debounce timer yet.
-          rememberCurrentBandSettings();
+          rememberCurrentBandSettings({ requireSettled: true });
           const newBandKey = _bandKeyForFrequency(buttonHz, group);
           const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
           const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
           state.bandMemoryGroup = group;
           saveBandPanelPreferences();
-          const requestedMode = button.dataset.mode;
-          const modeChanged = requestedMode ? selectReceiveMode(requestedMode) : false;
-          setFrequency(targetHz, true, { rememberBand: false });
-          if (applyBandMemoryForFrequency(targetHz) || modeChanged) {
-            sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
-          }
+          recallBandFrequency(targetHz, button.dataset.mode);
           resumeRxMediaAfterBandChange("band button");
           persistLocalSettingsFallback(currentRemoteSettings());
           scheduleRemoteSettingsSave();
@@ -24449,7 +24462,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (state.moxRequested || state.txEnabled || state.twoToneEnabled) {
           sendTxShutdownIfPossible(true);
         }
-        if (state.connected && state.bridgeReady) rememberCurrentBandSettings();
+        if (state.connected && state.bridgeReady) rememberCurrentBandSettings({ requireSettled: true });
         void saveRemoteSettingsToServer(false);
         void releaseWakeLock();
       });
