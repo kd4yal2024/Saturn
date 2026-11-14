@@ -14149,10 +14149,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function rememberCurrentBandSettings({ requireSettled = false } = {}) {
       if (receiveOnlyValidationSession || state.applyingBandMemory) return;
       if (state.connected && state.remoteClientRole !== "operator") return;
-      if (requireSettled && managedPcmSelected() && managedPcm.status().pendingSettings > 0) return;
       const key = bandKeyForFrequency(activeVfoFrequency() || state.dds);
       if (!key) return;
-      state.bandMemory[key] = currentBandMemoryEntry();
+      const pending = requireSettled && managedPcmSelected() && managedPcm.status().pendingSettings > 0;
+      const requested = pending ? state.bandMemory[key] : null;
+      // Frequency follows the latest local tuning target even while settings
+      // are pending; unrelated intermediate host preferences must not replace
+      // the band's already recorded requested setup.
+      state.bandMemory[key] = requested
+        ? { ...requested, frequency: activeVfoFrequency() || state.dds }
+        : currentBandMemoryEntry();
       try { localStorage.setItem(BAND_MEMORY_KEY, JSON.stringify(state.bandMemory)); }
       catch (e) { console.warn("band memory save failed", e); }
     }

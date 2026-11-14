@@ -211,6 +211,9 @@ try {
   check('HTTP autosave waits for the connected settings receipts',settingsWrites.length===0);
   await clickBand('ham','27385000');
   check('Rapid return preserves the previous destination memory despite old echoes',await evaluate(`state.bandMemory['40m'].radioPrefs.mode==='USB'&&state.bandMemory['40m'].radioPrefs.txDrive===50`));
+  await evaluate(`setFrequency(27435000)`);
+  await clickBand('ham','7150000');await clickBand('ham','27385000');
+  check('A fresh VFO tune survives switching away while host settings are pending',await evaluate(`state.vfoA===27435000&&state.bandMemory['11m'].frequency===27435000&&state.bandMemory['11m'].radioPrefs.txDrive===60`));
   for(let n=0;n<20;n++){await evaluate(`__completeBand()`);await pause(120);if(await evaluate(`managedPcm.status().pendingSettings===0`))break;}
   check('Connected band queue completes without fault or keying',await evaluate(`managedPcm.status().phase==='ready'&&managedPcm.status().pendingSettings===0&&state.txPhase==='rx'&&state.txDrive===60&&state.mode==='LSB'`));
   for(let n=0;n<40 && !settingsWrites.length;n++)await pause(100);
@@ -219,7 +222,7 @@ try {
   await evaluate(`state.connected=false;state.ws=null;managedPcm.disconnect()`);
   await command('Page.reload',{},session);check('Connected band memories reload from HTTP storage',await ready());
   await clickBand('ham','7150000');check('Reloaded 40m memory keeps its own committed settings',await evaluate(`state.vfoA===7262000&&state.mode==='USB'&&state.txDrive===50&&state.rxAttenuationDb===10`));
-  await clickBand('ham','27385000');check('Reloaded 11m memory keeps its own committed settings',await evaluate(`state.vfoA===27385000&&state.mode==='LSB'&&state.txDrive===60&&state.rxAttenuationDb===0`));
+  await clickBand('ham','27385000');check('Reloaded 11m memory keeps its latest frequency and committed settings',await evaluate(`state.vfoA===27435000&&state.mode==='LSB'&&state.txDrive===60&&state.rxAttenuationDb===0`));
   writeFileSync(join(output,'report.json'),JSON.stringify({passed:true,checks,source:'actual shipped Remote runtime; offline browser, no radio connected'},null,2)+'\n');
   console.log(`Ham/SWL band panel: ${checks.length} checks passed. ${output}`);
 } catch(error){
