@@ -74,7 +74,7 @@ describe('automatic band operating settings', () => {
     recall({dataset:{band:'7150000',bandGroup:'ham'}});
     expect(normalizeBandMemory(f.state.bandMemory)['11m']?.frequency).toBe(27_435_000);
     expect(normalizeBandMemory(f.state.bandMemory)['11m']?.radioPrefs.txDrive).toBe(60);
-    recall({dataset:{band:'27385000',bandGroup:'general'}});
+    recall({dataset:{band:'27385000',bandGroup:'swl',bandMemoryGroup:'ham'}});
     expect(f.state.vfoA).toBe(27_435_000);expect(f.state.txDrive).toBe(60);expect(f.state.txFilterHigh).toBe(3850);
   });
   it('records a fresh VFO target immediately without replacing saved preferences with reconnect defaults',()=>{
@@ -85,7 +85,7 @@ describe('automatic band operating settings', () => {
     expect(normalizeBandMemory(f.state.bandMemory)['11m']?.frequency).toBe(27_405_000);
     expect(normalizeBandMemory(f.state.bandMemory)['11m']?.radioPrefs.txDrive).toBe(60);
     expect(JSON.parse(JSON.stringify(f.context.currentRemoteSettings())).bandMemory['11m'].frequency).toBe(27_405_000);
-    recall({dataset:{band:'7150000',bandGroup:'ham'}});recall({dataset:{band:'27385000',bandGroup:'general'}});
+    recall({dataset:{band:'7150000',bandGroup:'ham'}});recall({dataset:{band:'27385000',bandGroup:'swl',bandMemoryGroup:'ham'}});
     expect(f.state.vfoA).toBe(27_405_000);expect(f.state.txDrive).toBe(60);
   });
   it('uses the current memory when an Operations button still holds an older entry',()=>{
@@ -94,7 +94,7 @@ describe('automatic band operating settings', () => {
     f.state.bandMemory=normalizeBandMemory({'11m':{frequency:27_435_000,radioPrefs:{mode:'LSB',txDrive:60}}});
     const oldEntry=f.state.bandMemory['11m'];
     f.api.setFrequency(27_405_000);f.api.recallOperationsBandMemory('11m',oldEntry);
-    expect(f.state.vfoA).toBe(27_405_000);expect(f.state.txDrive).toBe(60);expect(f.state.bandPanelGroup).toBe('general');
+    expect(f.state.vfoA).toBe(27_405_000);expect(f.state.txDrive).toBe(60);expect(f.state.bandPanelGroup).toBe('swl');
   });
   it('keeps intentional radio and display edits made before the first recall',()=>{
     for(const edit of ['radio','display']){

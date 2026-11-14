@@ -409,8 +409,8 @@ export interface AppState {
   remoteProfiles: Record<string, unknown>;
   bandMemory: Record<string, unknown>;
   bandMemoryPristineConnection: boolean;
-  bandPanelGroup: 'ham' | 'swl' | 'general';
-  // Memory namespaces stay compatible: General 11m/FM use the non-SWL keys.
+  bandPanelGroup: 'ham' | 'swl';
+  // Memory namespaces stay compatible: 27 MHz 11m/FM use the non-broadcast keys.
   bandMemoryGroup: 'ham' | 'swl';
   applyingBandMemory: boolean;
 

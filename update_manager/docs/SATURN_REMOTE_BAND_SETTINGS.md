@@ -7,10 +7,17 @@ band restore its setup. Tuning keeps the requested frequency; a band button
 recalls the last frequency used on that band.
 Ham HF and SWL have separate memories, including their overlapping frequency
 ranges. Clicking the current band keeps its latest frequency and settings.
-Ham HF lists the eleven amateur bands. General lists the 27 MHz 11m operating
-memory and broadcast FM. Moving those buttons preserves their existing memory
-keys and settings. General 11m is separate from SWL 11m around 25.9 MHz. Use
-General → 11m to return to the last 27 MHz frequency and settings.
+The band panel has only HF and SWL tabs. HF lists the eleven amateur bands.
+SWL lists the broadcast bands plus 11m (27 MHz) and FM. The 27 MHz operating
+memory keeps its existing `11m` key; 11m BC recalls the separate broadcast
+memory near 25.9 MHz (`SWL 11m`). Removing General changes no saved memories.
+An old General tab preference opens SWL after reload.
+
+The RX filter shows its current shift. Center RX filter clears that offset,
+keeping mode, width and other settings, and saves the correction for the current
+band. A saved LSB filter shifted +12 kHz excludes the expected on-frequency
+LSB signal; centering restores the normal signed passband. Selecting LSB again
+also resets filters to the mode defaults.
 
 On reconnect, the host's current readback does not replace an existing band
 memory. The first band recall still uses the saved setup. Local tuning records

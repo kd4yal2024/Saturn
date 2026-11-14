@@ -81,7 +81,7 @@ try {
   check('Popup has no opener authority',await child(`return d.defaultView.opener===null`));
   await search('Band group');
   await child(`const select=d.querySelector('[data-setting="radio.bandGroup"] select');select.value='swl';select.dispatchEvent(new Event('change',{bubbles:true}));`);
-  check('Settings band group switches the main panel to the SWL tab',await evaluate(`document.getElementById('band-tab-swl').getAttribute('aria-selected')==='true' && document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===15`));
+  check('Settings band group switches the main panel to the SWL tab',await evaluate(`document.getElementById('band-tab-swl').getAttribute('aria-selected')==='true' && document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===17`));
   await evaluate(`document.getElementById('band-tab-ham').click()`);await pause(350);
   check('The main Band tab selection mirrors into Settings',await child(`return d.querySelector('[data-setting="radio.bandGroup"] select').value==='ham'`));
   await search('');

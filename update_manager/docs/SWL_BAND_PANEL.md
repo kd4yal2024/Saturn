@@ -1,10 +1,10 @@
 Saturn Remote Ham / SWL band panel
 
-The Ham HF tab shows thirteen buttons, including a separate 27 MHz 11m
-operating memory plus 6m/FM. The SWL
-tab shows fifteen broadcast presets:
+The HF tab shows eleven amateur-band buttons, including 6m. The SWL tab shows
+fifteen broadcast presets plus 11m (27 MHz) and FM. The broadcast presets are
 LW/MW, 120m, 90m, 75m, 60m, 49m, 41m, 31m, 25m, 22m, 19m, 16m, 15m,
-13m and 11m. Presets are receive-navigation ranges, not a TX authorization map.
+13m and 11m BC. Presets are receive-navigation ranges, not a TX authorization map.
+There is no General tab; a saved General preference now opens SWL.
 
 Selecting a group only changes the buttons and displayed band-edge guides.
 It does not tune, change mode, change operating settings, or key the radio.
@@ -15,9 +15,9 @@ before leaving a band. Returning recalls that exact frequency rather than the
 button's first-use preset. Clicking the current band also keeps the latest tune
 and settings, even if the autosave timer has not run yet.
 
-The HF-bank 11m button starts at 27.385 MHz and remembers the last frequency
+The SWL-panel 11m (27 MHz) button starts at 27.385 MHz and remembers the last frequency
 used from 26.495 MHz to just below 28 MHz, matching the existing 11m PA-profile
-region. Its memory key is `11m`. The SWL 11m button remains the broadcast preset
+region. Its memory key is `11m`. The distinct 11m BC button remains the broadcast preset
 at 25.9 MHz (25.67–26.1 MHz), with the separate key `SWL 11m`. Both buttons and
 the keypad recall keep these operating memories distinct. These ranges are
 navigation/settings boundaries; they do not change host transmit permissions.

@@ -7920,7 +7920,7 @@
           <div class="audio-control" data-control-context="rx">
             <div class="audio-control-title">
               <span class="label">RX filter</span>
-              <span class="mono small">Passband</span>
+              <span class="mono small" id="rx-filter-shift-readout">Shift 0 Hz</span>
             </div>
             <div class="audio-control-title">
               <label class="label" for="filter-low">Low cut</label>
@@ -7932,6 +7932,7 @@
               <span class="mono small" id="filter-high-readout">3050 Hz</span>
             </div>
             <input id="filter-high" type="range" min="500" max="6000" step="50" value="3050" />
+            <button class="btn" id="rx-filter-center-btn" type="button" title="Remove the RX passband offset; keep the current mode and filter width" disabled>Center RX filter</button>
           </div>
         </div>
       </div>
@@ -7984,14 +7985,12 @@
             <div class="field-row">
               <div>
                 <div class="band-group-tabs" id="band-group-tabs" role="tablist" aria-label="Band group">
-                  <button class="context-tab" id="band-tab-ham" data-band-tab="ham" type="button" role="tab" aria-selected="true" aria-controls="band-group-panel">Ham HF</button>
-                  <button class="context-tab" id="band-tab-general" data-band-tab="general" type="button" role="tab" aria-selected="false" aria-controls="band-group-panel" tabindex="-1">General</button>
+                  <button class="context-tab" id="band-tab-ham" data-band-tab="ham" type="button" role="tab" aria-selected="true" aria-controls="band-group-panel">HF</button>
                   <button class="context-tab" id="band-tab-swl" data-band-tab="swl" type="button" role="tab" aria-selected="false" aria-controls="band-group-panel" tabindex="-1">SWL</button>
                 </div>
                 <!-- Shared settings control for the Settings pop-out. -->
                 <select id="band-group" aria-label="Band group" hidden>
-                  <option value="ham">Ham HF</option>
-                  <option value="general">General</option>
+                  <option value="ham">HF</option>
                   <option value="swl">SWL</option>
                 </select>
                 <div id="band-group-panel" role="tabpanel" aria-labelledby="band-tab-ham">
@@ -8005,10 +8004,8 @@
                     <button class="band-btn" data-band-group="ham" data-band="18120000" type="button" role="radio" aria-checked="false">17m</button>
                     <button class="band-btn" data-band-group="ham" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
                     <button class="band-btn" data-band-group="ham" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
-                    <button class="band-btn" data-band-group="general" data-band="27385000" type="button" role="radio" aria-checked="false" title="11m / 27 MHz operating memory" hidden>11m</button>
                     <button class="band-btn" data-band-group="ham" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
                     <button class="band-btn" data-band-group="ham" data-band="50150000" type="button" role="radio" aria-checked="false">6m</button>
-                    <button class="band-btn" data-band-group="general" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false" hidden>FM</button>
                     <button class="band-btn" data-band-group="swl" data-band="1000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="LW/MW broadcast · 0.15–1.71 MHz" hidden>LW/MW</button>
                     <button class="band-btn" data-band-group="swl" data-band="2400000" data-mode="AM" type="button" role="radio" aria-checked="false" title="120m broadcast · 2.3–2.495 MHz" hidden>120m</button>
                     <button class="band-btn" data-band-group="swl" data-band="3300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="90m broadcast · 3.2–3.4 MHz" hidden>90m</button>
@@ -8023,7 +8020,9 @@
                     <button class="band-btn" data-band-group="swl" data-band="17700000" data-mode="AM" type="button" role="radio" aria-checked="false" title="16m broadcast · 17.48–17.9 MHz" hidden>16m</button>
                     <button class="band-btn" data-band-group="swl" data-band="18950000" data-mode="AM" type="button" role="radio" aria-checked="false" title="15m broadcast · 18.9–19.02 MHz" hidden>15m</button>
                     <button class="band-btn" data-band-group="swl" data-band="21600000" data-mode="AM" type="button" role="radio" aria-checked="false" title="13m broadcast · 21.45–21.85 MHz" hidden>13m</button>
-                    <button class="band-btn" data-band-group="swl" data-band="25900000" data-mode="AM" type="button" role="radio" aria-checked="false" title="11m broadcast · 25.67–26.1 MHz" hidden>11m</button>
+                    <button class="band-btn" data-band-group="swl" data-band="25900000" data-mode="AM" type="button" role="radio" aria-checked="false" title="11m broadcast · 25.67–26.1 MHz" hidden>11m BC</button>
+                    <button class="band-btn" data-band-group="swl" data-band-memory-group="ham" data-band="27385000" type="button" role="radio" aria-checked="false" title="11m / 27 MHz operating memory" hidden>11m (27 MHz)</button>
+                    <button class="band-btn" data-band-group="swl" data-band-memory-group="ham" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false" hidden>FM</button>
                   </div>
                 </div>
               </div>
@@ -8144,7 +8143,7 @@
                 if (selected) byId('band-group-panel').setAttribute('aria-labelledby', tab.id);
               }
               canonicalBands.forEach(button => { button.hidden = button.dataset.bandGroup !== bandGroup.value; });
-              bandGrid.setAttribute('aria-label', bandGroup.value === 'swl' ? 'SWL bands' : bandGroup.value === 'general' ? 'General bands' : 'Ham HF bands');
+              bandGrid.setAttribute('aria-label', bandGroup.value === 'swl' ? 'SWL bands' : 'HF bands');
               applyRecentBandOrder();
             }
             for (const [index, tab] of bandTabs.entries()) {
@@ -14130,7 +14129,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       try { localStorage.setItem(BAND_PANEL_KEY, JSON.stringify({ panel: state.bandPanelGroup, memory: state.bandMemoryGroup })); } catch {}
     }
     function setBandPanelGroup(value, persist = true) {
-      state.bandPanelGroup = value === "general" ? "general" : _next.normalizeBandGroup(value);
+      // Migrate the retired General tab without changing either memory namespace.
+      state.bandPanelGroup = value === "general" ? "swl" : _next.normalizeBandGroup(value);
       const select = $("band-group");
       if (select) {
         select.value = state.bandPanelGroup;
@@ -14139,7 +14139,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (persist) saveBandPanelPreferences();
     }
     function bandPanelGroupForKey(key) {
-      return key.startsWith("SWL ") ? "swl" : ["11m", "FM"].includes(key) ? "general" : "ham";
+      return key.startsWith("SWL ") || ["11m", "FM"].includes(key) ? "swl" : "ham";
     }
     function bandKeyForFrequency(hz) {
       return _bandKeyForFrequency(hz, state.bandMemoryGroup);
@@ -16312,6 +16312,21 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       updateFilterReadouts();
     }
 
+    function resetRxFilterShift() {
+      state.rxFilterShiftHz = 0;
+      saveRadioPrefs();
+      sendRxFilterBand();
+      syncRxFilterControlsFromState();
+      updateUi();
+      logEvent("RX filter centered; band settings saved");
+    }
+
+    function updateRxFilterShiftControl() {
+      const shift = Number(state.rxFilterShiftHz) || 0;
+      $("rx-filter-shift-readout").textContent = `Shift ${shift > 0 ? "+" : ""}${shift} Hz`;
+      $("rx-filter-center-btn").disabled = shift === 0 || isSymmetricPassbandMode(state.mode);
+    }
+
     function applyRxPassbandFromSigned(lowHz, highHz) {
       let low = snapPassbandDragHz(lowHz);
       let high = snapPassbandDragHz(highHz);
@@ -16441,6 +16456,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     // Lightweight update for filter slider drag — avoids full updateUi()
     function updateFilterReadouts() {
+      updateRxFilterShiftControl();
       $("filter-low-readout").textContent = `${state.filterLow} Hz`;
       $("filter-high-readout").textContent = `${state.filterHigh} Hz`;
       updateFilterOverlay();
@@ -18194,6 +18210,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         tunePeakButton.setAttribute("aria-pressed", state.peakTuneAssistEnabled ? "true" : "false");
       }
       $("filter-low-readout").textContent = wfmActive ? "Fixed" : `${state.filterLow} Hz`;
+      updateRxFilterShiftControl();
       $("filter-high-readout").textContent = wfmActive ? "180 kHz RF" : `${state.filterHigh} Hz`;
       const shownWatts = txPowerDraft.displayed(state.txDrive);
       const confirmedWatts = managedPcmSelected() ? managedPcm.status().committedWatts : undefined;
@@ -23443,6 +23460,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         saveRadioPrefs();
         sendRxFilterBand();
       });
+      $("rx-filter-center-btn").addEventListener("click", resetRxFilterShift);
       document.querySelectorAll("#mode-grid .mode-btn").forEach((button) => {
         button.addEventListener("click", () => {
           if (!selectReceiveMode(button.dataset.mode)) return;
@@ -23461,7 +23479,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       document.querySelectorAll("#band-grid .band-btn").forEach((button) => {
         button.addEventListener("click", () => {
           const buttonHz = Number(button.dataset.band);
-          const group = _next.normalizeBandGroup(button.dataset.bandGroup);
+          const group = _next.normalizeBandGroup(button.dataset.bandMemoryGroup || button.dataset.bandGroup);
           // Save before reading the destination: it may be the current band,
           // whose last tune/settings have not reached the debounce timer yet.
           rememberCurrentBandSettings({ requireSettled: true });
