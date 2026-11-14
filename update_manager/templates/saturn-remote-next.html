@@ -14149,6 +14149,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function rememberCurrentBandSettings({ requireSettled = false } = {}) {
       if (receiveOnlyValidationSession || state.applyingBandMemory) return;
       if (state.connected && state.remoteClientRole !== "operator") return;
+      // A rejected recall left the host on its previous setup. It must not
+      // replace the requested memories while the operator chooses another band.
+      if (requireSettled && managedPcmSelected() && managedPcm.status().phase === "fault") return;
       const key = bandKeyForFrequency(activeVfoFrequency() || state.dds);
       if (!key) return;
       const pending = requireSettled && managedPcmSelected() && managedPcm.status().pendingSettings > 0;

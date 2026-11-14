@@ -23,6 +23,34 @@ function setup(capture?: ManagedCaptureFactory) {
 }
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
+  const recall = 'vfo:0,0,7262000;dds:0,7262000;modulation:0,LSB;tx_drive:0,40;';
+  it.each(['receipt-first', 'fault-first'])('allows a fresh band request after matched pre-queue rejection, %s', order => {
+    const h=setup();h.ready();
+    h.session.sendControl('vfo:0,0,99500000;dds:0,99500000;modulation:0,WFM;', {navigation:true});
+    const receipt='tx_config:0,1,rejected,InvalidConfig,0;', fault='tx_fault:0,shared_config,InvalidConfig;';
+    h.session.text(order==='receipt-first'?receipt+fault:fault+receipt,h.epoch);
+    expect(h.session.status().phase).toBe('fault');expect(h.session.arm('tci')).toBe(false);
+    h.session.sendControl('tx_mic_gain:0,-3;');expect(h.control).not.toContain('tx_mic_gain:0,-3;');
+    h.session.sendControl(recall,{navigation:true});expect(h.control.at(-1)).toBe(recall);
+    expect(h.session.status().pendingSettings).toBe(1);expect(h.session.arm('tci')).toBe(false);
+    h.session.text('tx_config:0,2,queued,12;saturn_tx_owner:shared,2,ReadyOff,3,12,tci,true,none;tx_config:0,2,applied,12;',h.epoch);
+    expect(h.session.status().phase).toBe('ready');expect(h.session.status().lastTransaction).toContain('Settings 2: applied');
+    expect(h.control).not.toContain('trx:0,true;');expect(h.media).toHaveLength(0);
+  });
+  it.each(['owner-fault','unclean','other-fault','queued-rejection','unmatched','viewer','timeout','no-receipt'])('does not recover navigation without clean validation evidence: %s', condition=>{
+    const h=setup();h.ready();h.session.sendControl('modulation:0,WFM;');
+    if(condition==='queued-rejection') h.session.text('tx_config:0,1,queued,12;tx_config:0,1,rejected,InvalidConfig,12;',h.epoch);
+    else if(condition==='unmatched') h.session.text('tx_config:0,99,rejected,InvalidConfig,12;',h.epoch);
+    else if(condition==='no-receipt') h.session.text('tx_fault:0,shared_config,InvalidConfig;',h.epoch);
+    else h.session.text('tx_config:0,1,rejected,InvalidConfig,0;tx_fault:0,shared_config,InvalidConfig;',h.epoch);
+    if(condition==='owner-fault') h.session.text('saturn_tx_owner:shared,2,ReadyOff,3,11,tci,true,SevereOverdrive;',h.epoch);
+    if(condition==='unclean') h.session.text('saturn_tx_owner:shared,2,CleaningNative,3,11,tci,false,none;',h.epoch);
+    if(condition==='other-fault') h.session.text('tx_fault:0,psg1,Stale;',h.epoch);
+    if(condition==='viewer')h.session.setOperator(false);
+    if(condition==='timeout'){h.session.sendControl(recall,{navigation:true});h.advance(5001);}
+    const before=h.control.length;h.session.sendControl(recall,{navigation:true});
+    expect(h.control.slice(before)).not.toContain(recall);expect(h.session.arm('tci')).toBe(false);
+  });
   it('bounds adjacent unsent navigation with band snapshots and keeps real receipt barriers', () => {
     const h=setup();h.ready();
     h.session.sendControl('tx_mic_gain:0,0;'); // in flight, must not be replaced

@@ -18,6 +18,14 @@ band recall does not replace a memory with intermediate host readback. This
 keeps rapid band changes from saving the previous band's mode or power under
 the new band's frequency. Applied/rejected results remain host reports.
 
+A rejected recall retains its requested memory. A fresh band or Operations
+memory selection can submit a replacement after a matched pre-queue
+`InvalidConfig` rejection and a clean, fault-free RX owner report. It still
+waits for a real applied receipt. Native/transport faults, queued failures,
+unknown completions and unfinished cleanup retain the existing fault behavior.
+An unsupported receive mode is still reported as rejected; this recovery does
+not add mode support or retry/key a transmission.
+
 Memories include frequency, RX antenna and attenuation, mode, RX/TX filters and
 RX filter shift, receiver volume, squelch, AGC, NR/NB/notch processing, RX/TX EQ,
 TX power target and microphone gain, CFC/gate/DEXP/processor/CESSB, phase rotator,

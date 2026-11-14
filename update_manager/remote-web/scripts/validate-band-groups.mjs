@@ -12,7 +12,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = process.argv.find(arg => arg.startsWith('--output='))?.slice(9) || mkdtempSync(join(tmpdir(), 'saturn-band-groups-'));
 mkdirSync(output, { recursive: true });
 const source = readFileSync(process.argv.find(arg => arg.startsWith('--template='))?.slice(11) || resolve(root, '../templates/saturn-remote-next.html'), 'utf8');
-const bundle = readFileSync(resolve(root, 'dist/saturn-remote-next.js'));
+const bundle = readFileSync(process.argv.find(arg => arg.startsWith('--bundle='))?.slice(9) || resolve(root, 'dist/saturn-remote-next.js'));
 assert.equal(source.split('    void init();').length,2,'one production initialization marker');
 const html = source.replace('<head>', `<head><script>
 if(!sessionStorage.getItem('band-fixture-seeded')){localStorage.clear();sessionStorage.setItem('band-fixture-seeded','1');localStorage.setItem('saturn.remote.freqLock','0')}
@@ -218,6 +218,26 @@ try {
   check('Connected band queue completes without fault or keying',await evaluate(`managedPcm.status().phase==='ready'&&managedPcm.status().pendingSettings===0&&state.txPhase==='rx'&&state.txDrive===60&&state.mode==='LSB'`));
   for(let n=0;n<40 && !settingsWrites.length;n++)await pause(100);
   check('Settled HTTP save retains distinct 11m and 40m settings',settingsWrites.at(-1)?.bandMemory?.['11m']?.radioPrefs?.txDrive===60&&settingsWrites.at(-1)?.bandMemory?.['40m']?.radioPrefs?.txDrive===50&&settingsWrites.at(-1)?.bandMemory?.['40m']?.radioPrefs?.mode==='USB');
+  // A rejected receive-mode recall must not strand every subsequent memory.
+  await evaluate(`state.rxWbfmSupported=true;state.bandMemory.FM={frequency:99500000,radioPrefs:{...currentRadioPrefs(),mode:'WFM'},displayPrefs:currentDisplayPrefs(),displayZoom:2};updateUi()`);
+  await clickBand('ham','99500000');
+  await evaluate(`(() => {
+    if(!__bandPending.shift())throw Error('Missing rejected FM request');
+    const id=++__bandConfig;
+    handleTciText('tx_config:0,'+id+',rejected,InvalidConfig,0;tx_fault:0,shared_config,InvalidConfig;');
+  })()`);
+  check('Rejected mode remains an explicit rejection and cannot key',await evaluate(`managedPcm.status().phase==='fault'&&managedPcm.status().lastTransaction.includes('rejected (InvalidConfig)')&&!managedPcm.arm('tci')`));
+  await evaluate(`handleTciText('modulation:0,LSB;tx_drive:0,60;');scheduleRemoteSettingsSave()`);
+  await pause(850);
+  check('Rejected recall does not save old host settings over its requested memory',await evaluate(`state.bandMemory.FM.radioPrefs.mode==='WFM'&&state.bandMemory.FM.frequency===99500000`));
+  await evaluate(`updateOperationsMemoryPanel();[...document.querySelectorAll('.operations-memory-button')].find(b=>b.querySelector('strong').textContent==='40M').click()`);
+  await pause(100);
+  check('Explicit valid band recall reaches the host after a rejected mode',await evaluate(`__bandPending.some(s=>s.includes('vfo:0,0,7262000;')&&s.includes('modulation:0,USB;'))`));
+  for(let n=0;n<20;n++){await evaluate(`__completeBand()`);await pause(120);if(await evaluate(`managedPcm.status().pendingSettings===0`))break;}
+  check('40m restores its own settings after rejected FM recall',await evaluate(`managedPcm.status().phase==='ready'&&state.vfoA===7262000&&state.mode==='USB'&&state.txDrive===50&&state.rxAttenuationDb===10`));
+  await clickBand('ham','27385000');
+  for(let n=0;n<20;n++){await evaluate(`__completeBand()`);await pause(120);if(await evaluate(`managedPcm.status().pendingSettings===0`))break;}
+  check('11m restores its distinct settings after rejected FM recall',await evaluate(`managedPcm.status().phase==='ready'&&state.vfoA===27435000&&state.mode==='LSB'&&state.txDrive===60&&state.rxAttenuationDb===0`));
   check('Connected fixture requested no RF, microphone or TX media',await evaluate(`__sockets===0&&__media===0&&state.txPhase==='rx'&&__bandWire.every(s=>!s.includes('trx:0,true'))`));
   await evaluate(`state.connected=false;state.ws=null;managedPcm.disconnect()`);
   await command('Page.reload',{},session);check('Connected band memories reload from HTTP storage',await ready());
