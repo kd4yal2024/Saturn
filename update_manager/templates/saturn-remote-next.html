@@ -12766,6 +12766,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return;
       }
       rememberCurrentBandSettings();
+      state.bandMemoryGroup = key.startsWith("SWL ") ? "swl" : "ham";
+      saveBandPanelPreferences();
       setFrequency(targetHz, true, { rememberBand: false });
       if (applyBandMemoryForFrequency(targetHz)) {
         sendCurrentRadioPrefsToBridge(currentRadioPrefs(), { restoreTx: true });
@@ -13513,10 +13515,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if (!Number.isFinite(buttonHz) || buttonHz <= 0) {
         return;
       }
+      rememberCurrentBandSettings();
       const newBandKey = _bandKeyForFrequency(buttonHz, "ham");
       const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
       const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
-      rememberCurrentBandSettings();
       state.bandMemoryGroup = "ham";
       saveBandPanelPreferences();
       const requestedMode = button.dataset.freqMode;
@@ -23395,10 +23397,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         button.addEventListener("click", () => {
           const buttonHz = Number(button.dataset.band);
           const group = _next.normalizeBandGroup(button.dataset.bandGroup);
+          // Save before reading the destination: it may be the current band,
+          // whose last tune/settings have not reached the debounce timer yet.
+          rememberCurrentBandSettings();
           const newBandKey = _bandKeyForFrequency(buttonHz, group);
           const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
           const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
-          rememberCurrentBandSettings();
           state.bandMemoryGroup = group;
           saveBandPanelPreferences();
           const requestedMode = button.dataset.mode;

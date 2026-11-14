@@ -5,12 +5,14 @@ controls normally; there is no separate Save requirement. Leaving a band takes
 a final snapshot. Band buttons, keypad band recall and tuning into a remembered
 band restore its setup. Tuning keeps the requested frequency; a band button
 recalls the last frequency used on that band.
+Ham HF and SWL have separate memories, including their overlapping frequency
+ranges. Clicking the current band keeps its latest frequency and settings.
 
 Memories include frequency, RX antenna and attenuation, mode, RX/TX filters and
 RX filter shift, receiver volume, squelch, AGC, NR/NB/notch processing, RX/TX EQ,
 TX power target and microphone gain, CFC/gate/DEXP/processor/CESSB, phase rotator,
-PureSignal Off/Single/Auto preference and feedback attenuation, rear headphones,
-MON and its level, and spectrum/waterfall/3D/zoom settings. Saved TX settings are
+PureSignal Off/Single/Auto preference and feedback attenuation, and
+spectrum/waterfall/3D/zoom settings. Saved TX settings are
 requests through the existing managed transaction path; the host still reports
 whether each configuration was applied or rejected. Calibration coefficients
 and RF measurement results are not settings and are not recalled.
@@ -22,10 +24,11 @@ restoration after browser reload or appliance restart. A receive-validation
 session or connected viewer does not rewrite memories. Existing memories remain
 readable; newly added fields use normal defaults until saved for that band.
 
-Headphone/MON preferences are separate from actual host output state. Host
-startup and disconnect still clear output; an authenticated operator connection
-restores the saved choice only after the host advertises support. An unsupported
-backend does not erase that choice. These audio commands do not key RF.
+Headphone and MON preferences stay global rather than changing with the band.
+They are separate from actual host output state. Host startup and disconnect
+clear output; an authenticated operator connection restores headphones only
+after the host advertises support. MON must be enabled again after reconnect.
+These audio commands do not key RF.
 
 Band recall never restores an active PTT/MOX, two-tone run, or measurement run.
 Two-tone frequencies and levels remain saved preferences; shared-owner recall

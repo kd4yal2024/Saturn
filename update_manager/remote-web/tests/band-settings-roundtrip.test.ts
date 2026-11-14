@@ -7,7 +7,7 @@ import { applyRadioPrefsToState, applyDisplayPrefsToState } from '../src/state/a
 import { normalizeBandMemory, normalizeRadioPrefs } from '../src/settings/normalize';
 import { buildAllRadioPrefsCommands } from '../src/tci/commands';
 import { managedSettingsMessage } from '../src/transport/managed-pcm';
-import { bandKeyForFrequency, normalizeBandGroup } from '../src/radio/band';
+import { bandKeyForFrequency, normalizeBandGroup, HAM_BAND_EDGES_HZ, SWL_BANDS } from '../src/radio/band';
 import { PureSignalReports, pureSignalTestView } from '../src/puresignal/test-view';
 import type { ManagedPcmStatus } from '../src/transport/managed-pcm';
 import { clampPureSignalAttenuationDb } from '../src/settings/normalize';
@@ -28,7 +28,7 @@ function fixture() {
   const sent: string[] = [], logs: string[] = [], tasks: Array<() => void> = [];
   const names = ['bandKeyForFrequency', 'saveBandPanelPreferences', 'currentRadioPrefs', 'applyRadioPrefsObject', 'currentDisplayPrefs',
     'currentBandMemoryEntry', 'rememberCurrentBandSettings', 'applyBandMemoryForFrequency',
-    'setFrequency', 'recallFrequencyEntryBand', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
+    'setFrequency', 'recallFrequencyEntryBand', 'recallOperationsBandMemory', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
     'sendCurrentRadioPrefsToBridge'];
   const context = {
     state, console, txPowerDraft: new TxPowerDraft(), receiveOnlyValidationSession: false, REMOTE_FIXED_RX_ADC: 0,
@@ -45,7 +45,7 @@ function fixture() {
     persistLocalSettingsFallback: vi.fn(), saveRemoteSettingsToServer: vi.fn(),
     shiftDisplayForCenterChange: vi.fn(), updateTuneVisuals: vi.fn(), updateUi: vi.fn(),
     selectReceiveMode: (mode: string) => { state.mode = mode; return true; },
-    resumeRxMediaAfterBandChange: vi.fn(), closeFrequencyEntry: vi.fn(),
+    resumeRxMediaAfterBandChange: vi.fn(), closeFrequencyEntry: vi.fn(), recordOperatorFault: vi.fn(),
     sendTci: (s: string) => sent.push(s), managedPcmSelected: () => true,
     applyTxSourceOverrides: vi.fn(), generatedTxSourceActive: () => false,
     managedPcm: { status: () => ({ manualAttenuationSupported: true, autoAdaptationSupported: true }) },
@@ -54,7 +54,102 @@ function fixture() {
   return { state, storage, sent, logs, tasks, context, api };
 }
 
+function bandButtonRecall(f: ReturnType<typeof fixture>) {
+  const marker = 'document.querySelectorAll("#band-grid .band-btn")';
+  const handler = 'button.addEventListener("click", () => {';
+  const band = template.lastIndexOf(marker);
+  const start = template.indexOf(handler, band);
+  const end = template.indexOf('\n        });', start);
+  if (band < 0 || start < band || end <= start) throw Error('Missing band-button callback');
+  return runInNewContext(`button => {${template.slice(start + handler.length, end)}\n}`, { ...f.context, ...f.api });
+}
+
 describe('automatic band operating settings', () => {
+  it('keeps the latest frequency and settings when the current band is clicked again, including keypad recall', () => {
+    for (const [group, button, first, latest, mode] of [
+      ['ham', '7150000', 7_210_000, 7_224_500, 'LSB'],
+      ['swl', '7350000', 7_325_000, 7_345_000, 'SAM'],
+    ] as const) {
+      const f = fixture(), recall = bandButtonRecall(f);
+      Object.assign(f.state, { vfoA: first, dds: first, bandMemoryGroup: group });
+      f.api.rememberCurrentBandSettings();
+      f.api.setFrequency(latest);
+      Object.assign(f.state, { mode, rxAttenuationDb: 17, displayZoom: 5 });
+      recall({ dataset: { band: button, bandGroup: group, mode: group === 'swl' ? 'AM' : undefined } });
+      expect(f.state.vfoA).toBe(latest);
+      expect(f.state.mode).toBe(mode);
+      expect(f.state.rxAttenuationDb).toBe(17);
+      expect(f.state.displayZoom).toBe(5);
+      if (group === 'ham') {
+        f.api.setFrequency(latest + 100);
+        f.api.recallFrequencyEntryBand({ dataset: { freqBand: button, freqMode: 'LSB' } });
+        expect(f.state.vfoA).toBe(latest + 100);
+      }
+    }
+  });
+
+  it('saves and restores the last tuned frequency and operating settings for every Ham and SWL band after reload', () => {
+    const f = fixture(), recall = bandButtonRecall(f);
+    const bands = [
+      ...HAM_BAND_EDGES_HZ.map(b => ({ ...b, group: 'ham', mode: 'LSB' })),
+      ...SWL_BANDS.map(b => ({ ...b, group: 'swl', mode: 'SAM' })),
+    ];
+    const expected = bands.map((b, i) => ({ ...b, frequency: b.start + 500 + i * 100,
+      attenuation: i % 32, zoom: 1 + i % 8, key: b.group === 'swl' ? `SWL ${b.label}` : b.label }));
+    for (const b of expected) {
+      recall({ dataset: { band: `${b.start}`, bandGroup: b.group, mode: b.group === 'swl' ? 'AM' : undefined } });
+      f.api.setFrequency(b.frequency);
+      Object.assign(f.state, { mode: b.mode, rxAttenuationDb: b.attenuation, displayZoom: b.zoom });
+    }
+    // Leaving the final band must persist it too, even before the debounce runs.
+    recall({ dataset: { band: '7150000', bandGroup: 'ham' } });
+    const saved = normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!));
+    const next = fixture(), nextRecall = bandButtonRecall(next);
+    next.state.bandMemory = saved;
+    Object.assign(next.state, { vfoA: 6_500_000, dds: 6_500_000 });
+    for (const b of expected) {
+      expect(saved[b.key]?.frequency).toBe(b.frequency);
+      nextRecall({ dataset: { band: `${b.start}`, bandGroup: b.group, mode: b.group === 'swl' ? 'AM' : undefined } });
+      expect(next.state.vfoA).toBe(b.frequency);
+      expect(next.state.vfoB).toBe(b.frequency);
+      expect(next.state.mode).toBe(b.mode);
+      expect(next.state.rxAttenuationDb).toBe(b.attenuation);
+      expect(next.state.displayZoom).toBe(b.zoom);
+    }
+  });
+
+  it('saves the active VFO B frequency when leaving HF and SWL bands', () => {
+    const f = fixture(), recall = bandButtonRecall(f);
+    Object.assign(f.state, { activeVfo: 'B', vfoA: 14_200_000, vfoB: 7_238_500, dds: 7_238_500 });
+    recall({ dataset: { band: '6000000', bandGroup: 'swl', mode: 'AM' } });
+    f.api.setFrequency(6_080_000);
+    recall({ dataset: { band: '7150000', bandGroup: 'ham' } });
+    expect(f.state.vfoB).toBe(7_238_500);
+    recall({ dataset: { band: '6000000', bandGroup: 'swl', mode: 'AM' } });
+    expect(f.state.vfoB).toBe(6_080_000);
+    expect(normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!))['40m']?.frequency).toBe(7_238_500);
+  });
+
+  it('recalls Operations memories using their HF/SWL identity at overlapping frequencies', () => {
+    const f = fixture();
+    f.state.bandMemory = normalizeBandMemory({
+      '80m': { frequency: 3_955_000, radioPrefs: { mode: 'LSB', rxAttenuationDb: 10 } },
+      'SWL 75m': { frequency: 3_975_000, radioPrefs: { mode: 'SAM', rxAttenuationDb: 20 } },
+    });
+    for (const key of ['SWL 75m', '80m', 'SWL 75m']) {
+      f.api.recallOperationsBandMemory(key, f.state.bandMemory[key]);
+      const swl = key.startsWith('SWL ');
+      expect(f.state.vfoA).toBe(swl ? 3_975_000 : 3_955_000);
+      expect(f.state.mode).toBe(swl ? 'SAM' : 'LSB');
+      expect(f.state.rxAttenuationDb).toBe(swl ? 20 : 10);
+      expect(f.state.bandMemoryGroup).toBe(swl ? 'swl' : 'ham');
+      expect(JSON.parse(f.storage.get('bandGroup')!).memory).toBe(swl ? 'swl' : 'ham');
+    }
+    const saved = normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!));
+    expect(saved['80m']?.frequency).toBe(3_955_000);
+    expect(saved['SWL 75m']?.frequency).toBe(3_975_000);
+  });
+
   it('recalls distinct Ham and SWL memories through the real band-button callback, including overlapping frequencies', () => {
     const f = fixture();
     const band = template.lastIndexOf('document.querySelectorAll("#band-grid .band-btn")');

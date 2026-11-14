@@ -9,6 +9,10 @@ Selecting a group only changes the buttons and displayed band-edge guides.
 It does not tune, change mode, change operating settings, or key the radio.
 Clicking a SWL band recalls its saved frequency/settings; on first use its
 preset defaults to AM. Saved SAM or other modes are restored on later visits.
+Both banks save the active VFO's last tuned frequency and operating settings
+before leaving a band. Returning recalls that exact frequency rather than the
+button's first-use preset. Clicking the current band also keeps the latest tune
+and settings, even if the autosave timer has not run yet.
 
 SWL memory keys are prefixed (for example SWL 60m) so they cannot collide with
 amateur 60m/15m settings. Overlapping frequencies such as 75m broadcast and
@@ -16,6 +20,8 @@ amateur 60m/15m settings. Overlapping frequencies such as 75m broadcast and
 separate from the displayed bank, so browsing the other bank cannot silently
 reclassify the current memory. The bank/context choice is saved locally;
 SWL band memories use the existing saved/synced settings and profile path.
+Operations memory recall restores the memory's own Ham/SWL context, including
+when amateur and broadcast frequency ranges overlap.
 
 Band buttons retain keyboard selection, active highlighting, responsive recent
 band ordering and the existing More bands control. Band group is also
@@ -23,7 +29,8 @@ available in the Settings pop-out, which stays in sync with the tabs.
 
 Validation: TypeScript, template/bundle seam, strict UI parity audit, full web
 suite, and real Chrome through the shipped runtime. Chrome exercises both
-banks, AM defaults, independent overlapping band memories, reload, keyboard,
+banks, AM defaults, last-frequency recall, same-band reselect, independent
+overlapping band memories, Operations recall, reload, keyboard,
 phone layout and absence of any socket/microphone/TX session. Existing Settings
 pop-out Chrome coverage also passes. These are offline UI checks, not RF tests.
 
