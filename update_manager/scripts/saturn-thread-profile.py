@@ -21,19 +21,30 @@ def parse_stat(text):
 
 def snapshot(pid, proc=Path('/proc')):
     tasks = {}
-    for path in (proc / str(pid) / 'task').iterdir():
-        try:
-            entry = parse_stat((path / 'stat').read_text())
+    try:
+        for path in (proc / str(pid) / 'task').iterdir():
             try:
-                entry.update(scheduler=os.sched_getscheduler(int(path.name)),
-                             priority=os.sched_getparam(int(path.name)).sched_priority,
-                             allowedCpus=sorted(os.sched_getaffinity(int(path.name))))
-            except (PermissionError, ProcessLookupError):
-                entry.update(scheduler=None, priority=None, allowedCpus=None)
-            tasks[(int(path.name), entry['startTicks'])] = entry
-        except FileNotFoundError:
-            continue  # task exited during the read
+                entry = parse_stat((path / 'stat').read_text())
+                entry['observedAtMonotonic'] = time.monotonic()
+                try:
+                    entry.update(scheduler=os.sched_getscheduler(int(path.name)),
+                                 priority=os.sched_getparam(int(path.name)).sched_priority,
+                                 allowedCpus=sorted(os.sched_getaffinity(int(path.name))))
+                except (PermissionError, ProcessLookupError):
+                    entry.update(scheduler=None, priority=None, allowedCpus=None)
+                tasks[(int(path.name), entry['startTicks'])] = entry
+            except (FileNotFoundError, ProcessLookupError):
+                continue  # task exited between enumeration, open and read
+    except (FileNotFoundError, ProcessLookupError) as error:
+        raise RuntimeError('process ended during task enumeration; baseline incomplete') from error
     return tasks
+
+
+def process_stat(pid, proc):
+    try:
+        return parse_stat((proc / str(pid) / 'stat').read_text())
+    except (FileNotFoundError, ProcessLookupError) as error:
+        raise RuntimeError('process ended during accounting; baseline incomplete') from error
 
 
 def summarize(first, last, seconds, hz):
@@ -55,12 +66,16 @@ def perf_snapshot(path):
         return None
 
 
-def collect(pid, seconds, interval, perf_path):
+def collect(pid, seconds, interval, perf_path, proc=Path('/proc')):
     hz = os.sysconf('SC_CLK_TCK')
     started_ms = int(time.time() * 1000)
     begin = time.monotonic()
-    initial = snapshot(pid)
-    identity = next(key for key in initial if key[0] == pid)
+    process_first = process_stat(pid, proc)
+    process_begin = time.monotonic()
+    initial = snapshot(pid, proc)
+    identity = (pid, process_first['startTicks'])
+    if identity not in initial:
+        raise RuntimeError('process ended or PID was reused; baseline incomplete')
     first = dict(initial)
     last = dict(initial)
     samples = {key: 1 for key in first}
@@ -69,7 +84,7 @@ def collect(pid, seconds, interval, perf_path):
     deadline = begin + seconds
     while time.monotonic() < deadline:
         time.sleep(min(interval, max(0, deadline - time.monotonic())))
-        current = snapshot(pid)
+        current = snapshot(pid, proc)
         if identity not in current:
             raise RuntimeError('process ended or PID was reused; baseline incomplete')
         for key, value in current.items():
@@ -85,24 +100,36 @@ def collect(pid, seconds, interval, perf_path):
             if not states or states[-1]['state'] != state:
                 states.append({'elapsedSeconds': time.monotonic() - begin, 'state': state})
     elapsed = time.monotonic() - begin
+    process_last = process_stat(pid, proc)
+    process_elapsed = time.monotonic() - process_begin
+    process_cpu = summarize(process_first, process_last, process_elapsed, hz)
     rows = []
     for key, value in last.items():
         tid, start = key
+        observed_seconds = value['observedAtMonotonic'] - first[key]['observedAtMonotonic']
+        cpu = summarize(first[key], value, observed_seconds, hz) if observed_seconds > 0 else {
+            'cpuSeconds': 0.0, 'cpuPercentOfOneCore': None}
         rows.append({'tid': tid, 'startTicks': start, 'name': value['name'],
                      'scheduler': value.get('scheduler'), 'priority': value.get('priority'),
                      'allowedCpus': value.get('allowedCpus'),
-                     'samples': samples[key], **summarize(first[key], value, elapsed, hz)})
+                     'samples': samples[key], 'observedSeconds': observed_seconds,
+                     'firstObservedSeconds': first[key]['observedAtMonotonic'] - begin,
+                     'lastObservedSeconds': value['observedAtMonotonic'] - begin,
+                     'windowCpuPercentOfOneCore': cpu['cpuSeconds'] * 100 / elapsed,
+                     **cpu})
     rows.sort(key=lambda row: row['cpuSeconds'], reverse=True)
     governors = {}
     for path in Path('/sys/devices/system/cpu').glob('cpu[0-9]*/cpufreq/scaling_governor'):
         governors[path.parent.parent.name] = path.read_text().strip()
     return {
-        'format': 'saturn-thread-cpu-baseline-v1', 'pid': pid,
+        'format': 'saturn-thread-cpu-baseline-v2', 'pid': pid,
         'startedAtUnixMs': started_ms, 'finishedAtUnixMs': int(time.time() * 1000),
         'elapsedSeconds': elapsed, 'sampleIntervalSeconds': interval,
         'clockTicksPerSecond': hz, 'governors': governors, 'threads': rows,
-        'totalSampledCpuPercentOfOneCore': sum(row['cpuPercentOfOneCore'] for row in rows),
-        'scope': 'read-only /proc CPU accounting; no call stacks or scheduling-latency measurement; short-lived tasks between samples may be missed; one core = 100 percent',
+        'totalSampledCpuPercentOfOneCore': sum(row['windowCpuPercentOfOneCore'] for row in rows),
+        'totalProcessCpuPercentOfOneCore': process_cpu['cpuPercentOfOneCore'],
+        'processObservedSeconds': process_elapsed,
+        'scope': 'read-only /proc CPU accounting; one core = 100 percent; per-thread rate uses its observed interval, null for a single observation; sampled total sums whole-window contributions, not different-interval rates; process total includes all threads from /proc/PID/stat; unseen CPU before a task first appears or after it disappears is not attributed to that task; no call stacks or scheduling-latency measurement',
         'performanceCounterScope': 'before/after public snapshots; histogram percentiles are cumulative process-lifetime values, not reset window percentiles',
         'performanceBefore': before, 'performanceAfter': perf_snapshot(perf_path),
         'observedWorkloadTransitions': states,

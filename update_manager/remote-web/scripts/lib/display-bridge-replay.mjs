@@ -30,8 +30,13 @@ export async function startDisplayBridge(binary, output) {
     try {
       const status=await exit;
       writeFileSync(join(output,'bridge.log'),log);
-      if(status.code!==0)throw Error('Display fixture failed: '+JSON.stringify(status)+' '+log.slice(-3000));
-      return JSON.parse(readFileSync(join(output,'result.json'),'utf8'));
+      const result=existsSync(join(output,'result.json'))?JSON.parse(readFileSync(join(output,'result.json'),'utf8')):null;
+      if(status.code!==0||!result){
+        const error=Error('Display fixture failed: '+JSON.stringify(status)+' '+log.slice(-3000));
+        error.fixtureEvidence={exit:status,result,log:'bridge.log'};
+        throw error;
+      }
+      return result;
     } finally {clearTimeout(deadline)}
   }
   try {
@@ -46,7 +51,9 @@ export async function startDisplayBridge(binary, output) {
 }
 
 export function readProcessCpu(pid) {
-  const s=readFileSync(`/proc/${pid}/stat`,'utf8');
+  let s;
+  try{s=readFileSync(`/proc/${pid}/stat`,'utf8')}
+  catch(error){if(['ENOENT','ESRCH'].includes(error.code))return null;throw error}
   const fields=s.slice(s.lastIndexOf(')')+2).trim().split(/\s+/);
   return {ticks:Number(fields[11])+Number(fields[12]),startTicks:fields[19]};
 }

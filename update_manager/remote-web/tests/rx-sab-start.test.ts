@@ -3,9 +3,22 @@ import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 const template = readFileSync(new URL('../../templates/saturn-remote-next.html', import.meta.url), 'utf8');
-const source = template.slice(template.indexOf('    const startedSabWorklets ='), template.indexOf('    function scheduleAudioPlayback('));
+function extractProducer(text: string) {
+  const start = text.indexOf('    const startedSabWorklets =');
+  const end = text.indexOf('    function scheduleAudioPlayback(');
+  if (start < 0 || end <= start) throw Error('SAB producer source markers missing or reordered');
+  const source = text.slice(start, end);
+  if (!source.includes('function writeRxAudioFrameToSab(')) throw Error('SAB producer body missing');
+  return source;
+}
+const source = extractProducer(template);
 
 describe('shipped SAB producer starts each worklet once after data publication', () => {
+  it('rejects missing and reordered extraction markers', () => {
+    for (const text of ['', '    function scheduleAudioPlayback(\n    const startedSabWorklets =', template.replace('    const startedSabWorklets =', 'renamed'), template.replace('    function scheduleAudioPlayback(', 'renamed')]) {
+      expect(() => extractProducer(text)).toThrow(/markers/);
+    }
+  });
   it('keeps stereo samples, resumes a flushed ring and starts a replacement node', () => {
     const ctrl = new Uint32Array(new SharedArrayBuffer(32));
     const ring = new Float32Array(new SharedArrayBuffer(4096 * 8));

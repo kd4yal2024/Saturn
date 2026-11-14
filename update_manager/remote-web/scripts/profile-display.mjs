@@ -4,7 +4,7 @@
 // not all JS objects, browser-native WebSocket allocations or total GC activity.
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { readFileSync,writeFileSync,mkdirSync,mkdtempSync } from 'node:fs';
+import { readFileSync,writeFileSync,mkdirSync,mkdtempSync,existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname,resolve,join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,8 @@ const fixedFft=Number(process.argv.find(a=>a.startsWith('--fft-size='))?.slice(1
 if(!Number.isFinite(fixedFft)||(fixedFft&&![256,512,1024,2048,4096,8192,16384].includes(fixedFft)))throw Error('Unsupported fixed FFT size');
 const zoom=Number(process.argv.find(a=>a.startsWith('--zoom='))?.slice(7)||1);
 if(!Number.isFinite(zoom)||zoom<1||zoom>32)throw Error('zoom must be 1..32');
+const injectExitMs=Number(process.argv.find(a=>a.startsWith('--inject-bridge-exit-ms='))?.slice(24)||0);
+if(injectExitMs&&(!bridgeBinary||!Number.isFinite(injectExitMs)||injectExitMs<100||injectExitMs>=seconds*1000))throw Error('Injected exit requires a loopback fixture and occurs inside the measurement window');
 const clockTicks=bridgeBinary?Number(execFileSync('getconf',['CLK_TCK'],{encoding:'utf8'}).trim()):null;
 if(!workloads.length||workloads.some(w=>!['2d','3d','interactive'].includes(w)))throw Error('Unsupported workload');
 if(!Number.isFinite(seconds)||seconds<6||seconds>60)throw Error('seconds must be 6..60');
@@ -45,7 +47,7 @@ const nativeOpen=window.open.bind(window);window.open=(...args)=>window.__profil
 const hooks=`
 // Fixture-only matched cadence: production defaults are not altered. Otherwise
 // raw/worker terrain's 30 Hz and server terrain's 10 Hz are different workloads.
-${bridgeBinary ? 'displayRenderIntervalMs=()=>state.terrainActive?100:33;' : ''}
+${bridgeBinary ? 'displayRenderIntervalMs=()=>_next.clampSpectrumRequestIntervalMs(displayFftTargetSize(),state.terrainActive?100:33);' : ''}
 ${fixedFft ? `displayFftTargetSize=()=>${fixedFft};` : ''}
 window.__profileSpectrum=null;
 const originalProfileDraw=drawDisplayBins;
@@ -113,11 +115,17 @@ function replaySource(){
  setInterval(()=>postMessage({kind:'stats',sequence,dropped,available:{iq:pools.iq.length,audio:pools.audio.length}}),1000);
 }
 const summarize=values=>{const v=values.filter(Number.isFinite).sort((a,b)=>a-b);const at=p=>v.length?v[Math.min(v.length-1,Math.ceil(v.length*p)-1)]:null;return {count:v.length,p50:at(.5),p95:at(.95),p99:at(.99),max:v.at(-1)??null}};
-const results=[];let browserIdentity;let activeBridge=null;
+const results=[],caseFailures=[];let browserIdentity;let activeBridge=null;let activeCase=null;let injectedExit=false;
+function preserveFailure(error){
+ const path=join(output,'report.json');
+ const prior=existsSync(path)?JSON.parse(readFileSync(path,'utf8')):{};
+ writeFileSync(path,JSON.stringify({...prior,format:'saturn-display-performance-v1',successful:false,error:String(error),activeCase,caseFailures,results,templateSha256:createHash('sha256').update(template).digest('hex'),bundleSha256:createHash('sha256').update(bundle).digest('hex')},null,2)+'\n');
+}
 try{
 await chromeSession(output,async({command,call,evaluate})=>{
  browserIdentity=await command('Browser.getVersion');
  for(const engine of engines)for(const workload of workloads){
+  activeCase={engine,workload};
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:960,deviceScaleFactor:1,mobile:false});
   if(bridgeBinary)activeBridge=await startDisplayBridge(bridgeBinary,join(output,engine+'-'+workload+'-bridge'));
   await call('Page.navigate',{url:`http://127.0.0.1:${server.address().port}/?display_fft=${engine==='worker'?'worker':'main'}&display_transport=${engine==='spectrum'?'spectrum':'iq'}&rx_audio_codec=pcm`});
@@ -129,6 +137,7 @@ await chromeSession(output,async({command,call,evaluate})=>{
   await pause(2000);
   const bridgeCpuStart=activeBridge?readProcessCpu(activeBridge.pid):null;const hostStart=performance.now();
   const start=await evaluate(`(()=>{window.__allocation={bytes:0,arrays:0};window.__beats=[];window.__longTasks=[];window.__visibility=[];window.__replayDelivery=[];window.__profileTiming={fft:[],draw:[],age:[],terrain:[],meters:[]};window.__profileCollect=true;window.__profileSpectrum=null;window.__resetProfileWire?.();return {at:performance.now(),snapshot:window.__profileSnapshot(),heap:performance.memory?.usedJSHeapSize??null}})()`);
+  if(activeBridge&&injectExitMs&&!injectedExit){injectedExit=true;const pid=activeBridge.pid;setTimeout(()=>{try{process.kill(pid,'SIGTERM')}catch{}},injectExitMs)}
   const events=[];
   for(let elapsed=0;elapsed<seconds;elapsed++){
     await pause(1000);
@@ -143,9 +152,9 @@ await chromeSession(output,async({command,call,evaluate})=>{
   }
   const end=await evaluate(`({at:performance.now(),snapshot:window.__profileSnapshot(),allocation:window.__allocation,beats:window.__beats,longTasks:window.__longTasks,heap:performance.memory?.usedJSHeapSize??null,visibility:document.visibilityState,visibilityEvents:window.__visibility,fullWindowTimings:window.__profileTiming,replayDelivery:window.__replayDelivery,replay:window.__replayStats,wire:window.__wire,spectrumProbe:window.__profileSpectrum})`);
   const hostSeconds=(performance.now()-hostStart)/1000;const bridgeCpuEnd=activeBridge?readProcessCpu(activeBridge.pid):null;
-  if(bridgeCpuStart&&bridgeCpuEnd.startTicks!==bridgeCpuStart.startTicks)throw Error('Bridge process identity changed');
+  const cpuError=activeBridge?(!bridgeCpuStart||!bridgeCpuEnd?'Bridge exited during measurement':bridgeCpuEnd.startTicks!==bridgeCpuStart.startTicks?'Bridge process identity changed':null):null;
   const duration=(end.at-start.at)/1000;
-  results.push({engine,workload,quality,durationSeconds:duration,events,spectrumProbe:end.spectrumProbe,wire:end.wire,bridgeCpuOneCorePercent:bridgeCpuStart?100*(bridgeCpuEnd.ticks-bridgeCpuStart.ticks)/clockTicks/hostSeconds:null,start:start.snapshot,end:end.snapshot,
+  results.push({valid:!cpuError,bridgeCpuError:cpuError,engine,workload,quality,durationSeconds:duration,events,spectrumProbe:end.spectrumProbe,wire:end.wire,bridgeCpuOneCorePercent:bridgeCpuStart&&bridgeCpuEnd&&!cpuError?100*(bridgeCpuEnd.ticks-bridgeCpuStart.ticks)/clockTicks/hostSeconds:null,start:start.snapshot,end:end.snapshot,
     mainBackingAllocationBytesPerSecond:end.allocation.bytes/duration,mainBackingAllocationArraysPerSecond:end.allocation.arrays/duration,
     fullWindowTimings:{fftMs:summarize(end.fullWindowTimings.fft),drawCpuMs:summarize(end.fullWindowTimings.draw),newestIngressToDrawMs:summarize(end.fullWindowTimings.age),terrainCallCpuMs:summarize(end.fullWindowTimings.terrain),meterCallCpuMs:summarize(end.fullWindowTimings.meters)},replay:end.replay,replayDeliveryMs:summarize(end.replayDelivery),heartbeatLagMs:summarize(end.beats),longTasksMs:summarize(end.longTasks),heapChangeBytes:start.heap===null||end.heap===null?null:end.heap-start.heap,
     audioUnderrunDelta:typeof end.snapshot.audio.underruns==='number'&&typeof start.snapshot.audio.underruns==='number'?end.snapshot.audio.underruns-start.snapshot.audio.underruns:null,
@@ -157,10 +166,16 @@ await chromeSession(output,async({command,call,evaluate})=>{
   if(!(results.at(-1).audioFramesDelta>0))throw Error('Audio did not advance; invalid performance baseline');
   await call('Page.captureScreenshot',{format:'png'}).then(({data})=>writeFileSync(join(output,engine+'-'+workload+'.png'),Buffer.from(data,'base64')));
   await evaluate(`window.__profilePopup?.close();window.__replay?.terminate();window.__profileSocket?.close()`);
-  if(activeBridge){await pause(150);results.at(-1).bridge=await activeBridge.stop();activeBridge=null}
+  if(activeBridge){
+    await pause(150);
+    try{results.at(-1).bridge=await activeBridge.stop()}
+    catch(error){results.at(-1).valid=false;results.at(-1).fixtureFailure=error.fixtureEvidence||String(error)}
+    finally{activeBridge=null}
+  }
+  if(!results.at(-1).valid)caseFailures.push({engine,workload,cpuError,fixtureFailure:results.at(-1).fixtureFailure});
  }
 },{timeoutMs:(seconds+4)*1000*engines.length*workloads.length+30000});
-const report={browserIdentity,format:'saturn-display-performance-v1',source:bridgeBinary?'actual Remote + Rust TCI queues/framing and spectrum worker on loopback; synthetic IQ/PCM, no hardware/DSP/TLS/proxy':'actual Remote runtime; independent, bounded worker supplies local IQ/PCM replay; no radio',fixedFft:fixedFft||null,cadence:bridgeBinary?'matched fixture cadence: 33 ms 2D / 100 ms terrain on every path':'production cadence',bridgeCpuScope:'process utime+stime ticks over host measurement window, one core = 100%; Linux loopback fixture only, no WDSP/acquisition/TLS; optimized or debug build depends on explicit binary',bridgeTestBinarySha256:bridgeBinary?createHash('sha256').update(readFileSync(bridgeBinary)).digest('hex'):null,profilerSha256:createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex'),templateSha256:createHash('sha256').update(template).digest('hex'),bundleSha256:createHash('sha256').update(bundle).digest('hex'),allocationScope:'instrumented main-realm Float32Array backing allocations; excludes objects, native allocations and worker allocations',timingScope:'browser ingress to draw submission; not RF acquisition age or GPU presentation latency; fullWindowTimings.fftMs is main-thread only, worker FFT uses bounded recent producer statistics, server FFT histogram includes warmup',results};
+const report={successful:caseFailures.length===0,caseFailures,browserIdentity,format:'saturn-display-performance-v1',source:bridgeBinary?'actual Remote + Rust TCI queues/framing and spectrum worker on loopback; synthetic IQ/PCM, no hardware/DSP/TLS/proxy':'actual Remote runtime; independent, bounded worker supplies local IQ/PCM replay; no radio',fixedFft:fixedFft||null,cadence:bridgeBinary?'matched fixture cadence: 33 ms 2D / 100 ms terrain on every path':'production cadence',bridgeCpuScope:'process utime+stime ticks over host measurement window, one core = 100%; Linux loopback fixture only, no WDSP/acquisition/TLS; optimized or debug build depends on explicit binary',bridgeTestBinarySha256:bridgeBinary?createHash('sha256').update(readFileSync(bridgeBinary)).digest('hex'):null,profilerSha256:createHash('sha256').update(readFileSync(fileURLToPath(import.meta.url))).digest('hex'),templateSha256:createHash('sha256').update(template).digest('hex'),bundleSha256:createHash('sha256').update(bundle).digest('hex'),allocationScope:'instrumented main-realm Float32Array backing allocations; excludes objects, native allocations and worker allocations',timingScope:'browser ingress to draw submission; not RF acquisition age or GPU presentation latency; fullWindowTimings.fftMs is main-thread only, worker FFT uses bounded recent producer statistics, server FFT histogram includes warmup',results};
 report.matchedComparisons=workloads.map(workload=>{
  const cases=results.filter(r=>r.workload===workload);
  const settings=cases.map(r=>({...r.end.geometry,audioRate:r.end.audio.rate,audioChannels:r.end.audio.channels}));
@@ -168,7 +183,8 @@ report.matchedComparisons=workloads.map(workload=>{
  return {workload,matchedGeometry:same,settings,engines:cases.map(r=>r.engine)};
 });
 writeFileSync(join(output,'report.json'),JSON.stringify(report,null,2)+'\n');
+if(caseFailures.length)throw Error('Invalid display cases; CPU failure and fixture logs retained');
 if(bridgeBinary&&report.matchedComparisons.some(c=>!c.matchedGeometry))throw Error('Unequal resolution/cadence/geometry; comparison report retained');
 console.log(JSON.stringify(results.map(r=>({engine:r.engine,workload:r.workload,allocationMBps:r.mainBackingAllocationBytesPerSecond/1e6,heartbeatP99:r.heartbeatLagMs.p99,underruns:r.audioUnderrunDelta,frames:r.audioFramesDelta,fft:r.end.display.fftMs,age:r.end.display.newestIqArrivalToDrawMs})),null,2));
 console.log(output);
-}finally{if(activeBridge)await activeBridge.stop();server.close()}
+}catch(error){preserveFailure(error);throw error}finally{if(activeBridge){try{await activeBridge.stop()}catch(error){preserveFailure(error)}}server.close()}

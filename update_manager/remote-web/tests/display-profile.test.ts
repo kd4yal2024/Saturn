@@ -7,17 +7,18 @@ const start = template.indexOf('    function tailnetTransportActive()');
 const end = template.indexOf('    function displayPacketHistoryLimit(', start);
 
 function diagnostics(options: { mode?: string; host?: string; rtt?: number; rttAt?: number;
-  phone?: boolean; terrain?: boolean; rate?: number; pixels?: number; zoom?: number; search?: string } = {}) {
+  phone?: boolean; terrain?: boolean; rate?: number; pixels?: number; zoom?: number; search?: string; rowSize?: number } = {}) {
   const state = {
     streamMode: options.mode ?? 'lan', layoutMode: options.phone ? 'phone' : 'desktop',
     terrainActive: options.terrain ?? false,
     bridgeRttMs: options.rtt ?? null, bridgeRttAt: options.rttAt ?? 1000,
-    rxWorkletUnderruns: 0, bridgeOutboundQueuedBytes: 0,
+    rxWorkletUnderruns: 0, bridgeOutboundQueuedBytes: 0, displayRenderSource: options.rowSize === undefined ? 'iq' : 'server', displayServerFftSize: options.rowSize || 0, displayLocalFftSize: options.rowSize === undefined ? 0 : 4096,
   };
   const slowFrames: Array<Record<string, unknown>> = [];
   return runInNewContext(`${template.slice(start, end)};
-    ({ profile: displayProfileDiagnostics, record: recordDisplaySlowFrame, slowFrames: displaySlowFrames })`, {
-    state, displaySlowFrames: slowFrames,
+    ${template.slice(template.indexOf('    function displayPipelineSnapshot('),template.indexOf('    function recordPerfSnapshot('))}
+    ({ state, snapshot:displayPipelineSnapshot, profile: displayProfileDiagnostics, record: recordDisplaySlowFrame, slowFrames: displaySlowFrames })`, {
+    state, displaySlowFrames: slowFrames, displayFftProducer:{available:false,diagnostics:()=>({})}, rxSpectrumAccumulator:null, displayFirstIqToDrawMs:null, displayTimingBuckets:{fft:[],drawCpu:[],terrainCpu:[],metersCpu:[],arrivalToDraw:[]}, browserTimingBuckets:{mainLag:[],rafInterval:[]}, timingStats:()=>({}), waterfallRenderer:{backend:'test'},
     window: { location: { hostname: options.host ?? '192.168.0.139', search: options.search ?? '' }, matchMedia: () => ({ matches: false }) },
     URLSearchParams,
     document: { visibilityState: 'visible' },
@@ -85,6 +86,16 @@ describe('display profile diagnosis', () => {
     expect(info.profile).toBe('phone-wan');
     expect(info.targetFftSize).toBe(1024);
   });
+  it('never publishes a zero effective FFT before the first row or after a row reset', () => {
+    const api = diagnostics({ rowSize:0 });
+    expect(api.snapshot().fftSize).toBe(4096);
+    api.state.displayServerFftSize = 16384;
+    expect(api.snapshot().fftSize).toBe(16384);
+    api.state.displayServerFftSize = 0;
+    expect(api.snapshot().fftSize).toBe(api.profile().displayFftSize);
+    expect(api.snapshot().fftSize).toBeGreaterThan(0);
+  });
+
   it('retains only 16 slow-frame contexts and ignores normal frames', () => {
     const api = diagnostics();
     api.record(33, 0.2, 1, 20);

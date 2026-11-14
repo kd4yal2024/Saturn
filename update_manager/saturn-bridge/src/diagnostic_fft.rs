@@ -1,4 +1,17 @@
 //! Existing display FFT, shared with offline TX diagnostics. Numerical display behavior is unchanged.
+pub const DISPLAY_DB_OFFSET: f32 = -160.0;
+pub const DISPLAY_DB_STEP: f32 = 0.625;
+
+/// Display wire quantizer: fixed -160 dB offset, 0.625 dB per u8 code.
+pub fn quantize_display_db(db: f32) -> u8 {
+    let code = ((db - DISPLAY_DB_OFFSET) / DISPLAY_DB_STEP).round();
+    if code.is_nan() {
+        0
+    } else {
+        code.clamp(0.0, 255.0) as u8
+    }
+}
+
 /// Radix-2 FFT that reproduces `remote-web/src/dsp/fft.ts` exactly: the same
 /// Hann window, bit-reversal, butterfly order, fftshift and dB formula. JS
 /// computes in f64 and stores into Float32Arrays, so this does the same.

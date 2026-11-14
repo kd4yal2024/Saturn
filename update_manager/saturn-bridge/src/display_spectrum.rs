@@ -22,10 +22,13 @@ use crate::xdma_telemetry::LatencyHistogram;
 
 pub(crate) const SPECTRUM_MIN_FFT_SIZE: u32 = 256;
 pub(crate) const SPECTRUM_MAX_FFT_SIZE: u32 = 16_384;
+pub(crate) const SPECTRUM_AUTOMATIC_MAX_FFT_SIZE: u32 = 4096;
+pub(crate) const SPECTRUM_LARGE_FFT_MIN_INTERVAL_MS: u32 = 100;
 pub(crate) const SPECTRUM_MIN_INTERVAL_MS: u32 = 33;
 pub(crate) const SPECTRUM_MAX_INTERVAL_MS: u32 = 250;
-pub(crate) const SPECTRUM_DB_OFFSET: f32 = -160.0;
-pub(crate) const SPECTRUM_DB_STEP: f32 = 0.625;
+pub(crate) use saturn_bridge::diagnostic_fft::{
+    DISPLAY_DB_OFFSET as SPECTRUM_DB_OFFSET, DISPLAY_DB_STEP as SPECTRUM_DB_STEP,
+};
 pub(crate) const SPECTRUM_FORMAT_U8_DB: u32 = 0x5301;
 pub(crate) const TCI_STREAM_SPECTRUM_ROW: u32 = 16;
 
@@ -44,6 +47,18 @@ pub(crate) fn clamp_spectrum_fft_size(requested: u32) -> u32 {
 
 pub(crate) fn clamp_spectrum_interval_ms(requested: u32) -> u32 {
     requested.clamp(SPECTRUM_MIN_INTERVAL_MS, SPECTRUM_MAX_INTERVAL_MS)
+}
+
+/// Bound high-resolution work on the server, even for a custom client. The
+/// existing eight-connection cap and shared group computation still apply.
+pub(crate) fn clamp_spectrum_request_interval_ms(fft_size: u32, requested: u32) -> u32 {
+    clamp_spectrum_interval_ms(requested).max(
+        if clamp_spectrum_fft_size(fft_size) > SPECTRUM_AUTOMATIC_MAX_FFT_SIZE {
+            SPECTRUM_LARGE_FFT_MIN_INTERVAL_MS
+        } else {
+            SPECTRUM_MIN_INTERVAL_MS
+        },
+    )
 }
 
 fn next_spectrum_deadline(due: Instant, interval: Duration, now: Instant) -> Instant {
@@ -74,14 +89,7 @@ impl SpectrumRow {
 
 pub(crate) use saturn_bridge::diagnostic_fft::SpectrumFft;
 
-pub(crate) fn quantize_db(db: f32) -> u8 {
-    let code = ((db - SPECTRUM_DB_OFFSET) / SPECTRUM_DB_STEP).round();
-    if code.is_nan() {
-        0
-    } else {
-        code.clamp(0.0, 255.0) as u8
-    }
-}
+pub(crate) use saturn_bridge::diagnostic_fft::quantize_display_db as quantize_db;
 
 /// Single-producer ring of the newest IQ pairs. The RX loop is the only
 /// writer and never blocks; the worker validates its copy against the head

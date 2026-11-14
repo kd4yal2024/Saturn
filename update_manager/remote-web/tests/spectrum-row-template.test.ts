@@ -602,6 +602,8 @@ function makeDrawHarness() {
     // The template has a one-arg wrapper over the two-arg helper.
     visibleBinsForDisplay: (bins: Float32Array | null) => visibleBinsForDisplay(bins, Number(state.displayZoom)),
     shiftBinsHorizontally,
+    shiftedDisplayScratch: null,
+    _shiftBinsHorizontally: shiftBinsHorizontally,
     displaySpanHz: () => displaySpanHz(Number(state.sampleRate), Number(state.displayZoom)),
     acceptSpectrumFrame: (bins: Float32Array, _now: number, sequence: number, sourceBins: number) => {
       captured.push({ bins: Float32Array.from(bins), sequence, sourceBins });
@@ -700,10 +702,10 @@ describe('display transport override for matched measurements', () => {
       streamMode: 'lan', search: '?display_transport=spectrum', targetFftSize: 8192, intervalMs: 16,
     });
     expect(h.api.displayTransportOverride()).toBe('spectrum');
-    // Matching the requested 8192 bins at no faster than 33 ms (about 30 rows/s).
-    expect(h.api.desiredDisplayCommand()).toBe('saturn_display:spectrum,8192,33;');
+    // The Bridge enforces at least 100 ms for larger FFTs, even on LAN.
+    expect(h.api.desiredDisplayCommand()).toBe('saturn_display:spectrum,8192,100;');
     expect(h.api.requestDisplayTransport('test', true)).toBe(true);
-    expect(h.sent).toEqual(['saturn_display:spectrum,8192,33;']);
+    expect(h.sent).toEqual(['saturn_display:spectrum,8192,100;']);
     // iq_start waits for the echo, then is flushed, exactly as in WAN.
     expect(h.api.iqStartGated()).toBe(true);
     expect(h.api.sendIqStart()).toBe(false);

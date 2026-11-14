@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::display_spectrum::{
-    clamp_spectrum_fft_size, clamp_spectrum_interval_ms, SpectrumRow, SPECTRUM_DB_OFFSET,
+    clamp_spectrum_fft_size, clamp_spectrum_request_interval_ms, SpectrumRow, SPECTRUM_DB_OFFSET,
     SPECTRUM_DB_STEP, SPECTRUM_FORMAT_U8_DB, TCI_STREAM_SPECTRUM_ROW,
 };
 use crate::radio_model::{
@@ -1628,7 +1628,7 @@ pub(crate) fn parse_display_mode_request(args: &[&str]) -> Option<DisplayMode> {
             let interval_ms = args.get(2)?.trim().parse::<u32>().ok()?;
             Some(DisplayMode::Spectrum {
                 fft_size: clamp_spectrum_fft_size(fft_size),
-                interval_ms: clamp_spectrum_interval_ms(interval_ms),
+                interval_ms: clamp_spectrum_request_interval_ms(fft_size, interval_ms),
             })
         }
         _ => None,

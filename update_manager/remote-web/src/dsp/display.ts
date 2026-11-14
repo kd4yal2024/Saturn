@@ -45,7 +45,7 @@ export { signedPassbandFromUiCuts as displayPassband } from '../radio/passband';
 export function visibleBinsForDisplay(
   bins: Float32Array | null,
   displayZoom: number,
-  output?: Float32Array,
+  output?: Float32Array | ((length: number) => Float32Array),
 ): Float32Array | null {
   if (!bins || bins.length === 0) return bins;
   // Do not force 128 bins into a narrower ruler span on WAN/TX zoom.
@@ -60,8 +60,9 @@ export function visibleBinsForDisplay(
         );
   // An explicitly supplied output is borrowed by its owner until its next
   // use. Default callers (including measurement) keep an independent result.
-  const oriented = output?.length === source.length && output.buffer !== bins.buffer
-    ? output : new Float32Array(source.length);
+  const target = typeof output === 'function' ? output(source.length) : output;
+  const oriented = target?.length === source.length && target.buffer !== bins.buffer
+    ? target : new Float32Array(source.length);
   for (let i = 0; i < source.length; i += 1) {
     oriented[i] = source[source.length - 1 - i] ?? 0;
   }
@@ -76,9 +77,11 @@ export function shiftBinsHorizontally(
   bins: Float32Array | null,
   shiftBins: number,
   fillValue: number,
+  output?: Float32Array,
 ): Float32Array | null {
   if (!bins || bins.length === 0 || shiftBins === 0) return bins;
-  const shifted = new Float32Array(bins.length);
+  const shifted = output?.length === bins.length && output.buffer !== bins.buffer
+    ? output : new Float32Array(bins.length);
   shifted.fill(fillValue);
   if (Math.abs(shiftBins) >= bins.length) return shifted;
   if (shiftBins > 0) {

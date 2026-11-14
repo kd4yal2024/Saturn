@@ -11570,7 +11570,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         return rawBins;
       }
       const avgFrames = clampSpectrumAverage(state.spectrumAverage);
-      let bins = new Float32Array(rawBins.length);
+      // This retained array belongs to the display. Average in place by index;
+      // never use the borrowed input (or an overlapping view) as output.
+      const bins = state.latestBins?.length === rawBins.length && state.latestBins.buffer !== rawBins.buffer
+        ? state.latestBins : new Float32Array(rawBins.length);
       const hasHistory = state.latestBins?.length === rawBins.length;
       const bypassAverage = !hasHistory || state.spectrumAverageBypassFrames > 0;
       if (avgFrames > 1 && !bypassAverage && state.latestBins.length === rawBins.length) {
@@ -11935,6 +11938,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function displayPipelineSnapshot(now = performance.now()) {
+      const profile = displayProfileDiagnostics(now);
       return {
         samples: displayFftProducer.available && !rxSpectrumAccumulator && state.displayRenderSource === "iq"
           ? displayFftProducer.diagnostics().completed : displayTimingBuckets.fft.length,
@@ -11948,8 +11952,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // Browser-local draw submission timing; excludes FPGA/network age
         // and GPU presentation time. No cross-clock latency claim.
         timingScope: "browser-arrival-to-draw-submission",
-        fftSize: state.displayRenderSource === "server" ? state.displayServerFftSize :
-          state.displayLocalFftSize || fftProcessor.size,
+        fftSize: profile.displayFftSize,
         processing: state.displayRenderSource === "server" ? "server-spectrum" :
           rxSpectrumAccumulator ? "main-raw-measurement" :
           displayFftProducer.available ? "worker" : "main",
@@ -11977,7 +11980,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             : null,
         },
         waterfallBackend: waterfallRenderer.backend,
-        ...displayProfileDiagnostics(now),
+        ...profile,
         browserMainLagMs: timingStats(browserTimingBuckets.mainLag),
         browserRafIntervalMs: timingStats(browserTimingBuckets.rafInterval),
         audioQueueMs: audioLeadMs(),
@@ -16004,14 +16007,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     let visibleDisplayScratch = null;
-    function visibleBinsForDisplay(bins) {
-      const zoom = effectiveDisplayZoom();
-      const length = bins?.length ? Math.max(2, Math.floor(bins.length / Math.max(1, zoom))) : 0;
-      if (length && visibleDisplayScratch?.length !== Math.min(length, bins.length)) visibleDisplayScratch = new Float32Array(Math.min(length, bins.length));
-      // Synchronous display-only borrow. History and averaging copy before
-      // the next draw; raw RX Measure uses _visibleBinsForDisplay directly.
-      return _visibleBinsForDisplay(bins, zoom, visibleDisplayScratch);
+    function borrowVisibleDisplayScratch(length) {
+      if (visibleDisplayScratch?.length !== length) visibleDisplayScratch = new Float32Array(length);
+      return visibleDisplayScratch;
     }
+    function visibleBinsForDisplay(bins) {
+      // The helper alone owns the visible-count rule. Only synchronous display
+      // borrows this storage; raw RX Measure still requests an owned result.
+      return _visibleBinsForDisplay(bins, effectiveDisplayZoom(), borrowVisibleDisplayScratch);
+    }
+    let shiftedDisplayScratch = null;
 
     function shiftBinsHorizontally(bins, shiftBins) {
       return _shiftBinsHorizontally(bins, shiftBins, state.displayFloorDb);
@@ -16691,14 +16696,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     function desiredDisplayFftSize() {
       // Preserve existing automatic WAN bandwidth/resolution defaults. Higher
       // resolution is selectable for a matched comparison, not promoted here.
-      const maxFft = displayTransportOverride() === "spectrum" ? _next.SPECTRUM_FFT_MAX : 4096;
+      const maxFft = displayTransportOverride() === "spectrum" ? _next.SPECTRUM_FFT_MAX : _next.SPECTRUM_FFT_AUTOMATIC_MAX;
       return _next.clampSpectrumFftSize(Math.min(maxFft, displayFftTargetSize()));
     }
 
     function desiredDisplayIntervalMs() {
       // Terrain rows run at 10 Hz (100 ms), independently of RAF, preserving the
       // requested display cadence (16,384 bins at 10 Hz is 1.31 Mbit/s payload).
-      return _next.clampSpectrumIntervalMs(state.terrainActive ? 100 : displayRenderIntervalMs());
+      return _next.clampSpectrumRequestIntervalMs(desiredDisplayFftSize(), state.terrainActive ? 100 : displayRenderIntervalMs());
     }
 
     function desiredDisplayCommand() {
@@ -22030,7 +22035,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         if (Number.isFinite(spanHz) && spanHz > 0) {
           const shiftBins = Math.round((centerShiftHz / spanHz) * visibleBins.length);
           if (shiftBins !== 0) {
-            visibleBins = shiftBinsHorizontally(visibleBins, shiftBins, state.displayFloorDb);
+            if (shiftedDisplayScratch?.length !== visibleBins.length) shiftedDisplayScratch = new Float32Array(visibleBins.length);
+            visibleBins = _shiftBinsHorizontally(visibleBins, shiftBins, state.displayFloorDb, shiftedDisplayScratch);
           }
         }
       }
@@ -22116,7 +22122,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // WAN server rows: the payload is already the fftshifted dB spectrum,
         // so buildRenderIqWindow, FftProcessor and the raw-IQ copy are skipped.
         const hasNewRow = state.displayServerRowVersion !== state.lastRenderedServerRowVersion;
-        if (hasNewRow && now - state.lastSpectrumRenderAt >= displayRenderIntervalMs(now) - (state.terrainActive ? 1 : 0)) {
+        // The Bridge already paces rows. Consume the newest accepted row on
+        // the next RAF; another cadence gate can phase-lock a full period late.
+        if (hasNewRow) {
           const drawStartedAt = drawDisplayBins(
             state.displayServerBins,
             now,

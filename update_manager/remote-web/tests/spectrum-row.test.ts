@@ -6,6 +6,8 @@ import {
   SPECTRUM_ROW_STREAM_TYPE,
   clampSpectrumFftSize,
   clampSpectrumIntervalMs,
+  clampSpectrumRequestIntervalMs,
+  SPECTRUM_FFT_AUTOMATIC_MAX,
   dequantizeSpectrumRow,
   parseDisplayEcho,
   parseSpectrumRowHeader,
@@ -70,6 +72,15 @@ describe('spectrum display negotiation helpers', () => {
     expect(clampSpectrumIntervalMs(1)).toBe(33);
     expect(clampSpectrumIntervalMs(1000)).toBe(250);
     expect(clampSpectrumIntervalMs(Number.NaN)).toBe(250);
+  });
+
+  it('bounds large FFT request cadence while preserving lower echoes from older hosts', () => {
+    expect(SPECTRUM_FFT_AUTOMATIC_MAX).toBe(4096);
+    expect(clampSpectrumRequestIntervalMs(4096, 33)).toBe(33);
+    expect(clampSpectrumRequestIntervalMs(8192, 33)).toBe(100);
+    expect(clampSpectrumRequestIntervalMs(16384, 1)).toBe(100);
+    expect(spectrumDisplayCommand(16384, 33)).toBe('saturn_display:spectrum,16384,100;');
+    expect(parseDisplayEcho(['0','spectrum','16384','33'])).toEqual({mode:'spectrum',fftSize:16384,intervalMs:33});
   });
 
   it('builds the frozen command strings', () => {

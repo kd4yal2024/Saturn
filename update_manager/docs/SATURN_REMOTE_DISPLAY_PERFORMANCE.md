@@ -28,7 +28,9 @@ browser terrain FFT ceiling. Older hosts still echo their lower effective size.
 Consequently, compare the **reported effective FFT size** and bin spacing, not just
 requested settings. Raw complex-float32 payload at 384 kS/s is 24.576 Mbit/s;
 4096 eight-bit bins at 30 rows/s are 0.98304 Mbit/s before framing; 16384 bins
-at 30 rows/s are 3.93216 Mbit/s, or 1.31072 Mbit/s at 10 rows/s.
+at a theoretical 30 rows/s are 3.93216 Mbit/s. The current Bridge negotiates
+at least 100 ms for FFTs above 4096, limiting steady-state high-resolution
+groups to 10 rows/s (1.31072 Mbit/s at 16384 bins).
 
 ## Scheduling and ownership
 
@@ -258,3 +260,83 @@ dispatch. The November 13 loopback runs observed up to about 11% more terrain
 draws on the worker. Do not attribute every per-second allocation or CPU
 difference to FFT location. Keep measured rates, regressions and underruns in
 any comparison; no default is promoted by this slice.
+
+## November 14 review corrections
+
+Server rows now draw once on the next RAF after a new accepted row. The Bridge
+already controls production cadence; a second local elapsed-interval gate could
+hold a row nearly a full period at a stable RAF/row phase. Drawing stays in RAF,
+not in the WebSocket callback. Duplicate RAFs do not re-add a held row. The
+November 13 ingress-age results remain preserved as measurements of that older
+browser behavior, not evidence of the server FFT or network cost before ingress.
+
+Display averaging reuses its own retained array, with safe fallback on input
+storage overlap or a width change. It averages by index and preserves peak decay.
+A separate reusable array shifts lagging server rows. Orientation delegates its
+scratch length to the shared helper via an allocator callback, so the template
+no longer repeats the visible-count formula. Raw measurement callers still get
+owned arrays; display history retains a copy before the next reuse. Snapshot
+`fftSize` uses the same guarded effective-size diagnostic as `displayFftSize`,
+including between the echo and the first valid row and after resets.
+
+`SPECTRUM_FFT_AUTOMATIC_MAX` names the preserved 4096-bin automatic WAN cap.
+The Bridge independently clamps **requests above 4096 to at least 100 ms**,
+even for custom clients requesting 33 ms. It echoes the effective interval.
+The existing eight-connection maximum, deduplicated FFT/interval groups,
+latest-row replacement and two-row credit remain in force. This is a request
+cadence bound; it is not a hostile-client load or scheduler qualification.
+Older hosts' actual echoes are still reported faithfully rather than relabelled
+as the new minimum. The comparison harness applies that same requested interval
+to raw/worker cases and continues to report achieved rates separately.
+
+The CM4 offline kernel benchmark uses the production `SpectrumFft` and display
+quantizer, with preallocated synthetic input/output buffers, eight warmups and
+512 samples per size. On the unchanged `ondemand` governor, the 16384-point case
+measured 3.91 ms median / 4.30 ms p99 thread CPU, and 4.14 / 4.71 ms wall time.
+This includes clock-call overhead but excludes acquisition/ring copies,
+allocation, framing, proxy/TLS, WDSP and live multi-client contention. At 10 Hz,
+that kernel alone corresponds to about 3.9% of one core per distinct group at
+its measured median; this arithmetic is not a full host-load measurement.
+The example is `saturn-bridge/examples/display-fft-bench.rs`; build with native
+stubs and `--release --example display-fft-bench`. It has a 20-second time budget
+and opens no radio backend or native DSP channel. Record its source/binary hashes,
+compiler target flags and governor with any result.
+
+The Linux CPU collector now emits `saturn-thread-cpu-baseline-v2`. A thread's
+`cpuPercentOfOneCore` uses its own first-to-last observed interval and is null
+for one observation. `windowCpuPercentOfOneCore` is its measured contribution
+spread over the complete observation window; the sampled total sums those
+contributions, not rates from different intervals. `totalProcessCpuPercentOfOneCore`
+uses `/proc/PID/stat` group counters and includes threads missed between samples.
+CPU before a task's first observation and after its last observation is not
+attributed to that task. Sampling skew and clock-tick quantization can make the
+sampled sum differ slightly from the process total. Task ESRCH/ENOENT reads are
+skipped, while a missing/reused process invalidates the baseline explicitly.
+A new twelve-second G2 observation recorded zero clients and shared-ready-off;
+it is a standby baseline, not an active RX/DSP/PS load measurement.
+
+The display profiler treats a lost/reused fixture process as an invalid case
+with null CPU data. It collects the fixture's log and exit status and preserves
+the case and later cases before exiting nonzero. `--inject-bridge-exit-ms=1000`
+with an explicitly supplied loopback test binary reproduces this failure inside
+the measurement window; it cannot target an installed Bridge. The marker-based
+SAB producer regression now explicitly rejects absent or reordered source
+boundaries. Neither change alters SAB worklet startup semantics.
+
+GitHub CI diagnostics found an active workflow and repository permissions
+reporting enabled, but a manual dispatch was rejected with HTTP 422:
+`Actions has been disabled for this repository.` The latest recorded hosted run
+was November 7. No billing cause was established and no Actions/account settings
+were changed. Local/ARM results must not be labelled as hosted CI success.
+
+The final local November 14 A/B reproduced the old server terrain hold at
+80.6 ms median / 85.1 ms p99, versus 12.6 / 16.1 ms after removing the second
+gate. A reversed server-only repeat measured 75.3 / 77.0 ms before and
+2.3 / 15.6 ms after, with no underruns in either repeat. The matched terrain
+case's instrumented Float32Array backing allocation fell from 1.12 to 0.73 MB/s
+at essentially the same draw count. These are Chrome 153 / SwiftShader replay
+observations, not operating-Windows-GPU or end-to-end RF/network measurements.
+The complete candidate matrix also recorded one server-interactive underrun,
+one worker-2D underrun, and a worse worker-3D p99 than its fresh baseline; retain
+those cases. Neither display defaults nor audio buffering are promoted here.
+The existing staged ARM release `3952d59d` predates these review corrections.

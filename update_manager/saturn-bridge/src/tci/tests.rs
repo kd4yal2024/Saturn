@@ -5348,6 +5348,26 @@ fn spectrum_row_frame_header_matches_wire_contract() {
 }
 
 #[test]
+fn custom_clients_cannot_request_large_ffts_above_the_server_cost_limit() {
+    for size in [8192, 16384, 32768] {
+        assert_eq!(
+            parse_display_mode_request(&["spectrum", &size.to_string(), "33"]),
+            Some(DisplayMode::Spectrum {
+                fft_size: size.min(16384),
+                interval_ms: 100
+            })
+        );
+    }
+    assert_eq!(
+        parse_display_mode_request(&["spectrum", "4096", "33"]),
+        Some(DisplayMode::Spectrum {
+            fft_size: 4096,
+            interval_ms: 33
+        })
+    );
+}
+
+#[test]
 fn maximum_spectrum_row_remains_one_bounded_latest_slot_with_credit() {
     let outbound = ClientOutbound::new();
     for _ in 0..50 {

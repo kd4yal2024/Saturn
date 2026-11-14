@@ -26,6 +26,10 @@ export const SPECTRUM_DISPLAY_IQ_COMMAND = 'saturn_display:iq;';
 
 export const SPECTRUM_FFT_MIN = 256;
 export const SPECTRUM_FFT_MAX = 16384;
+// Automatic WAN retains its existing budget. Explicit larger requests are also
+// paced by the Bridge, independently of what a browser chooses to send.
+export const SPECTRUM_FFT_AUTOMATIC_MAX = 4096;
+export const SPECTRUM_LARGE_FFT_MIN_INTERVAL_MS = 100;
 export const SPECTRUM_INTERVAL_MIN_MS = 33;
 export const SPECTRUM_INTERVAL_MAX_MS = 250;
 
@@ -70,8 +74,13 @@ export function clampSpectrumIntervalMs(requested: number): number {
   return Math.max(SPECTRUM_INTERVAL_MIN_MS, Math.min(SPECTRUM_INTERVAL_MAX_MS, candidate));
 }
 
+export function clampSpectrumRequestIntervalMs(fftSize: number, intervalMs: number): number {
+  return Math.max(clampSpectrumIntervalMs(intervalMs), clampSpectrumFftSize(fftSize) > SPECTRUM_FFT_AUTOMATIC_MAX
+    ? SPECTRUM_LARGE_FFT_MIN_INTERVAL_MS : SPECTRUM_INTERVAL_MIN_MS);
+}
+
 export function spectrumDisplayCommand(fftSize: number, intervalMs: number): string {
-  return `saturn_display:spectrum,${clampSpectrumFftSize(fftSize)},${clampSpectrumIntervalMs(intervalMs)};`;
+  return `saturn_display:spectrum,${clampSpectrumFftSize(fftSize)},${clampSpectrumRequestIntervalMs(fftSize, intervalMs)};`;
 }
 
 export function spectrumDisplayAckCommand(sequence: number): string {
