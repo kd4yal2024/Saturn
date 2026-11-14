@@ -28,14 +28,14 @@ function fixture() {
     bridgeReady: true, remoteClientRole: 'operator', rxHeadphonesSupported: true, txMonitorSupported: true });
   const storage = new Map<string, string>();
   const sent: string[] = [], logs: string[] = [], tasks: Array<() => void> = [];
-  const names = ['bandKeyForFrequency', 'saveBandPanelPreferences', 'currentRadioPrefs', 'applyRadioPrefsObject', 'currentDisplayPrefs',
+  const names = ['bandKeyForFrequency', 'bandPanelGroupForKey', 'setBandPanelGroup', 'saveBandPanelPreferences', 'currentRadioPrefs', 'applyRadioPrefsObject', 'currentDisplayPrefs',
     'currentBandMemoryEntry', 'rememberCurrentBandSettings', 'applyBandMemoryForFrequency',
     'frequencyTuneCommand', 'recallBandFrequency', 'setFrequency', 'recallFrequencyEntryBand', 'recallOperationsBandMemory', 'saveRadioPrefs', 'scheduleRemoteSettingsSave', 'restoreLocalAudioPreferences',
     'sendCurrentRadioPrefsToBridge'];
   const context = {
     state, console, txPowerDraft: new TxPowerDraft(), receiveOnlyValidationSession: false, REMOTE_FIXED_RX_ADC: 0,
     BAND_MEMORY_KEY: 'bandMemory', BAND_PANEL_KEY: 'bandGroup', _bandKeyForFrequency: bandKeyForFrequency, RADIO_PREFS_KEY: 'radioPrefs', REMOTE_SETTINGS_SAVE_DEBOUNCE_MS: 750,
-    remoteSettingsSaveTimer: null,
+    remoteSettingsSaveTimer: null, satpSourceRequestAt: 0,
     localStorage: { setItem: (k: string, v: string) => storage.set(k, v) },
     window: { setTimeout: (f: () => void) => { tasks.push(f); return tasks.length; }, clearTimeout: vi.fn() },
     _next: { radioPrefsFromState, displayPrefsFromState, applyRadioPrefsToState,

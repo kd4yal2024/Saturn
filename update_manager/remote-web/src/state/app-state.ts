@@ -408,7 +408,8 @@ export interface AppState {
   // ── Profiles / Band Memory ──────────────────────────────────────────────
   remoteProfiles: Record<string, unknown>;
   bandMemory: Record<string, unknown>;
-  bandPanelGroup: 'ham' | 'swl';
+  bandPanelGroup: 'ham' | 'swl' | 'general';
+  // Memory namespaces stay compatible: General 11m/FM use the non-SWL keys.
   bandMemoryGroup: 'ham' | 'swl';
   applyingBandMemory: boolean;
 

@@ -7,9 +7,10 @@ band restore its setup. Tuning keeps the requested frequency; a band button
 recalls the last frequency used on that band.
 Ham HF and SWL have separate memories, including their overlapping frequency
 ranges. Clicking the current band keeps its latest frequency and settings.
-The HF-bank 11m memory includes 27 MHz; it is separate from the SWL 11m
-broadcast memory around 25.9 MHz. Use the HF-bank 11m button to return to the
-last 27 MHz frequency and settings.
+Ham HF lists the eleven amateur bands. General lists the 27 MHz 11m operating
+memory and broadcast FM. Moving those buttons preserves their existing memory
+keys and settings. General 11m is separate from SWL 11m around 25.9 MHz. Use
+General → 11m to return to the last 27 MHz frequency and settings.
 
 Connected recall sends the destination frequency and operating preferences in
 one ordered settings transaction. The requested memory is retained while the
@@ -18,13 +19,15 @@ band recall does not replace a memory with intermediate host readback. This
 keeps rapid band changes from saving the previous band's mode or power under
 the new band's frequency. Applied/rejected results remain host reports.
 
-A rejected recall retains its requested memory. A fresh band or Operations
-memory selection can submit a replacement after a matched pre-queue
-`InvalidConfig` rejection and a clean, fault-free RX owner report. It still
-waits for a real applied receipt. Native/transport faults, queued failures,
+A rejected recall retains its requested memory. A fresh band, Operations
+memory or TX audio-source selection can submit a replacement after a matched
+pre-queue `InvalidConfig` or `CleanupPending` rejection and a clean, fault-free
+RX owner report. It still waits for a real applied receipt. Native/transport faults, queued failures,
 unknown completions and unfinished cleanup retain the existing fault behavior.
 An unsupported receive mode is still reported as rejected; this recovery does
-not add mode support or retry/key a transmission.
+not add mode support or retry/key a transmission. Source rejections clear the
+selector waiting indicator and report the rejected receipt. Browser/Native
+source changes require their own queued/applied receipts and do not key TX.
 
 Memories include frequency, RX antenna and attenuation, mode, RX/TX filters and
 RX filter shift, receiver volume, squelch, AGC, NR/NB/notch processing, RX/TX EQ,

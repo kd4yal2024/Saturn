@@ -13,7 +13,7 @@ function fixture() {
   const state = { micCapturing: false, txMicLevel: 0.3, txMicLevelVisual: 0.3,
     txMicLevelAt: 100, moxRequested: false, psMeasurementOwned: false };
   const changed = runInNewContext(`(${callback}\n})`, {
-    state, txPowerDraft: new TxPowerDraft(), $: () => null, scheduleUiRefresh() {}, setPtt() {},
+    state, satpSourceRequestAt: 0, txPowerDraft: new TxPowerDraft(), $: () => null, scheduleUiRefresh() {}, setPtt() {},
     setTxMediaPriority() {}, recoverRxAfterMox() {},
   }) as (status: Record<string, unknown>) => void;
   return { state, changed };

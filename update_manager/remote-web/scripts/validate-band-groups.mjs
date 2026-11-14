@@ -74,12 +74,13 @@ const selectGroup = async group => {
 const selectedGroup = group => evaluate(`(() => {
   const tabs = [...document.querySelectorAll('#band-group-tabs [role="tab"]')];
   const panel = document.getElementById('band-group-panel');
-  return tabs.length === 2 && tabs.every(tab => {
+  return tabs.length === 3 && tabs.every(tab => {
     const selected = tab.dataset.bandTab === '${group}';
     return tab.getAttribute('aria-selected') === String(selected) && tab.tabIndex === (selected ? 0 : -1);
   }) && panel.getAttribute('aria-labelledby') === 'band-tab-${group}';
 })()`);
 const clickBand = async (group, name) => {
+  if(!await selectedGroup(group))await selectGroup(group);
   await evaluate(`document.querySelector('#band-grid [data-band-group="${group}"][data-band="${name}"]').click()`);
   await pause(100);
 };
@@ -94,7 +95,7 @@ try {
   await command('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false},session);
   await command('Page.navigate',{url:`http://127.0.0.1:${server.address().port}/`},session);
   check('Actual radio runtime initializes',await ready());
-  check('HF is the initial tab with thirteen buttons including 27 MHz 11m',await selectedGroup('ham') && await evaluate(`document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===13 && !!document.querySelector('#band-grid [data-band-group="ham"][data-band="27385000"]')`));
+  check('Ham HF contains only the eleven amateur-band buttons',await selectedGroup('ham') && await evaluate(`document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===11 && !document.querySelector('#band-grid [data-band-group="ham"][data-band="27385000"]') && !document.querySelector('#band-grid [data-band-group="ham"][data-band="99500000"]')`));
   check('Band tabs share the RX tab appearance and replace the visible dropdown',await evaluate(`(() => {
     const tab = document.getElementById('band-tab-ham');
     const rx = document.getElementById('control-tab-rx');
@@ -123,15 +124,15 @@ try {
   check('Clicking the current SWL band retains its latest tune and mode',await evaluate(`state.vfoA===6085500 && state.mode==='SAM' && state.rxAttenuationDb===20`));
   await selectGroup('ham');await clickBand('ham','7150000');
   check('HF last-used frequency, mode and attenuation still recall',await evaluate(`state.vfoA===7198300 && state.mode==='LSB' && state.rxAttenuationDb===0`));
-  await clickBand('ham','27385000');
+  await clickBand('general','27385000');
   await evaluate(`setFrequency(27435000);document.querySelector('#mode-grid [data-mode="LSB"]').click();Object.assign(state,{txDrive:40,txMicGainDb:3,displayZoom:5});saveRadioPrefs()`);
   await attenuation(10);
   await clickBand('ham','7150000');
-  await clickBand('ham','27385000');
+  await clickBand('general','27385000');
   check('27 MHz 11m returns from 40m with its last frequency and operating settings',await evaluate(`state.vfoA===27435000 && state.mode==='LSB' && state.rxAttenuationDb===10 && state.txDrive===40 && state.txMicGainDb===3 && state.displayZoom===5 && document.querySelector('#band-grid .band-btn.active').dataset.band==='27385000' && frequencyEntryBandForHz(state.vfoA)?.label==='11m'`));
   await selectGroup('swl');await clickBand('swl','25900000');
   await evaluate(`setFrequency(25950000);document.querySelector('#mode-grid [data-mode="SAM"]').click()`);await attenuation(20);
-  await selectGroup('ham');await clickBand('ham','27385000');
+  await selectGroup('ham');await clickBand('general','27385000');
   check('27 MHz 11m and 25.9 MHz SWL 11m save separate memories',await evaluate(`state.vfoA===27435000 && state.mode==='LSB' && state.rxAttenuationDb===10 && state.bandMemory['11m'].frequency===27435000 && state.bandMemory['SWL 11m'].frequency===25950000 && state.bandMemory['SWL 11m'].radioPrefs.mode==='SAM'`));
   await evaluate(`setFrequency(3950000);document.querySelector('#mode-grid [data-mode="LSB"]').click()`);await attenuation(10);
   await selectGroup('swl');await clickBand('swl','3950000');
@@ -146,15 +147,19 @@ try {
   check('Operations recall keeps overlapping HF and SWL frequency/settings separate',await evaluate(`state.vfoA===3975000 && state.mode==='SAM' && state.rxAttenuationDb===20 && state.bandMemoryGroup==='swl' && state.bandMemory['80m'].frequency===3950000`));
   await command('Page.reload',{},session);check('Reload restores the remembered SWL tab',await ready() && await selectedGroup('swl') && await evaluate(`document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===15`));
   await evaluate(`document.getElementById('band-tab-swl').focus();document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true,cancelable:true}))`);
-  check('Left arrow activates and focuses Ham HF',await selectedGroup('ham') && await evaluate(`document.activeElement.id==='band-tab-ham'`));
+  check('Left arrow activates and focuses General',await selectedGroup('general') && await evaluate(`document.activeElement.id==='band-tab-general'`));
+  await evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true,cancelable:true}))`);
+  check('Home activates and focuses Ham HF',await selectedGroup('ham') && await evaluate(`document.activeElement.id==='band-tab-ham'`));
   await evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown',{key:'End',bubbles:true,cancelable:true}))`);
   check('End activates and focuses SWL',await selectedGroup('swl') && await evaluate(`document.activeElement.id==='band-tab-swl'`));
   await clickBand('swl','3950000');
   check('SWL last-used frequency/mode/settings survive a page reload',await evaluate(`state.vfoA===3975000 && state.mode==='SAM' && state.rxAttenuationDb===20`));
   await selectGroup('ham');await clickBand('ham','7150000');
   check('HF last-used frequency survives a page reload',await evaluate(`state.vfoA===7198300 && state.mode==='LSB' && state.rxAttenuationDb===0`));
+  await evaluate(`openFrequencyEntry()`);
+  check('Keypad keeps the 11m recall visible independently of the Ham HF panel',await evaluate(`document.querySelector('[data-freq-band="27385000"]').getClientRects().length>0`));
   await evaluate(`document.querySelector('[data-freq-band="27385000"]').click()`);
-  check('27 MHz 11m last frequency and settings survive reload and keypad recall',await evaluate(`state.vfoA===27435000 && state.mode==='LSB' && state.rxAttenuationDb===10 && state.txDrive===40 && state.txMicGainDb===3 && state.displayZoom===5`));
+  check('27 MHz 11m last frequency and settings survive reload and keypad recall',await evaluate(`state.vfoA===27435000 && state.mode==='LSB' && state.rxAttenuationDb===10 && state.txDrive===40 && state.txMicGainDb===3 && state.displayZoom===5&&state.bandPanelGroup==='general'`));
   await selectGroup('swl');await clickBand('swl','25900000');
   check('SWL 11m still recalls its separate broadcast frequency after reload',await evaluate(`state.vfoA===25950000 && state.mode==='SAM' && state.rxAttenuationDb===20`));
   await selectGroup('swl');await clickBand('swl','3950000');
@@ -165,11 +170,15 @@ try {
   await command('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true},session);await pause(300);
   await evaluate(`document.getElementById('band-group-tabs').scrollIntoView({block:'center'})`);
   check('SWL remains usable on a phone without overflowing its panel',await evaluate(`(()=>{const s=document.getElementById('band-group-tabs'),g=document.getElementById('band-grid'),r=s.getBoundingClientRect();return r.width>0 && r.right<=innerWidth && r.left>=0 && g.scrollWidth<=g.clientWidth+1 && [...g.querySelectorAll('.band-btn')].some(b=>!b.hidden && b.getClientRects().length)})()`));
-  await selectGroup('ham');check('Phone can return to the thirteen-band HF bank',await evaluate(`document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===13`));
+  await selectGroup('ham');check('Phone can return to the eleven-band HF bank',await evaluate(`document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===11`));
+  await selectGroup('general');
+  check('General contains 11m and broadcast FM independently of Ham HF and SWL',await evaluate(`document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===2&&[...document.querySelectorAll('#band-grid .band-btn:not([hidden])')].every(b=>b.dataset.bandGroup==='general')`));
   await evaluate(`if(!document.querySelector('#band-grid [data-band="27385000"]').getClientRects().length)document.getElementById('band-more-btn').click()`);await pause(100);
-  check('Phone More bands exposes the 27 MHz 11m button',await evaluate(`document.querySelector('#band-grid [data-band="27385000"]').getClientRects().length>0`));
-  await clickBand('ham','27385000');
+  check('General exposes the 27 MHz 11m button on phones',await evaluate(`document.querySelector('#band-grid [data-band="27385000"]').getClientRects().length>0`));
+  await clickBand('general','27385000');
   check('Phone 11m recall keeps its last frequency and settings',await evaluate(`state.vfoA===27435000 && state.mode==='LSB' && state.txDrive===40 && state.rxAttenuationDb===10`));
+  await command('Page.reload',{},session);
+  check('General tab and existing 11m memory survive reload',await ready() && await selectedGroup('general') && await evaluate(`state.bandMemory['11m'].frequency===27435000`));
   await selectGroup('swl');
   const mobile=await command('Page.captureScreenshot',{format:'png'},session);writeFileSync(join(output,'swl-phone.png'),Buffer.from(mobile.data,'base64'));
   check('Band navigation opened no connection, microphone or TX session',await evaluate(`window.__sockets===0 && window.__media===0 && state.txPhase==='rx' && !state.twoToneEnabled`));
@@ -196,7 +205,8 @@ try {
       const config=++window.__bandConfig,serial=++window.__bandSerial;
       handleTciText('tx_config:0,'+config+',queued,'+config+';');
       window.__bandHost=_next.applyTciText(text,window.__bandHost).state;const h=window.__bandHost;
-      handleTciText('saturn_tx_owner:shared,'+serial+',ReadyOff,'+serial+','+config+',tci,true,none;saturn_tx_committed_drive:0,'+config+','+h.txDrive+';'
+      const source=/saturn_satp_control:(tci|satp);/.exec(text)?.[1]||h.satp?.source||'tci';h.satp={...h.satp,source};
+      handleTciText('saturn_tx_owner:shared,'+serial+',ReadyOff,'+serial+','+config+','+source+',true,none;saturn_tx_committed_drive:0,'+config+','+h.txDrive+';saturn_satp_state:'+source+',true,true,true,healthy,-12.0,512,0,1,false;'
         +'vfo:0,0,'+h.vfoA+';vfo:0,1,'+h.vfoB+';dds:0,'+h.dds+';modulation:0,'+h.mode+';tx_drive:0,'+h.txDrive+';rx_attenuation:0,'+h.rxAttenuationDb+';tx_config:0,'+config+',applied,'+config+';');
       return true;
     };
@@ -209,10 +219,10 @@ try {
   check('Pending host readback cannot overwrite destination band memory',await evaluate(`state.bandMemory['40m'].radioPrefs.mode==='USB'&&state.bandMemory['40m'].radioPrefs.txDrive===50`));
   check('Connected band recall sends tuning and saved settings in one transaction',atomicBandRecall);
   check('HTTP autosave waits for the connected settings receipts',settingsWrites.length===0);
-  await clickBand('ham','27385000');
+  await clickBand('general','27385000');
   check('Rapid return preserves the previous destination memory despite old echoes',await evaluate(`state.bandMemory['40m'].radioPrefs.mode==='USB'&&state.bandMemory['40m'].radioPrefs.txDrive===50`));
   await evaluate(`setFrequency(27435000)`);
-  await clickBand('ham','7150000');await clickBand('ham','27385000');
+  await clickBand('ham','7150000');await clickBand('general','27385000');
   check('A fresh VFO tune survives switching away while host settings are pending',await evaluate(`state.vfoA===27435000&&state.bandMemory['11m'].frequency===27435000&&state.bandMemory['11m'].radioPrefs.txDrive===60`));
   for(let n=0;n<20;n++){await evaluate(`__completeBand()`);await pause(120);if(await evaluate(`managedPcm.status().pendingSettings===0`))break;}
   check('Connected band queue completes without fault or keying',await evaluate(`managedPcm.status().phase==='ready'&&managedPcm.status().pendingSettings===0&&state.txPhase==='rx'&&state.txDrive===60&&state.mode==='LSB'`));
@@ -220,7 +230,7 @@ try {
   check('Settled HTTP save retains distinct 11m and 40m settings',settingsWrites.at(-1)?.bandMemory?.['11m']?.radioPrefs?.txDrive===60&&settingsWrites.at(-1)?.bandMemory?.['40m']?.radioPrefs?.txDrive===50&&settingsWrites.at(-1)?.bandMemory?.['40m']?.radioPrefs?.mode==='USB');
   // A rejected receive-mode recall must not strand every subsequent memory.
   await evaluate(`state.rxWbfmSupported=true;state.bandMemory.FM={frequency:99500000,radioPrefs:{...currentRadioPrefs(),mode:'WFM'},displayPrefs:currentDisplayPrefs(),displayZoom:2};updateUi()`);
-  await clickBand('ham','99500000');
+  await clickBand('general','99500000');
   await evaluate(`(() => {
     if(!__bandPending.shift())throw Error('Missing rejected FM request');
     const id=++__bandConfig;
@@ -234,15 +244,27 @@ try {
   await pause(100);
   check('Explicit valid band recall reaches the host after a rejected mode',await evaluate(`__bandPending.some(s=>s.includes('vfo:0,0,7262000;')&&s.includes('modulation:0,USB;'))`));
   for(let n=0;n<20;n++){await evaluate(`__completeBand()`);await pause(120);if(await evaluate(`managedPcm.status().pendingSettings===0`))break;}
-  check('40m restores its own settings after rejected FM recall',await evaluate(`managedPcm.status().phase==='ready'&&state.vfoA===7262000&&state.mode==='USB'&&state.txDrive===50&&state.rxAttenuationDb===10`));
-  await clickBand('ham','27385000');
+  check('40m restores its own settings after rejected FM recall',await evaluate(`managedPcm.status().phase==='ready'&&state.vfoA===7262000&&state.mode==='USB'&&state.txDrive===50&&state.rxAttenuationDb===10&&state.bandPanelGroup==='ham'`));
+  await clickBand('general','27385000');
   for(let n=0;n<20;n++){await evaluate(`__completeBand()`);await pause(120);if(await evaluate(`managedPcm.status().pendingSettings===0`))break;}
   check('11m restores its distinct settings after rejected FM recall',await evaluate(`managedPcm.status().phase==='ready'&&state.vfoA===27435000&&state.mode==='LSB'&&state.txDrive===60&&state.rxAttenuationDb===0`));
+  // Actual source selector, managed transaction, rejection and host echo.
+  await evaluate(`handleTciText('saturn_satp_state:tci,true,true,true,healthy,-12.0,512,0,1,false;');updateUi();
+    window.__selectSource=value=>{const select=document.getElementById('tx-audio-source');select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}))};__selectSource('satp')`);
+  await evaluate(`(()=>{const text=__bandPending.shift();if(text!=='saturn_satp_control:satp;')throw Error('Native source selector did not dispatch');const id=++__bandConfig;handleTciText('tx_config:0,'+id+',rejected,CleanupPending,0;tx_fault:0,shared_config,CleanupPending;')})()`);
+  check('Source rejection clears the pending selector and remains explicit',await evaluate(`satpSourceRequestAt===0&&managedPcm.status().lastTransaction.includes('rejected (CleanupPending)')`));
+  await evaluate(`handleTciText('saturn_satp_state:tci,true,true,true,healthy,-12.0,512,0,1,false;');updateUi();__selectSource('tci')`);
+  await evaluate(`__completeBand()`);await pause(120);
+  check('Browser mic selection recovers after an explicitly rejected Native request',await evaluate(`managedPcm.status().phase==='ready'&&managedPcm.status().source==='tci'&&state.satp.source==='tci'`));
+  await evaluate(`handleTciText('saturn_satp_state:tci,true,true,true,healthy,-12.0,512,0,1,false;');updateUi();__selectSource('satp');__completeBand()`);await pause(120);
+  check('Native source selection returns after real queued/applied receipts',await evaluate(`managedPcm.status().phase==='ready'&&managedPcm.status().source==='satp'&&state.satp.source==='satp'`));
+  await evaluate(`handleTciText('saturn_satp_state:satp,true,true,true,healthy,-12.0,512,0,1,false;');updateUi();__selectSource('tci');__completeBand()`);await pause(120);
+  check('Browser source returns on 11m without changing its voice settings or keying',await evaluate(`state.vfoA===27435000&&state.mode==='LSB'&&state.txDrive===60&&managedPcm.status().source==='tci'&&state.txPhase==='rx'`));
   check('Connected fixture requested no RF, microphone or TX media',await evaluate(`__sockets===0&&__media===0&&state.txPhase==='rx'&&__bandWire.every(s=>!s.includes('trx:0,true'))`));
   await evaluate(`state.connected=false;state.ws=null;managedPcm.disconnect()`);
   await command('Page.reload',{},session);check('Connected band memories reload from HTTP storage',await ready());
   await clickBand('ham','7150000');check('Reloaded 40m memory keeps its own committed settings',await evaluate(`state.vfoA===7262000&&state.mode==='USB'&&state.txDrive===50&&state.rxAttenuationDb===10`));
-  await clickBand('ham','27385000');check('Reloaded 11m memory keeps its latest frequency and committed settings',await evaluate(`state.vfoA===27435000&&state.mode==='LSB'&&state.txDrive===60&&state.rxAttenuationDb===0`));
+  await clickBand('general','27385000');check('Reloaded 11m memory keeps its latest frequency and committed settings',await evaluate(`state.vfoA===27435000&&state.mode==='LSB'&&state.txDrive===60&&state.rxAttenuationDb===0`));
   writeFileSync(join(output,'report.json'),JSON.stringify({passed:true,checks,source:'actual shipped Remote runtime; offline browser, no radio connected'},null,2)+'\n');
   console.log(`Ham/SWL band panel: ${checks.length} checks passed. ${output}`);
 } catch(error){

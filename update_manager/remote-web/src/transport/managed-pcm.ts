@@ -142,7 +142,7 @@ export class ManagedPcmSession {
   private tuningEchoTargets = new Map<string, string>();
   private faultReleaseSent = false;
   // A matched pre-queue validation rejection installed no configuration.
-  // Only a fresh explicit navigation request may replace it, after the owner
+  // Only a fresh explicit navigation/source request may replace it, after the owner
   // reports clean RX. Transport/native faults never acquire this recovery.
   private settingsRejection: 'awaiting-receipt' | 'confirmed' | null = null;
   private ackSupported = false;
@@ -335,7 +335,8 @@ export class ManagedPcmSession {
       && !navigationCommands.some(c => /^(?:trx|tx_source|tx_audio_source|saturn_|tx_two_tone)/.test(c));
     const key = navigation ? 'navigation' : tune ?? attenuation ?? autoAtt ?? powerKey(text);
     if (this.selected && managedSettingsMessage(text)) {
-      if (navigation && this.phase === 'fault' && this.settingsRejection === 'confirmed'
+      const sourceSelection = /^saturn_satp_control:(?:tci|satp);?$/.test(text.trim());
+      if ((navigation || sourceSelection) && this.phase === 'fault' && this.settingsRejection === 'confirmed'
         && this.operator && this.bridgeReady && this.supported && this.accepted
         && !this.requested && !this.measurement && !this.twoTone && this.ackPending === null
         && this.owner?.phase === 'ReadyOff' && this.owner.clean && this.owner.fault === 'none'
@@ -345,7 +346,7 @@ export class ManagedPcmSession {
         // Submit a new transaction; neither readiness nor output authority is
         // inferred from the rejected request. Real receipts still gate both.
         this.settingsRejection = null; this.faultReleaseSent = false;
-        this.phase = 'releasing'; this.reason = 'New band request after rejected settings; awaiting host result';
+        this.phase = 'releasing'; this.reason = 'New band or source request after rejected settings; awaiting host result';
       }
       if (['fault', 'unsupported', 'unavailable'].includes(this.phase)
         && !((tune || (attenuation && this.faultedAttenuationSupported && this.manualAttenuationSupported)
@@ -666,7 +667,7 @@ export class ManagedPcmSession {
         if (!this.accepted) this.fail('Managed session requires PCM acceptance; no Opus fallback');
       }
       if (c.startsWith('tx_fault:') && c !== 'tx_fault:0,psg1,GenerationMismatch')
-        this.fail(`Bridge fault: ${c.slice(9)}`, c === 'tx_fault:0,shared_config,InvalidConfig');
+        this.fail(`Bridge fault: ${c.slice(9)}`, /^tx_fault:0,shared_config,(?:InvalidConfig|CleanupPending)$/.test(c));
       if (c.startsWith('tx_config:')) this.transaction(c);
       if (c.startsWith('saturn_shared_control_reject:'))
         this.lastTransaction = `Host control unavailable: ${c.slice('saturn_shared_control_reject:'.length)}`;
@@ -811,7 +812,7 @@ export class ManagedPcmSession {
       this.lastTransaction = `Settings ${id}: ${outcome}${reason ? ` (${reason})` : ''}; ${prequeueRejected ? 'before queueing' : `configuration ${config}`}`;
       if (outcome === 'applied') this.appliedConfig = config!;
       if (outcome === 'rejected') {
-        this.fail(this.lastTransaction, Boolean(prequeueRejected && reason === 'InvalidConfig'));
+        this.fail(this.lastTransaction, Boolean(prequeueRejected && ['InvalidConfig', 'CleanupPending'].includes(reason!)));
         if (this.settingsRejection !== null) this.settingsRejection = 'confirmed';
       }
     }

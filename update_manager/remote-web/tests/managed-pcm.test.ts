@@ -24,6 +24,25 @@ function setup(capture?: ManagedCaptureFactory) {
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 describe('selectable managed PCM controller', () => {
   const recall = 'vfo:0,0,7262000;dds:0,7262000;modulation:0,LSB;tx_drive:0,40;';
+  it.each(['InvalidConfig', 'CleanupPending'])('permits explicit browser-source return after a rejected Native selection: %s', reason=>{
+    const h=setup();h.ready();h.session.sendControl('saturn_satp_control:satp;');
+    h.session.text(`tx_config:0,1,rejected,${reason},0;tx_fault:0,shared_config,${reason};`,h.epoch);
+    expect(h.session.arm('tci')).toBe(false);
+    h.session.sendControl('saturn_satp_control:tci;');
+    expect(h.control.at(-1)).toBe('saturn_satp_control:tci;');expect(h.session.arm('tci')).toBe(false);
+    h.session.text('tx_config:0,2,queued,12;saturn_tx_owner:shared,2,ReadyOff,3,12,tci,true,none;tx_config:0,2,applied,12;',h.epoch);
+    expect(h.session.status().phase).toBe('ready');expect(h.session.status().source).toBe('tci');
+    h.session.sendControl('saturn_satp_control:satp;');
+    h.session.text('tx_config:0,3,queued,13;saturn_tx_owner:shared,3,ReadyOff,4,13,satp,true,none;tx_config:0,3,applied,13;',h.epoch);
+    expect(h.session.status().source).toBe('satp');expect(h.control).not.toContain('trx:0,true;');expect(h.media).toHaveLength(0);
+  });
+  it.each(['SevereOverdrive','Stale','QueueOverrun'])('does not recover source selection after a real owner fault: %s', fault=>{
+    const h=setup();h.ready();h.session.sendControl('saturn_satp_control:satp;');
+    h.session.text('tx_config:0,1,rejected,InvalidConfig,0;',h.epoch);
+    h.session.text(`saturn_tx_owner:shared,2,ReadyOff,3,11,tci,true,${fault};`,h.epoch);
+    const before=h.control.length;h.session.sendControl('saturn_satp_control:tci;');
+    expect(h.control.slice(before)).not.toContain('saturn_satp_control:tci;');expect(h.session.arm('tci')).toBe(false);
+  });
   it.each(['receipt-first', 'fault-first'])('allows a fresh band request after matched pre-queue rejection, %s', order => {
     const h=setup();h.ready();
     h.session.sendControl('vfo:0,0,99500000;dds:0,99500000;modulation:0,WFM;', {navigation:true});

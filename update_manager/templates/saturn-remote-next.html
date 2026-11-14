@@ -7985,11 +7985,13 @@
               <div>
                 <div class="band-group-tabs" id="band-group-tabs" role="tablist" aria-label="Band group">
                   <button class="context-tab" id="band-tab-ham" data-band-tab="ham" type="button" role="tab" aria-selected="true" aria-controls="band-group-panel">Ham HF</button>
+                  <button class="context-tab" id="band-tab-general" data-band-tab="general" type="button" role="tab" aria-selected="false" aria-controls="band-group-panel" tabindex="-1">General</button>
                   <button class="context-tab" id="band-tab-swl" data-band-tab="swl" type="button" role="tab" aria-selected="false" aria-controls="band-group-panel" tabindex="-1">SWL</button>
                 </div>
                 <!-- Shared settings control for the Settings pop-out. -->
                 <select id="band-group" aria-label="Band group" hidden>
                   <option value="ham">Ham HF</option>
+                  <option value="general">General</option>
                   <option value="swl">SWL</option>
                 </select>
                 <div id="band-group-panel" role="tabpanel" aria-labelledby="band-tab-ham">
@@ -8003,10 +8005,10 @@
                     <button class="band-btn" data-band-group="ham" data-band="18120000" type="button" role="radio" aria-checked="false">17m</button>
                     <button class="band-btn" data-band-group="ham" data-band="21300000" type="button" role="radio" aria-checked="false">15m</button>
                     <button class="band-btn" data-band-group="ham" data-band="24940000" type="button" role="radio" aria-checked="false">12m</button>
-                    <button class="band-btn" data-band-group="ham" data-band="27385000" type="button" role="radio" aria-checked="false" title="11m / 27 MHz operating memory">11m</button>
+                    <button class="band-btn" data-band-group="general" data-band="27385000" type="button" role="radio" aria-checked="false" title="11m / 27 MHz operating memory" hidden>11m</button>
                     <button class="band-btn" data-band-group="ham" data-band="28400000" type="button" role="radio" aria-checked="false">10m</button>
                     <button class="band-btn" data-band-group="ham" data-band="50150000" type="button" role="radio" aria-checked="false">6m</button>
-                    <button class="band-btn" data-band-group="ham" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false">FM</button>
+                    <button class="band-btn" data-band-group="general" data-band="99500000" data-mode="WFM" type="button" role="radio" aria-checked="false" hidden>FM</button>
                     <button class="band-btn" data-band-group="swl" data-band="1000000" data-mode="AM" type="button" role="radio" aria-checked="false" title="LW/MW broadcast · 0.15–1.71 MHz" hidden>LW/MW</button>
                     <button class="band-btn" data-band-group="swl" data-band="2400000" data-mode="AM" type="button" role="radio" aria-checked="false" title="120m broadcast · 2.3–2.495 MHz" hidden>120m</button>
                     <button class="band-btn" data-band-group="swl" data-band="3300000" data-mode="AM" type="button" role="radio" aria-checked="false" title="90m broadcast · 3.2–3.4 MHz" hidden>90m</button>
@@ -8142,7 +8144,7 @@
                 if (selected) byId('band-group-panel').setAttribute('aria-labelledby', tab.id);
               }
               canonicalBands.forEach(button => { button.hidden = button.dataset.bandGroup !== bandGroup.value; });
-              bandGrid.setAttribute('aria-label', bandGroup.value === 'swl' ? 'SWL bands' : 'Ham HF bands');
+              bandGrid.setAttribute('aria-label', bandGroup.value === 'swl' ? 'SWL bands' : bandGroup.value === 'general' ? 'General bands' : 'Ham HF bands');
               applyRecentBandOrder();
             }
             for (const [index, tab] of bandTabs.entries()) {
@@ -12770,7 +12772,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       rememberCurrentBandSettings({ requireSettled: true });
       state.bandMemoryGroup = key.startsWith("SWL ") ? "swl" : "ham";
-      saveBandPanelPreferences();
+      setBandPanelGroup(bandPanelGroupForKey(key));
       recallBandFrequency(targetHz);
       resumeRxMediaAfterBandChange("operations memory");
       persistLocalSettingsFallback(currentRemoteSettings());
@@ -13520,7 +13522,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       const savedEntry = newBandKey ? state.bandMemory[newBandKey] : null;
       const targetHz = (savedEntry && savedEntry.frequency > 0) ? savedEntry.frequency : buttonHz;
       state.bandMemoryGroup = "ham";
-      saveBandPanelPreferences();
+      setBandPanelGroup(bandPanelGroupForKey(newBandKey));
       recallBandFrequency(targetHz, button.dataset.freqMode);
       resumeRxMediaAfterBandChange("band recall");
       persistLocalSettingsFallback(currentRemoteSettings());
@@ -14126,13 +14128,16 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       try { localStorage.setItem(BAND_PANEL_KEY, JSON.stringify({ panel: state.bandPanelGroup, memory: state.bandMemoryGroup })); } catch {}
     }
     function setBandPanelGroup(value, persist = true) {
-      state.bandPanelGroup = _next.normalizeBandGroup(value);
+      state.bandPanelGroup = value === "general" ? "general" : _next.normalizeBandGroup(value);
       const select = $("band-group");
       if (select) {
         select.value = state.bandPanelGroup;
         select.dispatchEvent(new Event("bandgroupchange"));
       }
       if (persist) saveBandPanelPreferences();
+    }
+    function bandPanelGroupForKey(key) {
+      return key.startsWith("SWL ") ? "swl" : ["11m", "FM"].includes(key) ? "general" : "ham";
     }
     function bandKeyForFrequency(hz) {
       return _bandKeyForFrequency(hz, state.bandMemoryGroup);
@@ -18570,6 +18575,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent(`Managed microphone startup: acquisition=${timing.acquisitionMs.toFixed(0)} ms graph=${timing.graphReadyMs.toFixed(0)} ms first-frame=${timing.firstFrameMs.toFixed(0)} ms base-latency=${timing.baseLatencyMs.toFixed(1)} ms (browser clock)`);
       }),
       changed: status => {
+        if (satpSourceRequestAt && status.lastTransaction.includes(": rejected")) {
+          satpSourceRequestAt = 0;
+          logEvent(`TX audio source request rejected: ${status.lastTransaction}`);
+        }
         if (status.selected) {
           // The managed owner creates its own microphone graph. Reflect that
           // capture in the existing meters without starting a Legacy graph.
@@ -21334,7 +21343,10 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       syncTciUiSideEffects(previous, result.state, result);
       if (managedPcmSelected()) managedPcm.setOperator(state.remoteClientRole === "operator");
       hardwarePtt.text(text);
-      if (state.satp && !state.satp.pending && state.satp.source === satpRequestedSource) satpSourceRequestAt = 0;
+      if (state.satp && !state.satp.pending && state.satp.source === satpRequestedSource) {
+        if (satpSourceRequestAt) logEvent(`TX audio source host report: ${state.satp.source === "satp" ? "Native SATP" : "Browser Microphone"}`);
+        satpSourceRequestAt = 0;
+      }
       if (!previous.satp?.paired && state.satp?.paired) scheduleNextBridgeRttPing();
       if (previous.satp?.source !== "satp" && state.satp?.source === "satp") stopMicCapture();
       scheduleUiRefresh();
@@ -23642,6 +23654,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         satpRequestedSource = $("tx-audio-source").value;
         satpSourceRequestAt = performance.now();
         sendTci(`saturn_satp_control:${satpRequestedSource};`);
+        logEvent(`TX audio source requested: ${satpRequestedSource === "satp" ? "Native SATP" : "Browser Microphone"}`);
         updateSatpUi();
       });
       $("satp-pair-btn").addEventListener("click", () => {
