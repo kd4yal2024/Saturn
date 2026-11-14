@@ -17,9 +17,10 @@ import { build } from 'esbuild';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
-const outFile = resolve(root, '../saturn-bridge/src/testdata/fft_parity_2048.json');
+const outFile = resolve(process.argv.find(a=>a.startsWith('--output='))?.slice(9) || resolve(root, '../saturn-bridge/src/testdata/fft_parity_2048.json'));
 
-const FFT_SIZE = 2048;
+const FFT_SIZE = Number(process.argv.find(a=>a.startsWith('--fft-size='))?.slice(11) || 2048);
+if(!Number.isInteger(FFT_SIZE)||FFT_SIZE<256||FFT_SIZE>16384||(FFT_SIZE&(FFT_SIZE-1)))throw Error('FFT size must be a power of two in 256..16384');
 const SAMPLE_RATE_HZ = 384_000;
 
 // Deterministic PRNG so regenerating the fixture is byte-identical.

@@ -5048,6 +5048,28 @@ fn display_negotiation_clamps_echoes_and_reverts() {
         vec!["saturn_display:0,spectrum,2048,33;".to_string()]
     );
 
+    // The negotiated size bounds the worker, framing and client's row slot.
+    for (requested, expected) in [(16384, 16384), (32768, 16384), (4096, 4096)] {
+        parse_tci_command(
+            &format!("saturn_display:spectrum,{requested},100"),
+            &tx,
+            &clients,
+            3,
+            false,
+        );
+        assert_eq!(
+            clients.lock_unpoisoned()[&3]
+                .state
+                .display_mode
+                .spectrum_group(),
+            Some((expected, 100))
+        );
+        assert_eq!(
+            drain_texts(&outbound),
+            vec![format!("saturn_display:0,spectrum,{expected},100;")]
+        );
+    }
+
     parse_tci_command("saturn_display:spectrum,abc,50", &tx, &clients, 3, true);
     assert!(drain_texts(&outbound).is_empty());
     assert!(clients.lock_unpoisoned()[&3]
@@ -5323,6 +5345,30 @@ fn spectrum_row_frame_header_matches_wire_contract() {
     assert_eq!(u32_at(56), 34);
     assert_eq!(u32_at(60), 0);
     assert_eq!(&frame[64..], &row.codes[..]);
+}
+
+#[test]
+fn maximum_spectrum_row_remains_one_bounded_latest_slot_with_credit() {
+    let outbound = ClientOutbound::new();
+    for _ in 0..50 {
+        outbound.enqueue(spectrum_message(&spectrum_test_row(
+            16384,
+            100,
+            Duration::ZERO,
+        )));
+    }
+    assert_eq!(outbound.queued_bytes(), 64 + 16384);
+    let OutboundMessage::SpectrumRow { row, sequence, .. } =
+        outbound.next_message(true).unwrap().message
+    else {
+        panic!("expected spectrum");
+    };
+    let frame = build_tci_spectrum_row_frame(&row, sequence);
+    assert_eq!(frame.len(), 64 + 16384);
+    assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 16384);
+    assert_eq!(outbound.spectrum_in_flight(), 1);
+    outbound.record_spectrum_ack(sequence);
+    assert_eq!(outbound.spectrum_in_flight(), 0);
 }
 
 #[test]

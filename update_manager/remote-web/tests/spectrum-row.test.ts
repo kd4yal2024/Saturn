@@ -74,7 +74,7 @@ describe('spectrum display negotiation helpers', () => {
 
   it('builds the frozen command strings', () => {
     expect(spectrumDisplayCommand(2048, 50)).toBe('saturn_display:spectrum,2048,50;');
-    expect(spectrumDisplayCommand(16384, 1000)).toBe('saturn_display:spectrum,4096,250;');
+    expect(spectrumDisplayCommand(16384, 1000)).toBe('saturn_display:spectrum,16384,250;');
     expect(SPECTRUM_DISPLAY_IQ_COMMAND).toBe('saturn_display:iq;');
     expect(spectrumDisplayAckCommand(42)).toBe('saturn_display_ack:42;');
     expect(spectrumDisplayAckCommand(-3)).toBe('saturn_display_ack:0;');
@@ -95,7 +95,7 @@ describe('spectrum display negotiation helpers', () => {
       .toEqual({ mode: 'spectrum', fftSize: 2048, intervalMs: 50 });
     // Effective values are re-clamped, so a bad echo cannot widen the contract.
     expect(parseDisplayEcho(['0', 'spectrum', '99999', '5']))
-      .toEqual({ mode: 'spectrum', fftSize: 4096, intervalMs: 33 });
+      .toEqual({ mode: 'spectrum', fftSize: 16384, intervalMs: 33 });
     expect(parseDisplayEcho(['0'])).toBeNull();
     expect(parseDisplayEcho(['0', 'spectrum'])).toBeNull();
     expect(parseDisplayEcho([])).toBeNull();
@@ -147,13 +147,23 @@ describe('spectrum row decoding', () => {
       ['wrong stream type', buildRow({ streamType: 0 })],
       ['wrong format', buildRow({ format: 0x5300 })],
       ['non-power-of-two fft', buildRow({ fftSize: 300 })],
-      ['fft out of range', buildRow({ fftSize: 8192, binCount: 256 })],
+      ['fft out of range', buildRow({ fftSize: 32768, binCount: 32768 })],
       ['bin count mismatch', buildRow({ fftSize: 256, binCount: 512 })],
       ['not fftshifted', buildRow({ flags: 0 })],
       ['non-positive db step', buildRow({ dbStep: 0 })],
     ];
     for (const [label, buffer] of cases) {
       expect(parseSpectrumRowHeader(buffer), label).toBeNull();
+    }
+  });
+
+  it('accepts full-resolution rows and retains the 4096-bin older-host contract', () => {
+    for (const size of [4096, 8192, 16384]) {
+      const row = buildRow({ binCount: size, codes: new Array(size).fill(128) });
+      const header = parseSpectrumRowHeader(row)!;
+      expect(header.fftSize).toBe(size);
+      expect(dequantizeSpectrumRow(row, header, new Float32Array(size))).toEqual(new Float32Array(size).fill(-80));
+      expect(parseSpectrumRowHeader(row.slice(0, -1))).toBeNull();
     }
   });
 

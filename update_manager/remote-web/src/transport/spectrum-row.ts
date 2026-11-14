@@ -3,8 +3,8 @@
  *
  * The bridge advertises `saturn_display_caps:spectrum_u8;` just before
  * `ready;` on Direct-XDMA builds. A WAN browser may then ask for spectrum
- * rows instead of the full-rate raw IQ stream; LAN clients never opt in and
- * keep byte-for-byte the existing IQ path.
+ * rows instead of the full-rate raw IQ stream. LAN keeps raw IQ by default;
+ * the explicit display override changes no audio settings.
  *
  * This module owns the frozen wire contract (stream type 16) plus the pure
  * negotiation helpers: clamping, command building, echo parsing and caps
@@ -14,7 +14,7 @@
 export const SPECTRUM_ROW_HEADER_BYTES = 64;
 export const SPECTRUM_ROW_STREAM_TYPE = 16;
 export const SPECTRUM_ROW_FORMAT_U8_DB = 0x5301;
-export const SPECTRUM_ROW_MAX_BINS = 4096;
+export const SPECTRUM_ROW_MAX_BINS = 16384;
 export const SPECTRUM_ROW_FLAG_FFTSHIFTED = 1;
 export const SPECTRUM_ROW_CHANNELS = 1;
 
@@ -25,7 +25,7 @@ export const SPECTRUM_DISPLAY_ACK_PREFIX = 'saturn_display_ack:';
 export const SPECTRUM_DISPLAY_IQ_COMMAND = 'saturn_display:iq;';
 
 export const SPECTRUM_FFT_MIN = 256;
-export const SPECTRUM_FFT_MAX = 4096;
+export const SPECTRUM_FFT_MAX = 16384;
 export const SPECTRUM_INTERVAL_MIN_MS = 33;
 export const SPECTRUM_INTERVAL_MAX_MS = 250;
 

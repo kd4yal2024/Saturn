@@ -344,10 +344,21 @@ describe('WAN display transport negotiation', () => {
     expect(lan.sent).toEqual(['saturn_display:iq;']);
   });
 
-  it('applies the 4096 cap and the 10 Hz terrain cadence', () => {
+  it('preserves the automatic WAN cap and cadence until promotion', () => {
     const terrain = makeHarness({ terrain: true, targetFftSize: 16384, intervalMs: 50 });
     terrain.state.terrainActive = true;
     expect(terrain.api.desiredDisplayCommand()).toBe('saturn_display:spectrum,4096,100;');
+    const explicit = makeHarness({ terrain: true, targetFftSize: 16384, search: '?display_transport=spectrum' });
+    explicit.state.terrainActive = true;
+    expect(explicit.api.desiredDisplayCommand()).toBe('saturn_display:spectrum,16384,100;');
+  });
+
+  it('honors an older host echo without claiming the requested higher resolution', () => {
+    const h = makeHarness({ terrain: true, targetFftSize: 16384, search: '?display_transport=spectrum' });
+    h.api.requestDisplayTransport('test', true);
+    h.api.applyDisplayEcho(['0', 'spectrum', '4096', '100']);
+    expect(h.state.displayEchoFftSize).toBe(4096);
+    expect(h.state.displayRenderSource).toBe('server');
   });
 
   it('switches the render source only after the echo', () => {
@@ -689,14 +700,14 @@ describe('display transport override for matched measurements', () => {
       streamMode: 'lan', search: '?display_transport=spectrum', targetFftSize: 8192, intervalMs: 16,
     });
     expect(h.api.displayTransportOverride()).toBe('spectrum');
-    // The bridge's own clamps: 4096 bins at no faster than 33 ms (about 30 rows/s).
-    expect(h.api.desiredDisplayCommand()).toBe('saturn_display:spectrum,4096,33;');
+    // Matching the requested 8192 bins at no faster than 33 ms (about 30 rows/s).
+    expect(h.api.desiredDisplayCommand()).toBe('saturn_display:spectrum,8192,33;');
     expect(h.api.requestDisplayTransport('test', true)).toBe(true);
-    expect(h.sent).toEqual(['saturn_display:spectrum,4096,33;']);
+    expect(h.sent).toEqual(['saturn_display:spectrum,8192,33;']);
     // iq_start waits for the echo, then is flushed, exactly as in WAN.
     expect(h.api.iqStartGated()).toBe(true);
     expect(h.api.sendIqStart()).toBe(false);
-    h.api.applyDisplayEcho(['0', 'spectrum', '4096', '33']);
+    h.api.applyDisplayEcho(['0', 'spectrum', '8192', '33']);
     expect(h.state.displayRenderSource).toBe('server');
     expect(h.sent).toContain('iq_start:0;');
     // The override does not change the RX transport mode.

@@ -1,9 +1,10 @@
-//! Server-side RX spectrum rows for WAN display clients.
+//! Opt-in server-side RX spectrum rows for display clients.
 //!
 //! A WAN browser needs only a few thousand fresh IQ pairs per display row, but
 //! the full-rate Direct-XDMA IQ stream is ~24.6 Mbit/s. Clients that opt in via
 //! `saturn_display:spectrum,<fft>,<interval>;` receive quantized dB rows
-//! computed here instead. LAN clients never opt in and keep raw IQ unchanged.
+//! computed here instead. LAN keeps raw IQ by default; an explicit display-only
+//! override permits equal-resolution comparisons without changing audio policy.
 //!
 //! The RX runtime loop's only job is a lock-free ring write. The worker
 //! thread snapshots the newest pairs at each client-group deadline, skipping
@@ -20,7 +21,7 @@ use crate::tci::TciFrontend;
 use crate::xdma_telemetry::LatencyHistogram;
 
 pub(crate) const SPECTRUM_MIN_FFT_SIZE: u32 = 256;
-pub(crate) const SPECTRUM_MAX_FFT_SIZE: u32 = 4096;
+pub(crate) const SPECTRUM_MAX_FFT_SIZE: u32 = 16_384;
 pub(crate) const SPECTRUM_MIN_INTERVAL_MS: u32 = 33;
 pub(crate) const SPECTRUM_MAX_INTERVAL_MS: u32 = 250;
 pub(crate) const SPECTRUM_DB_OFFSET: f32 = -160.0;
@@ -356,7 +357,8 @@ mod tests {
         assert_eq!(clamp_spectrum_fft_size(0), 256);
         assert_eq!(clamp_spectrum_fft_size(3000), 2048);
         assert_eq!(clamp_spectrum_fft_size(2048), 2048);
-        assert_eq!(clamp_spectrum_fft_size(16384), 4096);
+        assert_eq!(clamp_spectrum_fft_size(16384), 16384);
+        assert_eq!(clamp_spectrum_fft_size(32768), 16384);
         assert_eq!(clamp_spectrum_interval_ms(1), 33);
         assert_eq!(clamp_spectrum_interval_ms(50), 50);
         assert_eq!(clamp_spectrum_interval_ms(1000), 250);
@@ -378,6 +380,32 @@ mod tests {
         assert_eq!(peak, size / 2 + 100);
         // Hann coherent gain 0.5 on amplitude 0.5 => -12 dBFS.
         assert!((out[peak] - -12.04).abs() < 0.1, "{}", out[peak]);
+    }
+
+    #[test]
+    fn maximum_window_keeps_both_sidebands_and_survives_ring_wrap_and_retune() {
+        let size = SPECTRUM_MAX_FFT_SIZE as usize;
+        assert_eq!(size, 16384);
+        let ring = LatestIqRing::new(14_200_000);
+        let mut iq = tone(size, 100.0, 0.5);
+        for (a, b) in iq.iter_mut().zip(tone(size, -200.0, 0.25)) {
+            *a += b;
+        }
+        for _ in 0..8 {
+            ring.push(&iq);
+        }
+        let mut captured = Vec::new();
+        assert_eq!(ring.snapshot(size, &mut captured), Some(14_200_000));
+        assert_eq!(captured, iq);
+        let mut fft = SpectrumFft::new(size);
+        let mut db = vec![0.0; size];
+        fft.transform_db(&captured, &mut db);
+        assert!((db[size / 2 + 100] + 12.04).abs() < 0.1);
+        assert!((db[size / 2 - 200] + 18.06).abs() < 0.1);
+        ring.restart(7_200_000);
+        assert_eq!(ring.snapshot(size, &mut captured), None);
+        ring.push(&iq);
+        assert_eq!(ring.snapshot(size, &mut captured), Some(7_200_000));
     }
 
     #[test]

@@ -23,10 +23,12 @@ A/B. Do not change those settings during a display-only comparison.
 
 Location of FFT computation does not determine frequency resolution. At 384 kS/s,
 4096 points give 93.75 Hz bin spacing on either host. Eight-bit rows quantize level.
-The current server cap is 4096 points; the browser terrain path can request more.
+The server and browser row parser now support up to 16384 points, matching the
+browser terrain FFT ceiling. Older hosts still echo their lower effective size.
 Consequently, compare the **reported effective FFT size** and bin spacing, not just
 requested settings. Raw complex-float32 payload at 384 kS/s is 24.576 Mbit/s;
-4096 eight-bit bins at 30 rows/s are 0.98304 Mbit/s before framing.
+4096 eight-bit bins at 30 rows/s are 0.98304 Mbit/s before framing; 16384 bins
+at 30 rows/s are 3.93216 Mbit/s, or 1.31072 Mbit/s at 10 rows/s.
 
 ## Scheduling and ownership
 
@@ -181,3 +183,78 @@ and renderer, without concurrent test/build jobs. Report the allocation scope,
 audio progress/underruns, source delivery and latency tails, including regressions.
 Software-renderer results do not qualify the operating Windows GPU or justify
 promoting worker/transport defaults.
+
+## Matched display-path comparison
+
+Server rows remain opt-in on LAN. Automatic WAN retains its existing 4096-bin
+cap; the explicit `display_transport=spectrum` override enables the higher cap.
+The larger size is negotiated through the
+existing command/echo, with the same 64-byte header, Hann window and 0.625 dB
+quantization. Old clients continue to request their own smaller limit. New
+clients accept an older host's smaller echo and report the actual row FFT size;
+requesting 16384 does not prove that size was received. The latest-row slot and
+two-row acknowledgement credit remain bounded at the larger payload size.
+
+The profiler can now run all three paths against the real Rust TCI frontend,
+dispatch, outbound queues, frame builder, latest-IQ ring and spectrum worker.
+Its explicitly ignored test fixture binds only an ephemeral loopback port,
+publishes deterministic continuous complex tones and stereo PCM, and stops
+within 120 seconds. It constructs no hardware/backend owner or WDSP channel.
+The profiler closes its socket and requires zero remaining connections. Use
+a **fresh** output directory for each run.
+
+Build the test executable with native stubs, select the `Executable unittests
+src/main.rs` path printed by Cargo, then run from `remote-web`:
+
+```sh
+# In saturn-bridge; this executable is a synthetic fixture, not a radio release.
+SATURN_BRIDGE_STUB_NATIVE=1 cargo test --release --bin saturn-bridge --no-run
+
+# In remote-web, substitute that exact test executable path.
+npm run build
+npm run profile:display -- --seconds=12 --engines=main,worker,spectrum \
+  --workloads=2d,3d,interactive --quality=performance --zoom=2 \
+  --bridge-test-binary=/absolute/path/to/release/deps/saturn_bridge-HASH \
+  --output=/tmp/saturn-display-paths-forward
+```
+
+Repeat in reversed engine order (`spectrum,worker,main`) in another fresh
+directory, with no concurrent builds or browser tests. Optional
+`--fft-size=16384` fixes the FFT for every selected workload; without it the
+actual page computes its target from rate, zoom and texture limits. A zoom of
+2 permits 16384-point terrain at 384 kS/s with an 8192-wide history texture.
+Keep the same zoom, mesh quality and viewport in each arm.
+
+For this loopback comparison only, the injected harness uses a common fixed
+interval of 33 ms for Traditional and 100 ms for terrain on **every** path.
+Without that intervention, raw/worker terrain at about 30 rows/s and server
+terrain at 10 rows/s are unequal workloads. These fixture hooks do not change
+the shipped page's cadence. The report checks effective FFT, target, interval,
+zoom, mesh/backing-store geometry and audio rate/channels across the paths and
+fails a mismatched comparison, retaining the report. A one-shot bin probe checks
+both signs of the synthetic complex spectrum; it is not an RF measurement.
+
+New report fields include measured binary bytes by IQ/row/audio stream, process
+CPU as a percentage of one core, row replacements/credit, raw-IQ queue bounds,
+and FFT histogram counts/tails. CPU is sampled from process task accounting
+over the timed workload. The fixture's final transport/FFT counters cover its
+whole lifetime, **including warmup**; histogram p95/p99 are bucket upper bounds.
+The executable hash records which optimized or debug test build actually ran.
+This measures Linux loopback publication/analysis, excluding hardware acquisition,
+WDSP, TLS and the Go proxy. It cannot establish G2 CPU savings. Browser age begins
+at ingress on each chosen path, so it omits the server FFT/network time that
+preceded a row's arrival; it is not an end-to-end comparison of acquisition age.
+
+RX Measure still leases original full-precision IQ and uses its synchronous FFT.
+The new cap and profiler do not change capture samples, audio buffering, FFT
+normalization, scheduling, TX authority, PureSignal, firmware or driver behavior.
+Promotion still requires the operating browser and host at matched quality;
+neither a lower wire rate nor software-renderer replay alone selects a default.
+
+The interval match is a **requested target**, not a guarantee of identical
+achieved draw rates. Inspect the actual full-window draw counts and durations:
+the worker's ingress-anchored cadence can submit more frequently after delayed
+dispatch. The November 13 loopback runs observed up to about 11% more terrain
+draws on the worker. Do not attribute every per-second allocation or CPU
+difference to FFT location. Keep measured rates, regressions and underruns in
+any comparison; no default is promoted by this slice.

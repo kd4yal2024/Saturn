@@ -11948,7 +11948,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         // Browser-local draw submission timing; excludes FPGA/network age
         // and GPU presentation time. No cross-clock latency claim.
         timingScope: "browser-arrival-to-draw-submission",
-        fftSize: state.displayLocalFftSize || fftProcessor.size,
+        fftSize: state.displayRenderSource === "server" ? state.displayServerFftSize :
+          state.displayLocalFftSize || fftProcessor.size,
         processing: state.displayRenderSource === "server" ? "server-spectrum" :
           rxSpectrumAccumulator ? "main-raw-measurement" :
           displayFftProducer.available ? "worker" : "main",
@@ -16688,12 +16689,15 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function desiredDisplayFftSize() {
-      return _next.clampSpectrumFftSize(Math.min(_next.SPECTRUM_FFT_MAX, displayFftTargetSize()));
+      // Preserve existing automatic WAN bandwidth/resolution defaults. Higher
+      // resolution is selectable for a matched comparison, not promoted here.
+      const maxFft = displayTransportOverride() === "spectrum" ? _next.SPECTRUM_FFT_MAX : 4096;
+      return _next.clampSpectrumFftSize(Math.min(maxFft, displayFftTargetSize()));
     }
 
     function desiredDisplayIntervalMs() {
-      // Terrain rows run at 10 Hz (100 ms) so the WAN display stays inside the
-      // 0.5 Mbit/s budget even at the 4096-bin cap.
+      // Terrain rows run at 10 Hz (100 ms), independently of RAF, preserving the
+      // requested display cadence (16,384 bins at 10 Hz is 1.31 Mbit/s payload).
       return _next.clampSpectrumIntervalMs(state.terrainActive ? 100 : displayRenderIntervalMs());
     }
 

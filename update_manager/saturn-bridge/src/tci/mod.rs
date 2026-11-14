@@ -33,6 +33,8 @@ mod rx_codec;
 mod session_pair;
 
 #[cfg(test)]
+mod display_replay;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use client::*;
