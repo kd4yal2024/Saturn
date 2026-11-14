@@ -7,6 +7,9 @@ band restore its setup. Tuning keeps the requested frequency; a band button
 recalls the last frequency used on that band.
 Ham HF and SWL have separate memories, including their overlapping frequency
 ranges. Clicking the current band keeps its latest frequency and settings.
+The HF-bank 11m memory includes 27 MHz; it is separate from the SWL 11m
+broadcast memory around 25.9 MHz. Use the HF-bank 11m button to return to the
+last 27 MHz frequency and settings.
 
 Memories include frequency, RX antenna and attenuation, mode, RX/TX filters and
 RX filter shift, receiver volume, squelch, AGC, NR/NB/notch processing, RX/TX EQ,

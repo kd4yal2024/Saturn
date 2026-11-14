@@ -2,6 +2,17 @@ import { describe, it, expect } from 'vitest';
 import { bandKeyForFrequency, effectiveIqSampleRate, SWL_BANDS } from '../src/radio/band';
 
 describe('bandKeyForFrequency', () => {
+  it('recognizes the 27 MHz 11m operating memory independently of SWL 11m and 10m', () => {
+    for (const hz of [26_495_000, 26_965_000, 27_385_000, 27_435_000, 27_999_999]) {
+      expect(bandKeyForFrequency(hz)).toBe('11m');
+      expect(bandKeyForFrequency(hz, 'swl')).toBe('11m');
+    }
+    expect(bandKeyForFrequency(25_900_000)).toBe('SWL 11m');
+    expect(bandKeyForFrequency(25_900_000, 'swl')).toBe('SWL 11m');
+    expect(bandKeyForFrequency(26_494_999)).toBe('');
+    expect(bandKeyForFrequency(28_000_000)).toBe('10m');
+  });
+
   it('returns band label for frequency within a band', () => {
     expect(bandKeyForFrequency(7150000)).toBe('40m');
     expect(bandKeyForFrequency(14200000)).toBe('20m');

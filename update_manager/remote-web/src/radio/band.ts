@@ -4,6 +4,8 @@ export type BandEdge = {
   label: string;
 };
 
+// HF-bank operating/memory ranges, not transmit permissions. The bank also
+// includes 11m and broadcast FM. Keep 27 MHz separate from SWL 11m at 25.9 MHz.
 export const HAM_BAND_EDGES_HZ: readonly BandEdge[] = Object.freeze([
   { start: 1800000, end: 2000000, label: '160m' },
   { start: 3500000, end: 4000000, label: '80m' },
@@ -14,6 +16,8 @@ export const HAM_BAND_EDGES_HZ: readonly BandEdge[] = Object.freeze([
   { start: 18068000, end: 18168000, label: '17m' },
   { start: 21000000, end: 21450000, label: '15m' },
   { start: 24890000, end: 24990000, label: '12m' },
+  // Same extended 11m region as the existing per-band PA profile.
+  { start: 26495000, end: 27999999, label: '11m' },
   { start: 28000000, end: 29700000, label: '10m' },
   { start: 50000000, end: 54000000, label: '6m' },
   { start: 88000000, end: 108000000, label: 'FM' },

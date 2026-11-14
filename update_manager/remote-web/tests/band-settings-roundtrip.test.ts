@@ -65,6 +65,53 @@ function bandButtonRecall(f: ReturnType<typeof fixture>) {
 }
 
 describe('automatic band operating settings', () => {
+  it('retains 27 MHz 11m settings through 40m and reload without colliding with SWL 11m', () => {
+    const f = fixture(), recall = bandButtonRecall(f);
+    recall({ dataset: { band: '25900000', bandGroup: 'swl', mode: 'AM' } });
+    f.api.setFrequency(27_385_000);
+    expect(f.state.bandMemoryGroup).toBe('ham');
+    Object.assign(f.state, { mode: 'LSB', rxAttenuationDb: 14, txDrive: 40, txMicGainDb: 3,
+      filterLow: 100, filterHigh: 3800, displayZoom: 5, pureSignalEnabled: true,
+      preferredPureSignalMode: 'auto', pureSignalAutoAttenuate: true });
+    // Save on leaving, without requiring an intervening settings edit/autosave.
+    recall({ dataset: { band: '7150000', bandGroup: 'ham' } });
+    f.api.setFrequency(7_218_500);
+    Object.assign(f.state, { mode: 'USB', rxAttenuationDb: 6, txDrive: 10, displayZoom: 2 });
+    recall({ dataset: { band: '25900000', bandGroup: 'swl', mode: 'AM' } });
+    f.api.setFrequency(25_950_000);
+    Object.assign(f.state, { mode: 'SAM', rxAttenuationDb: 20 });
+    recall({ dataset: { band: '27385000', bandGroup: 'ham' } });
+    expect(f.state.vfoA).toBe(27_385_000);
+    expect(f.state.mode).toBe('LSB');
+    expect(f.state.rxAttenuationDb).toBe(14);
+    expect(f.state.txDrive).toBe(40);
+    expect(f.state.txMicGainDb).toBe(3);
+    expect(f.state.filterLow).toBe(100);
+    expect(f.state.filterHigh).toBe(3800);
+    expect(f.state.displayZoom).toBe(5);
+    expect(f.state.preferredPureSignalMode).toBe('auto');
+    f.api.setFrequency(27_435_000);
+    f.api.recallFrequencyEntryBand({ dataset: { freqBand: '7150000' } });
+    expect(f.state.vfoA).toBe(7_218_500);
+    expect(f.state.rxAttenuationDb).toBe(6);
+    f.api.recallFrequencyEntryBand({ dataset: { freqBand: '27385000' } });
+    expect(f.state.vfoA).toBe(27_435_000);
+    expect(f.state.txDrive).toBe(40);
+    const saved = normalizeBandMemory(JSON.parse(f.storage.get('bandMemory')!));
+    expect(saved['11m']?.frequency).toBe(27_435_000);
+    expect(saved['SWL 11m']?.frequency).toBe(25_950_000);
+    const next = fixture();
+    next.state.bandMemory = saved;
+    bandButtonRecall(next)({ dataset: { band: '27385000', bandGroup: 'ham' } });
+    expect(next.state.vfoA).toBe(27_435_000);
+    expect(next.state.rxAttenuationDb).toBe(14);
+    expect(next.state.txDrive).toBe(40);
+    bandButtonRecall(next)({ dataset: { band: '25900000', bandGroup: 'swl', mode: 'AM' } });
+    expect(next.state.vfoA).toBe(25_950_000);
+    expect(next.state.mode).toBe('SAM');
+    expect(next.sent.join('')).not.toContain('trx:0,true');
+  });
+
   it('keeps the latest frequency and settings when the current band is clicked again, including keypad recall', () => {
     for (const [group, button, first, latest, mode] of [
       ['ham', '7150000', 7_210_000, 7_224_500, 'LSB'],
