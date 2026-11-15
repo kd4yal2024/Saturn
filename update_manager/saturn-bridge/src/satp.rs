@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::mem;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -31,6 +32,10 @@ const RECEIVE_BATCH_LIMIT: usize = 64;
 const RECEIVE_BUFFER_BYTES: usize = 2048;
 const REQUESTED_SOCKET_BUFFER_BYTES: i32 = 1024 * 1024;
 const PLAYOUT_POLL: Duration = Duration::from_micros(250);
+// Only a receiver with lost/missing media and no authorized SATP output may
+// sleep on readiness. New UDP input wakes it immediately; control/lease/stop
+// changes are rechecked within this interval (plus scheduler delay).
+const IDLE_CONTROL_POLL: Duration = Duration::from_millis(10);
 const HEALTHY_LIMIT: Duration = Duration::from_millis(50);
 const STATUS_WRITE_PERIOD: Duration = Duration::from_secs(1);
 const ADDRESS_RETRY_PERIOD: Duration = Duration::from_secs(2);
@@ -38,6 +43,33 @@ const ADDRESS_RETRY_STOP_POLL: Duration = Duration::from_millis(100);
 const RATE_MATCH_FILTER_ALPHA: f64 = 1.0 / 32.0;
 const RATE_MATCH_PPM_PER_FRAME: f64 = 2.0;
 const RATE_MATCH_MAX_PPM: f64 = 2_000.0;
+
+struct IdleWake(OwnedFd);
+
+impl IdleWake {
+    fn new() -> io::Result<Self> {
+        // SAFETY: eventfd takes scalar arguments and returns a new owned fd.
+        let fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd is a newly created descriptor with no other owner.
+        Ok(Self(unsafe { OwnedFd::from_raw_fd(fd) }))
+    }
+
+    fn notify(&self) -> io::Result<()> {
+        let value = 1u64;
+        // SAFETY: value is valid for the exact eight bytes required by eventfd.
+        let result = unsafe { libc::write(self.0.as_raw_fd(), (&value as *const u64).cast(), 8) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::WouldBlock {
+                return Err(error);
+            }
+        }
+        Ok(()) // already readable also wakes the poller
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SatpHeader {
@@ -641,6 +673,7 @@ pub struct SatpRuntime {
     status: Arc<Mutex<SatpStatus>>,
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    idle_wake: Option<Arc<IdleWake>>,
 }
 
 fn describe_bind_error(address: SocketAddr, error: io::Error) -> io::Error {
@@ -752,6 +785,8 @@ impl SatpRuntime {
         socket.set_nonblocking(true).unwrap();
         let status = Arc::new(Mutex::new(SatpStatus::new(&BridgeConfig::default())));
         let stop = Arc::new(AtomicBool::new(false));
+        let idle_wake = Arc::new(IdleWake::new().unwrap());
+        let worker_idle_wake = idle_wake.clone();
         let worker_status = status.clone();
         let worker_stop = stop.clone();
         let (tx, _) = mpsc::channel(); // no legacy consumer exists in this fixture
@@ -768,12 +803,14 @@ impl SatpRuntime {
                 false,
                 worker_status,
                 worker_stop,
+                Some(worker_idle_wake),
             )
         });
         Self {
             status,
             stop,
             worker: Some(worker),
+            idle_wake: Some(idle_wake),
         }
     }
     pub fn start(
@@ -790,6 +827,7 @@ impl SatpRuntime {
                 status,
                 stop,
                 worker: None,
+                idle_wake: None,
             });
         }
 
@@ -805,6 +843,8 @@ impl SatpRuntime {
             write_status_file(&status.lock_unpoisoned());
         }
 
+        let idle_wake = Arc::new(IdleWake::new()?);
+        let worker_idle_wake = idle_wake.clone();
         let worker_status = status.clone();
         let worker_stop = stop.clone();
         let allowed_source_ip = config.satp_allowed_source_ip;
@@ -851,12 +891,14 @@ impl SatpRuntime {
                     true,
                     worker_status,
                     worker_stop,
+                    Some(worker_idle_wake),
                 );
             })?;
         Ok(Self {
             status,
             stop,
             worker: Some(worker),
+            idle_wake: Some(idle_wake),
         })
     }
 
@@ -869,6 +911,11 @@ impl SatpRuntime {
 impl Drop for SatpRuntime {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        if let Some(wake) = &self.idle_wake {
+            if let Err(error) = wake.notify() {
+                eprintln!("saturn-bridge: SATP shutdown wake failed: {error}");
+            }
+        }
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -888,6 +935,7 @@ fn run_receiver(
     persist_status: bool,
     status: Arc<Mutex<SatpStatus>>,
     stop: Arc<AtomicBool>,
+    idle_wake: Option<Arc<IdleWake>>,
 ) {
     let mut ring = PacketRing::new(jitter_target_frames, jitter_capacity_frames);
     let mut rate_control = PlayoutRateControl::new(jitter_target_frames);
@@ -1275,7 +1323,14 @@ fn run_receiver(
             last_status_write = Instant::now();
         }
         if !did_work {
-            thread::sleep(PLAYOUT_POLL);
+            if audio_lost && !tx_authorized {
+                if let Err(error) = wait_for_idle_datagram(&socket, idle_wake.as_deref()) {
+                    eprintln!("saturn-bridge: SATP idle readiness error: {error}");
+                    thread::sleep(IDLE_CONTROL_POLL);
+                }
+            } else {
+                thread::sleep(PLAYOUT_POLL);
+            }
         }
     }
     let _ = sink.flush(); // receiver shutdown cannot leave the managed generation armed
@@ -1287,6 +1342,45 @@ fn run_receiver(
         }
     }
     println!("saturn-bridge: SATP receiver stopped");
+}
+
+fn wait_for_idle_datagram(socket: &UdpSocket, wake: Option<&IdleWake>) -> io::Result<()> {
+    let mut descriptors = [
+        libc::pollfd {
+            fd: socket.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: wake.map_or(-1, |wake| wake.0.as_raw_fd()),
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    // SAFETY: both borrowed descriptors remain live and this initialized array
+    // has exactly the supplied length. poll observes readiness without reading
+    // media; run_receiver retains the only recv_from and its timestamp boundary.
+    // The eventfd wakes shutdown immediately, independent of UDP arrival.
+    let result = unsafe {
+        libc::poll(
+            descriptors.as_mut_ptr(),
+            descriptors.len() as libc::nfds_t,
+            IDLE_CONTROL_POLL.as_millis() as libc::c_int,
+        )
+    };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+    if descriptors
+        .iter()
+        .any(|fd| fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0)
+    {
+        return Err(io::Error::other("SATP readiness reported an error"));
+    }
+    Ok(())
 }
 
 fn configure_receive_buffer(socket: &UdpSocket) -> io::Result<i32> {
@@ -1476,6 +1570,192 @@ mod tests {
     use super::*;
 
     #[test]
+    fn idle_readiness_does_not_consume_or_authenticate_the_datagram() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let payload = b"not authenticated SATP";
+        sender
+            .send_to(payload, receiver.local_addr().unwrap())
+            .unwrap();
+        wait_for_idle_datagram(&receiver, None).unwrap();
+        let mut buffer = [0; 64];
+        let (size, source) = receiver.recv_from(&mut buffer).unwrap();
+        assert_eq!(&buffer[..size], payload);
+        assert_eq!(source, sender.local_addr().unwrap());
+        assert_eq!(
+            receiver.recv_from(&mut buffer).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn idle_readiness_times_out_without_input_for_control_and_shutdown_checks() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let (finished, done) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            finished
+                .send(wait_for_idle_datagram(&receiver, None))
+                .unwrap()
+        });
+        // A generous scheduler allowance; the measurement fixture records actual
+        // release tails. This catches an accidentally unbounded poll without UDP.
+        done.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn idle_shutdown_notification_is_nonblocking_and_independent_of_udp_input() {
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let wake = IdleWake::new().unwrap();
+        wake.notify().unwrap();
+        wake.notify().unwrap(); // coalesced notifications must not block
+        wait_for_idle_datagram(&receiver, Some(&wake)).unwrap();
+        let mut value = 0u64;
+        // SAFETY: value is writable storage for eventfd's eight-byte counter.
+        assert_eq!(
+            unsafe { libc::read(wake.0.as_raw_fd(), (&mut value as *mut u64).cast(), 8) },
+            8
+        );
+        assert_eq!(value, 2);
+        let mut bytes = [0u8; 8];
+        assert_eq!(
+            receiver.recv_from(&mut bytes).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    #[ignore = "serial production SATP loop CPU and UDP timing measurement; loopback only, no RF"]
+    fn actual_receiver_idle_and_restart_profile() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        fn thread_cpu_ns(clock: libc::clockid_t) -> u64 {
+            let mut ts = libc::timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
+            // SAFETY: ts points to initialized writable timespec storage.
+            assert_eq!(unsafe { libc::clock_gettime(clock, &mut ts) }, 0);
+            ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+        }
+        let receiver = UdpSocket::bind("127.0.0.1:0").unwrap();
+        receiver.set_nonblocking(true).unwrap();
+        let destination = receiver.local_addr().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut model = RadioModel::new(2, 14_200_000, 0, 192, 24, 2048, true, 4096, true);
+        model.satp.enabled = true;
+        model.satp.source = TxAudioSource::Satp;
+        let key_hex = model.satp.pair(1, Instant::now()).unwrap();
+        let key: Vec<u8> = (0..32)
+            .map(|i| u8::from_str_radix(&key_hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        let model = Arc::new(Mutex::new(model));
+        let (ingress, audio, _) = TxAudioIngress::bounded();
+        let (tx, commands) = mpsc::channel();
+        let status = Arc::new(Mutex::new(SatpStatus::new(&BridgeConfig::default())));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (worker_status, worker_stop, worker_model) =
+            (status.clone(), stop.clone(), model.clone());
+        let idle_wake = Arc::new(IdleWake::new().unwrap());
+        let worker_idle_wake = idle_wake.clone();
+        let (clock_sender, clock_receiver) = mpsc::channel();
+        let (result_sender, result_receiver) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let mut clock: libc::clockid_t = 0;
+            // SAFETY: this thread is live and clock points to writable storage.
+            assert_eq!(
+                unsafe { libc::pthread_getcpuclockid(libc::pthread_self(), &mut clock) },
+                0
+            );
+            let start = (Instant::now(), thread_cpu_ns(clock));
+            clock_sender.send(clock).unwrap();
+            run_receiver(
+                receiver,
+                None,
+                512,
+                4096,
+                Duration::from_millis(100),
+                worker_model,
+                ingress,
+                tx,
+                false,
+                worker_status,
+                worker_stop,
+                Some(worker_idle_wake),
+            );
+            result_sender
+                .send((start.0.elapsed(), thread_cpu_ns(clock) - start.1))
+                .unwrap();
+        });
+        let runtime = SatpRuntime {
+            status: status.clone(),
+            stop: stop.clone(),
+            worker: Some(worker),
+            idle_wake: Some(idle_wake),
+        };
+        let clock = clock_receiver.recv().unwrap();
+        let idle_start = (Instant::now(), thread_cpu_ns(clock));
+        thread::sleep(Duration::from_secs(3));
+        let idle_cpu_ns = thread_cpu_ns(clock) - idle_start.1;
+        let idle_elapsed_ns = idle_start.0.elapsed().as_nanos();
+        assert_eq!(status.lock_unpoisoned().packets_rx, 0);
+        // Three fresh bursts separated by audio loss exercise idle -> active ->
+        // idle transitions through the real parser, HMAC, jitter ring and clock.
+        let mut first_packet_us = Vec::new();
+        let mut sequence = 0u32;
+        let mut steady_missing = Vec::new();
+        for _ in 0..3 {
+            assert!(model.lock_unpoisoned().satp.renew(1, Instant::now()));
+            let before_missing = status.lock_unpoisoned().packets_missing;
+            let start = Instant::now();
+            let expected = status.lock_unpoisoned().packets_rx + 1;
+            for n in 0..120 {
+                let mut bytes = packet(sequence, u64::from(sequence) * 128, 0.25);
+                sequence += 1;
+                bytes[4] = 2;
+                let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+                mac.update(&bytes);
+                bytes.extend_from_slice(&mac.finalize().into_bytes());
+                sender.send_to(&bytes, destination).unwrap();
+                if n == 0 {
+                    while status.lock_unpoisoned().packets_rx < expected {
+                        assert!(
+                            start.elapsed() < Duration::from_secs(1),
+                            "first packet did not wake receiver"
+                        );
+                        thread::sleep(Duration::from_micros(100));
+                    }
+                    first_packet_us.push(start.elapsed().as_micros());
+                }
+                let due = start + Duration::from_secs_f64((n + 1) as f64 * 128.0 / 48_000.0);
+                thread::sleep(due.saturating_duration_since(Instant::now()));
+            }
+            steady_missing.push(status.lock_unpoisoned().packets_missing - before_missing);
+            thread::sleep(Duration::from_millis(150));
+        }
+        let release = Instant::now();
+        drop(runtime);
+        let (elapsed, cpu) = result_receiver.recv().unwrap();
+        let release_us = release.elapsed().as_micros();
+        let snapshot = status.lock_unpoisoned();
+        assert_eq!(snapshot.packets_rx, 360);
+        assert_eq!(snapshot.invalid, 0);
+        assert_eq!(snapshot.frames_delivered, 0);
+        assert_eq!(snapshot.dekey_requests, 0);
+        assert!(!snapshot.running);
+        assert!(commands.try_recv().is_err());
+        assert!(audio
+            .try_iter()
+            .all(|message| matches!(message, crate::tx_audio::TxAudioMessage::Flush(_))));
+        println!("SATP_PROFILE elapsed_ns={} cpu_ns={} idle_elapsed_ns={} idle_cpu_ns={} first_packet_us={:?} release_us={} steady_missing={:?} packets={} consumed={} missing={} overruns={} resyncs={}",
+            elapsed.as_nanos(),cpu,idle_elapsed_ns,idle_cpu_ns,first_packet_us,release_us,steady_missing,snapshot.packets_rx,snapshot.frames_consumed,
+            snapshot.packets_missing,snapshot.buffer_overruns,snapshot.timeline_resyncs);
+    }
+
+    #[test]
     fn satp_binds_immediately_when_configured_address_is_available() {
         let address: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let socket = initial_bind(address, UdpSocket::bind).unwrap().unwrap();
@@ -1640,6 +1920,7 @@ mod tests {
                 false,
                 worker_status,
                 worker_stop,
+                None,
             )
         });
         let mut last = Vec::new();
