@@ -1395,6 +1395,53 @@ impl OperationalRxSession {
         combined
     }
 
+    /// Format existing owner observations at the 1 Hz publisher, after the
+    /// short fixed-size stats clone has released the reader mutex. No new
+    /// register access, reset, sample copy or work on the reader thread.
+    pub(crate) fn acquisition_study_json(&self) -> String {
+        let stats = self.stats();
+        let fifo = &self.fifo_v29_telemetry;
+        let mut counters = Vec::new();
+        macro_rules! counter { ($($name:ident),+ $(,)?) => { $(
+            counters.push(format!("\"{}\":{}", stringify!($name), stats.$name));
+        )+ }; }
+        counter!(
+            dma_reads,
+            dma_bytes,
+            frames,
+            samples,
+            header_resyncs,
+            header_errors,
+            fifo_depth_hwm,
+            fifo_almost_full,
+            fifo_empty_observations,
+            fifo_overflows,
+            fifo_over_threshold,
+            fifo_startup_empty_observations,
+            fifo_startup_over_threshold,
+            host_buffer_drops,
+            host_buffer_drop_bytes,
+            host_discontinuities,
+            host_ring_depth_hwm,
+            host_pool_starvations
+        );
+        format!(concat!("{{\"schema\":\"xdma-acquisition-study-v1\",",
+            "\"scope\":\"cumulative RX session; layout changes may be included\",",
+            "\"fifo_poll_us\":{},\"dma_min_read_bytes\":{},\"dma_max_read_bytes\":{},",
+            "\"fifo_flag_coverage\":\"host latch observations; V30/V31 overflow input tied low; not FPGA loss coverage\",",
+            "\"fifo_monitor_threshold_words\":{},\"counters\":{{{}}},",
+            "\"latencies\":{{\"dma_read\":{},\"dma_completion_gap\":{},\"host_queue_age\":{},\"parser\":{}}},",
+            "\"fifo_snapshot\":{{\"status\":\"{}\",\"valid\":{},\"generation\":{},",
+            "\"scope\":\"last owner snapshot; acquisition age unknown; min/max/events are FPGA boot lifetime\",",
+            "\"occupancy_words\":{:?},\"minimum_words\":{:?},\"maximum_words\":{:?},\"event_transitions\":{:?}}}}}"),
+            FIFO_POLL_INTERVAL.as_micros(), stats.dma_min_read_bytes, DMA_MAX_READ_BYTES,
+            self.fifo_monitor_threshold_words, counters.join(","),
+            stats.dma_read_latency.cumulative_json(), stats.dma_completion_gap.cumulative_json(),
+            stats.host_queue_age.cumulative_json(), stats.parser_latency.cumulative_json(),
+            fifo.status.label(), fifo.snapshot_valid, fifo.snapshot_generation,
+            fifo.occupancy_words, fifo.minimum_words, fifo.maximum_words, fifo.event_transitions)
+    }
+
     pub(crate) fn verify_receive_safe(&self) -> Result<(), XdmaError> {
         self.registers
             .lock()
@@ -2103,6 +2150,56 @@ fn parse_env_u64(name: &str, default: u64) -> Result<u64, XdmaError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "managed-puresignal")]
+    #[test]
+    fn study_reports_actual_owner_stats_without_register_access_or_rf_claims() {
+        use std::io::Write;
+        let files = crate::xdma_tx_radio::offline_fixture::DirectFixture::new();
+        let mut rx = managed_feedback::tests::session(&files.register_path());
+        {
+            let mut stats = rx.reader_stats.lock().unwrap();
+            stats.dma_reads = 7;
+            stats.dma_bytes = 28672;
+            stats.dma_min_read_bytes = 4096;
+            stats.host_buffer_drops = 2;
+            stats.dma_completion_gap.record(Duration::from_micros(1500));
+            stats.dma_completion_gap.record(Duration::from_micros(4500));
+        }
+        rx.parser.stats.samples = 91;
+        rx.fifo_v29_telemetry.snapshot_valid = true;
+        rx.fifo_v29_telemetry.occupancy_words = [123, 0, 0, 0];
+        let before = std::fs::read(files.register_path()).unwrap();
+        let json = rx.acquisition_study_json();
+        assert_eq!(before, std::fs::read(files.register_path()).unwrap());
+        let mut child = std::process::Command::new("python3")
+            .args([
+                "-c",
+                r#"
+import json,sys
+x=json.load(sys.stdin)
+assert x['schema']=='xdma-acquisition-study-v1'
+assert x['fifo_poll_us']==250 and x['dma_min_read_bytes']==4096
+assert x['counters']['dma_reads']==7 and x['counters']['samples']==91
+assert x['counters']['host_buffer_drops']==2
+h=x['latencies']['dma_completion_gap']
+assert h['count']==sum(h['buckets'])==2 and h['max_us']==4500
+assert h['buckets'][11]==h['buckets'][13]==1
+assert x['fifo_snapshot']['occupancy_words']==[123,0,0,0]
+assert 'rf_safe' not in x
+"#,
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+    }
 
     fn write_i24_be(dest: &mut [u8], value: i32) {
         let value = value.clamp(-(1 << 23), (1 << 23) - 1);

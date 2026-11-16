@@ -739,6 +739,17 @@ impl RuntimeIo for Io {
                             assert!(perf.contains("\"rx_exchange_p95_upper_us\":"));
                             assert!(!perf.contains("\"rx_exchange_count\":0"));
                             assert!(perf.contains("\"tx_render_count\":0"));
+                            assert_eq!(
+                                perf.contains("\"schema\":\"xdma-acquisition-study-v1\""),
+                                direct
+                            );
+                            assert_eq!(perf.contains("\"shared_acquisition\":null"), !direct);
+                            if direct {
+                                assert!(perf.contains("\"fifo_poll_us\":250"));
+                                assert!(
+                                    perf.contains("\"bucket_model\":\"ceil-us-pow2-last-open\"")
+                                );
+                            }
                             // Real subscription changes leave the passband S-meter
                             // alive, stop unrequested audio/rows and resume audio.
                             let c = client.as_mut().unwrap();

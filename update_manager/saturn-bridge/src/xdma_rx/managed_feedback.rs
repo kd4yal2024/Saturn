@@ -417,6 +417,28 @@ pub(crate) mod tests {
         count
     }
     #[test]
+    fn pause_request_cannot_acknowledge_or_cancel_an_in_flight_read() {
+        let gate = Arc::new(ReaderGate::new());
+        let reader = gate.clone();
+        let (entered, in_read) = std::sync::mpsc::sync_channel(1);
+        let (finish_read, complete) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            entered.send(()).unwrap();
+            // File/loopback model of an outstanding read, not a driver claim.
+            complete.recv().unwrap();
+            assert!(reader.service_pause());
+        });
+        in_read.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(!gate.pause(17));
+        assert_eq!(gate.paused.load(Ordering::SeqCst), 0);
+        finish_read.send(()).unwrap();
+        worker.join().unwrap();
+        assert!(gate.pause(17));
+        gate.resume(None);
+        assert!(!gate.service_pause());
+    }
+
+    #[test]
     fn a_previous_pause_ack_cannot_authorize_a_new_layout_write() {
         let gate = ReaderGate::new();
         assert!(!gate.pause(1));

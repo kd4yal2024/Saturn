@@ -563,6 +563,10 @@ fn run_inner_with_state_store<I: RuntimeIo>(
             let ddc_per_second =
                 (received_frames - status_rx_frames) as f64 / last_status.elapsed().as_secs_f64();
             let tx_performance = runtime.ingress.performance.lock_unpoisoned().clone();
+            let acquisition_json = match &acquisition {
+                Acquisition::Direct(rx) => Some(rx.acquisition_study_json()),
+                Acquisition::P2(_) => None,
+            };
             for path in [ready, perf] {
                 let (phase, clean_idle) = runtime.ingress.host_readiness();
                 let observation = crate::xdma_telemetry::SharedHostObservation {
@@ -571,6 +575,7 @@ fn run_inner_with_state_store<I: RuntimeIo>(
                     ddc_per_second,
                     identity: acquisition_identity.as_ref(),
                     performance: Some((rx_dsp.performance(), &tx_performance)),
+                    acquisition_json: acquisition_json.as_deref(),
                 };
                 if let Err(error) = crate::xdma_telemetry::record_shared_observed_host_status(
                     path,

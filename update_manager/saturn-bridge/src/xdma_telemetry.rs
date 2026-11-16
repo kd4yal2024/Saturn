@@ -43,6 +43,18 @@ impl LatencyHistogram {
         self.max_us = self.max_us.max(us);
     }
 
+    /// Low-rate publisher only. Full cumulative buckets allow interval deltas
+    /// without subtracting percentiles or treating a session maximum as live.
+    pub(crate) fn cumulative_json(&self) -> String {
+        let buckets = self
+            .buckets
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{{\"count\":{},\"max_us\":{},\"buckets\":[{}],\"bucket_model\":\"ceil-us-pow2-last-open\"}}", self.count, self.max_us, buckets)
+    }
+
     fn p99_upper_us(&self) -> u64 {
         self.percentile_upper_us(99)
     }
@@ -321,6 +333,7 @@ pub(crate) struct SharedHostObservation<'a> {
     /// Immutable identity captured by the acquisition owner when it opened.
     /// Clock status is deliberately not republished as a live observation.
     pub identity: Option<&'a crate::xdma::SaturnIdentity>,
+    pub acquisition_json: Option<&'a str>,
     pub performance: Option<(&'a SharedRxPerformance, &'a SharedTxPerformance)>,
 }
 
@@ -360,11 +373,15 @@ pub(crate) fn record_shared_observed_host_status(
     // The base schema remains unchanged; append an explicitly named host-only
     // readiness object rather than changing review-only/RF qualification.
     let document = format!(
-        "{},\"shared_host\":{host},\"shared_performance\":{}}}\n",
+        "{},\"shared_host\":{host},\"shared_performance\":{},\"shared_acquisition\":{}}}\n",
         document.trim_end().strip_suffix('}').unwrap(),
         observation
             .and_then(|o| o.performance)
-            .map_or_else(|| "null".into(), |(rx, tx)| shared_performance_json(rx, tx))
+            .map_or_else(|| "null".into(), |(rx, tx)| shared_performance_json(rx, tx)),
+        observation
+            .filter(|_| backend == "xdma")
+            .and_then(|o| o.acquisition_json)
+            .unwrap_or("null")
     );
     write_snapshot_atomic(path, document.as_bytes(), false)
 }
@@ -547,6 +564,9 @@ mod tests {
                 ddc_per_second: 1.,
                 identity: known.then_some(&identity),
                 performance: None,
+                acquisition_json: known.then_some(
+                    "{\"schema\":\"xdma-acquisition-study-v1\",\"counters\":{\"dma_reads\":7}}",
+                ),
             };
             super::record_shared_observed_host_status(
                 &path,
@@ -582,9 +602,24 @@ mod tests {
                 document.contains("\"fpga_identity_source\":\"acquisition-owner-session-cache\""),
                 known
             );
+            assert_eq!(document.contains("\"dma_reads\":7"), known);
             assert!(!document.contains("\"clock_mask\":"));
             assert!(document.contains("\"rf_safe\":null"));
             assert!(document.contains("\"rf_qualified\":false"));
+            super::record_shared_observed_host_status(
+                &path,
+                "p2",
+                "shared-ready-off",
+                None,
+                true,
+                8,
+                2048,
+                Some(&observation),
+            )
+            .unwrap();
+            let p2 = fs::read_to_string(&path).unwrap();
+            assert!(p2.contains("\"shared_acquisition\":null"));
+            assert!(!p2.contains("\"dma_reads\":7"));
         }
         fs::remove_file(path).unwrap();
     }

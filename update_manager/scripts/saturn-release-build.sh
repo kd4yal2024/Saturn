@@ -383,6 +383,9 @@ run_test_gates(){
   log "Running direct-XDMA operational client self-tests"
   run python3 "$REPO_ROOT/update_manager/scripts/saturn-xdma-operational-client.py" --self-test
 
+  log "Running read-only XDMA wait-study accounting tests"
+  run python3 "$REPO_ROOT/tests/test-xdma-wait-study.py"
+
   log "Running Protocol 2 native boundary tests"
   run python3 "$REPO_ROOT/tests/test-wdsp-channel-shutdown.py"
   run make -C "$REPO_ROOT/sw_projects/P2_app" test
