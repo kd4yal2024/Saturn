@@ -5,6 +5,7 @@
 //! not expose an operational client backend and contains no TX DMA path.
 
 use crate::rx_counter_v31;
+use crate::thread_wake::Wake;
 use crate::xdma::{
     alex_receive_state_word, alex_rx_filter_word, ensure_p2app_inactive, SaturnIdentity, XdmaError,
     XdmaRegisterDevice, ALEX_RX_FILTER_REGISTER, ALEX_TX_FILTER_RX_ANTENNA_REGISTER,
@@ -95,6 +96,27 @@ const DMA_MIN_READ_BYTES_ENV: &str = "SATURN_BRIDGE_XDMA_RX_MIN_READ_BYTES";
 const DMA_MAX_READ_BYTES: usize = 32768;
 const FIFO_WORD_BYTES: usize = 8;
 const FIFO_POLL_INTERVAL: Duration = Duration::from_micros(250);
+const RX_FIFO_POLL_INTERVAL: Duration = Duration::from_micros(500);
+const PAUSED_READER_WAIT: Duration = Duration::from_millis(5);
+const RX_FIFO_WAIT_ENV: &str = "SATURN_BRIDGE_XDMA_RX_FIFO_WAIT_US";
+
+fn parse_rx_fifo_wait(value: Option<&std::ffi::OsStr>) -> Result<Duration, XdmaError> {
+    match value.and_then(|v| v.to_str()) {
+        None if value.is_none() => Ok(RX_FIFO_POLL_INTERVAL),
+        Some("250") => Ok(FIFO_POLL_INTERVAL),
+        Some("500") => Ok(RX_FIFO_POLL_INTERVAL),
+        _ => Err(XdmaError::Incompatible(format!(
+            "{RX_FIFO_WAIT_ENV} must be 250 or 500 microseconds"
+        ))),
+    }
+}
+fn reader_poll_interval(rx_cap: Duration, feedback_active: bool) -> Duration {
+    if feedback_active {
+        FIFO_POLL_INTERVAL
+    } else {
+        rx_cap
+    }
+}
 const STARTUP_HOST_DRAIN_MAX_READS: usize = 256;
 pub(crate) const RUNTIME_HOST_DRAIN_MAX_READS: usize = 16;
 pub(crate) const OPERATIONAL_RX_BUFFER_COUNT: usize = 256;
@@ -380,6 +402,7 @@ fn configure_fifo_monitor_threshold(device: &XdmaRegisterDevice) -> Result<u32, 
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct RxCaptureStats {
+    pub(crate) fifo_polls: u64,
     pub(crate) dma_reads: u64,
     pub(crate) dma_bytes: u64,
     pub(crate) frames: u64,
@@ -420,6 +443,7 @@ pub(crate) struct RxCaptureStats {
 
 impl RxCaptureStats {
     fn observe_fifo(&mut self, snapshot: FifoSnapshot, policy: FifoStatusPolicy) {
+        self.fifo_polls = self.fifo_polls.saturating_add(1);
         self.fifo_depth_hwm = self.fifo_depth_hwm.max(snapshot.depth_words);
         self.fifo_empty_observations = self
             .fifo_empty_observations
@@ -772,14 +796,17 @@ fn run_operational_reader(
     pool: Arc<OperationalRxBufferPool>,
     stats: Arc<Mutex<RxCaptureStats>>,
     stop: Arc<AtomicBool>,
+    wake: Arc<Wake>,
+    rx_poll_interval: Duration,
     #[cfg(feature = "managed-puresignal")] gate: Arc<managed_feedback::ReaderGate>,
 ) -> Result<(), XdmaError> {
+    wake.register_current();
     let mut sequence = 0u64;
     let mut last_completion = None;
     while !stop.load(Ordering::Relaxed) {
         #[cfg(feature = "managed-puresignal")]
         if gate.service_pause() {
-            thread::sleep(FIFO_POLL_INTERVAL);
+            wake.wait(PAUSED_READER_WAIT);
             continue;
         }
         // This non-owning register handle reads only 0x9000. It does not share
@@ -803,7 +830,11 @@ fn run_operational_reader(
         }
         let read_bytes = dma_read_size_for_min(fifo.depth_words, min_read_bytes);
         if read_bytes == 0 {
-            thread::sleep(FIFO_POLL_INTERVAL);
+            #[cfg(feature = "managed-puresignal")]
+            let feedback_active = gate.feedback_active();
+            #[cfg(not(feature = "managed-puresignal"))]
+            let feedback_active = false;
+            wake.wait(reader_poll_interval(rx_poll_interval, feedback_active));
             continue;
         }
 
@@ -881,11 +912,14 @@ fn spawn_operational_reader(
     pool: Arc<OperationalRxBufferPool>,
     stats: Arc<Mutex<RxCaptureStats>>,
     stop: Arc<AtomicBool>,
+    wake: Arc<Wake>,
+    rx_poll_interval: Duration,
     #[cfg(feature = "managed-puresignal")] gate: Arc<managed_feedback::ReaderGate>,
 ) -> Result<(JoinHandle<()>, Receiver<Result<(), XdmaError>>), XdmaError> {
     let (startup_tx, startup_rx) = mpsc::sync_channel(1);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let thread_stop = stop.clone();
+    let thread_wake = wake.clone();
     let worker = thread::Builder::new()
         .name("saturn-xdma-rx".into())
         .spawn(move || match configure_operational_reader_scheduling() {
@@ -899,6 +933,8 @@ fn spawn_operational_reader(
                     pool,
                     stats,
                     thread_stop,
+                    thread_wake,
+                    rx_poll_interval,
                     #[cfg(feature = "managed-puresignal")]
                     gate,
                 );
@@ -931,6 +967,7 @@ fn spawn_operational_reader(
         }
         Err(RecvTimeoutError::Timeout) => {
             stop.store(true, Ordering::SeqCst);
+            wake.notify();
             let _ = worker.join();
             Err(XdmaError::Incompatible(
                 "timed out configuring direct XDMA RX reader scheduling".into(),
@@ -1237,6 +1274,8 @@ pub(crate) struct OperationalRxSession {
     pool: Arc<OperationalRxBufferPool>,
     reader_stats: Arc<Mutex<RxCaptureStats>>,
     reader_stop: Arc<AtomicBool>,
+    reader_wake: Arc<Wake>,
+    rx_poll_interval: Duration,
     reader: Option<JoinHandle<()>>,
     reader_result: Option<Receiver<Result<(), XdmaError>>>,
     identity: SaturnIdentity,
@@ -1271,6 +1310,7 @@ impl OperationalRxSession {
     ) -> Result<Self, XdmaError> {
         ensure_p2app_inactive()?;
         validate_frequency(frequency_hz)?;
+        let rx_poll_interval = parse_rx_fifo_wait(env::var_os(RX_FIFO_WAIT_ENV).as_deref())?;
         let min_read_bytes =
             parse_dma_min_read_bytes(env::var_os(DMA_MIN_READ_BYTES_ENV).as_deref())?;
         let register_path = env::var_os("SATURN_BRIDGE_XDMA_USER_DEVICE")
@@ -1316,12 +1356,15 @@ impl OperationalRxSession {
             ..RxCaptureStats::default()
         }));
         let reader_stop = Arc::new(AtomicBool::new(false));
+        let reader_wake = Arc::new(Wake::default());
         let mut session = Self {
             registers,
             parser: DdcStreamParser::new(direct_ddc_rate_word()),
             pool,
             reader_stats,
             reader_stop,
+            reader_wake: reader_wake.clone(),
+            rx_poll_interval,
             reader: None,
             reader_result: None,
             identity,
@@ -1337,7 +1380,7 @@ impl OperationalRxSession {
             rx_attenuation_db: rx_attenuation_db.min(31),
             stopped: false,
             #[cfg(feature = "managed-puresignal")]
-            reader_gate: Arc::new(managed_feedback::ReaderGate::new()),
+            reader_gate: Arc::new(managed_feedback::ReaderGate::with_wake(reader_wake)),
             #[cfg(feature = "managed-puresignal")]
             managed_feedback: None,
         };
@@ -1353,6 +1396,8 @@ impl OperationalRxSession {
             session.pool.clone(),
             session.reader_stats.clone(),
             session.reader_stop.clone(),
+            session.reader_wake.clone(),
+            session.rx_poll_interval,
             #[cfg(feature = "managed-puresignal")]
             session.reader_gate.clone(),
         ) {
@@ -1401,11 +1446,17 @@ impl OperationalRxSession {
     pub(crate) fn acquisition_study_json(&self) -> String {
         let stats = self.stats();
         let fifo = &self.fifo_v29_telemetry;
+        #[cfg(feature = "managed-puresignal")]
+        let feedback_active = self.reader_gate.feedback_active();
+        #[cfg(not(feature = "managed-puresignal"))]
+        let feedback_active = false;
+        let effective_interval = reader_poll_interval(self.rx_poll_interval, feedback_active);
         let mut counters = Vec::new();
         macro_rules! counter { ($($name:ident),+ $(,)?) => { $(
             counters.push(format!("\"{}\":{}", stringify!($name), stats.$name));
         )+ }; }
         counter!(
+            fifo_polls,
             dma_reads,
             dma_bytes,
             frames,
@@ -1428,13 +1479,15 @@ impl OperationalRxSession {
         format!(concat!("{{\"schema\":\"xdma-acquisition-study-v1\",",
             "\"scope\":\"cumulative RX session; layout changes may be included\",",
             "\"fifo_poll_us\":{},\"dma_min_read_bytes\":{},\"dma_max_read_bytes\":{},",
+            "\"reader_wait_mode\":\"notified-timer\",\"rx_fifo_poll_cap_us\":{},\"feedback_fifo_poll_us\":{},\"paused_wait_cap_us\":{},",
             "\"fifo_flag_coverage\":\"host latch observations; V30/V31 overflow input tied low; not FPGA loss coverage\",",
             "\"fifo_monitor_threshold_words\":{},\"counters\":{{{}}},",
             "\"latencies\":{{\"dma_read\":{},\"dma_completion_gap\":{},\"host_queue_age\":{},\"parser\":{}}},",
             "\"fifo_snapshot\":{{\"status\":\"{}\",\"valid\":{},\"generation\":{},",
             "\"scope\":\"last owner snapshot; acquisition age unknown; min/max/events are FPGA boot lifetime\",",
             "\"occupancy_words\":{:?},\"minimum_words\":{:?},\"maximum_words\":{:?},\"event_transitions\":{:?}}}}}"),
-            FIFO_POLL_INTERVAL.as_micros(), stats.dma_min_read_bytes, DMA_MAX_READ_BYTES,
+            effective_interval.as_micros(), stats.dma_min_read_bytes, DMA_MAX_READ_BYTES,
+            self.rx_poll_interval.as_micros(), FIFO_POLL_INTERVAL.as_micros(), PAUSED_READER_WAIT.as_micros(),
             self.fifo_monitor_threshold_words, counters.join(","),
             stats.dma_read_latency.cumulative_json(), stats.dma_completion_gap.cumulative_json(),
             stats.host_queue_age.cumulative_json(), stats.parser_latency.cumulative_json(),
@@ -1857,6 +1910,7 @@ impl OperationalRxSession {
             return Ok(());
         }
         self.reader_stop.store(true, Ordering::SeqCst);
+        self.reader_wake.notify();
         let reader_join = self.reader.take().map_or(Ok(()), |reader| {
             reader.join().map_err(|_| {
                 XdmaError::Incompatible("direct XDMA RX reader thread panicked".into())
@@ -2179,7 +2233,8 @@ mod tests {
 import json,sys
 x=json.load(sys.stdin)
 assert x['schema']=='xdma-acquisition-study-v1'
-assert x['fifo_poll_us']==250 and x['dma_min_read_bytes']==4096
+assert x['fifo_poll_us']==500 and x['dma_min_read_bytes']==4096
+assert x['feedback_fifo_poll_us']==250 and x['reader_wait_mode']=='notified-timer'
 assert x['counters']['dma_reads']==7 and x['counters']['samples']==91
 assert x['counters']['host_buffer_drops']==2
 h=x['latencies']['dma_completion_gap']
@@ -2199,6 +2254,80 @@ assert 'rf_safe' not in x
             .write_all(json.as_bytes())
             .unwrap();
         assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn rx_wait_cap_is_bounded_and_feedback_retains_250_us() {
+        assert_eq!(
+            parse_rx_fifo_wait(None).unwrap(),
+            Duration::from_micros(500)
+        );
+        for us in [250, 500] {
+            let input = us.to_string();
+            let cap = parse_rx_fifo_wait(Some(std::ffi::OsStr::new(&input))).unwrap();
+            assert_eq!(reader_poll_interval(cap, false), Duration::from_micros(us));
+            assert_eq!(reader_poll_interval(cap, true), FIFO_POLL_INTERVAL);
+        }
+        for input in ["0", "501", "1000", "", "-1", "500 "] {
+            assert!(parse_rx_fifo_wait(Some(std::ffi::OsStr::new(input))).is_err());
+        }
+    }
+
+    #[cfg(feature = "managed-puresignal")]
+    #[test]
+    fn real_reader_fifo_wait_is_woken_for_pause_and_session_stop() {
+        use crate::xdma_tx_radio::offline_fixture::DirectFixture;
+        let files = DirectFixture::new();
+        let mut rx = managed_feedback::tests::session(&files.register_path());
+        rx.stopped = false;
+        let regs = XdmaRegisterDevice::open_peripheral(&files.register_path()).unwrap();
+        let dma = File::open(files.register_path()).unwrap();
+        let stop = rx.reader_stop.clone();
+        let wake = rx.reader_wake.clone();
+        let pool = rx.pool.clone();
+        let stats = rx.reader_stats.clone();
+        let gate = rx.reader_gate.clone();
+        // A deliberately long test wait proves notification, not timer expiry.
+        // Production parsing accepts only 250/500 us. No device or RT thread.
+        rx.reader = Some(thread::spawn(move || {
+            run_operational_reader(
+                regs,
+                dma,
+                FifoStatusPolicy::Legacy,
+                4096,
+                pool,
+                stats,
+                stop,
+                wake,
+                Duration::from_secs(30),
+                gate,
+            )
+            .unwrap();
+        }));
+        let started = Instant::now();
+        while rx.reader_stats.lock().unwrap().fifo_polls == 0 {
+            assert!(started.elapsed() < Duration::from_secs(1));
+            thread::yield_now();
+        }
+        let (cancel_guard, watchdog) = mpsc::channel();
+        let guard_wake = rx.reader_wake.clone();
+        let guard_stop = rx.reader_stop.clone();
+        let guard = thread::spawn(move || {
+            if watchdog.recv_timeout(Duration::from_secs(1)).is_err() {
+                guard_stop.store(true, Ordering::SeqCst);
+                guard_wake.notify();
+            }
+        });
+        let pause_started = Instant::now();
+        assert!(managed_feedback::tests::request_pause_and_wait(&rx, 79));
+        assert!(pause_started.elapsed() < Duration::from_millis(500));
+        managed_feedback::tests::resume_reader(&rx);
+        let stop_started = Instant::now();
+        rx.stop().unwrap();
+        cancel_guard.send(()).unwrap();
+        guard.join().unwrap();
+        assert!(stop_started.elapsed() < Duration::from_millis(500));
+        assert!(rx.reader.is_none());
     }
 
     fn write_i24_be(dest: &mut [u8], value: i32) {

@@ -94,6 +94,35 @@ class WaitStudy(unittest.TestCase):
         b["satp"]["invalid"] = 1
         self.assertIsNone(tool.summarize([a,b])["satpWindow"])
 
+    def test_fifo_poll_counts_are_optional_for_older_release_baselines(self):
+        a, b = sample(10000), sample(12000, 4)
+        self.assertIsNone(tool.summarize([a, b])["fifoPolls"])
+        a["owner"]["shared_acquisition"]["counters"]["fifo_polls"] = 10
+        b["owner"]["shared_acquisition"]["counters"]["fifo_polls"] = 22
+        self.assertEqual(tool.summarize([a, b])["fifoPolls"]["perCompletedRead"], 3)
+        b["owner"]["shared_acquisition"]["counters"]["fifo_polls"] = 1
+        with self.assertRaisesRegex(ValueError, "regression"):
+            tool.summarize([a, b])
+
+    def test_transient_counter_reset_is_rejected_before_a_later_value_can_hide_it(self):
+        class Clock:
+            now = 10.0
+            def sleep(self, seconds): self.now += seconds
+            def monotonic(self): return self.now
+        clock = Clock()
+        import json
+        values = [json.dumps(sample(10000, 10)["owner"]), "{}",
+                  json.dumps(sample(11000, 1)["owner"]),
+                  json.dumps(sample(12000, 20)["owner"])]
+        with patch.object(tool.time, "monotonic", clock.monotonic), \
+             patch.object(tool.time, "time", clock.monotonic), \
+             patch.object(tool.time, "sleep", clock.sleep), \
+             patch.object(Path, "read_text", side_effect=values):
+            report = tool.collect(Path("/unused"), Path("/satp"), 2, 1)
+        self.assertFalse(report["passed"])
+        self.assertIn("between publications", report["error"])
+        self.assertEqual(len(report["samples"]), 1)
+
     def test_restart_preserves_partial_evidence_and_duplicate_publications_do_not_count(self):
         class Clock:
             now = 10.0

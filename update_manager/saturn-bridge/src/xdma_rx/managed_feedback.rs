@@ -16,13 +16,21 @@ pub(crate) struct ReaderGate {
     requested_pause: AtomicU64,
     paused: AtomicU64,
     scope: Mutex<Option<Scope>>,
+    wake: Arc<Wake>,
+    feedback_active: AtomicBool,
 }
 impl ReaderGate {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::with_wake(Arc::new(Wake::default()))
+    }
+    pub(crate) fn with_wake(wake: Arc<Wake>) -> Self {
         Self {
             requested_pause: AtomicU64::new(0),
             paused: AtomicU64::new(0),
             scope: Mutex::new(None),
+            wake,
+            feedback_active: AtomicBool::new(false),
         }
     }
     pub(crate) fn service_pause(&self) -> bool {
@@ -37,12 +45,20 @@ impl ReaderGate {
         *self.scope.lock_unpoisoned()
     }
     fn pause(&self, serial: u64) -> bool {
-        self.requested_pause.store(serial, Ordering::SeqCst);
+        if self.requested_pause.swap(serial, Ordering::SeqCst) != serial {
+            self.wake.notify();
+        }
         self.paused.load(Ordering::SeqCst) == serial
+    }
+    pub(crate) fn feedback_active(&self) -> bool {
+        self.feedback_active.load(Ordering::SeqCst)
     }
     fn resume(&self, scope: Option<Scope>) {
         *self.scope.lock_unpoisoned() = scope;
+        self.feedback_active
+            .store(scope.is_some(), Ordering::SeqCst);
         self.requested_pause.store(0, Ordering::SeqCst);
+        self.wake.notify();
     }
 }
 #[derive(Clone, Copy)]
@@ -315,6 +331,7 @@ pub(crate) mod tests {
         assert!(!path.starts_with("/dev"));
         let device = XdmaRegisterDevice::open_peripheral(path).unwrap();
         let identity = device.identity().clone();
+        let reader_wake = Arc::new(Wake::default());
         OperationalRxSession {
             fifo_policy: FifoStatusPolicy::for_identity(&identity),
             rx_counter_v31: rx_counter_v31::Owner::for_build_id(identity.user_version),
@@ -324,6 +341,8 @@ pub(crate) mod tests {
             pool: Arc::new(OperationalRxBufferPool::new(3, false).unwrap()),
             reader_stats: Arc::new(Mutex::new(RxCaptureStats::default())),
             reader_stop: Arc::new(AtomicBool::new(false)),
+            reader_wake: reader_wake.clone(),
+            rx_poll_interval: RX_FIFO_POLL_INTERVAL,
             reader: None,
             reader_result: None,
             fifo_v29_telemetry: FpgaFifoV29Telemetry::default(),
@@ -335,10 +354,24 @@ pub(crate) mod tests {
             rx_antenna: 1,
             rx_attenuation_db: 0,
             stopped: true,
-            reader_gate: Arc::new(ReaderGate::new()),
+            reader_gate: Arc::new(ReaderGate::with_wake(reader_wake)),
             managed_feedback: None,
         }
     }
+    pub(crate) fn request_pause_and_wait(session: &OperationalRxSession, serial: u64) -> bool {
+        let until = Instant::now() + Duration::from_millis(600);
+        while !session.reader_gate.pause(serial) {
+            if Instant::now() > until {
+                return false;
+            }
+            thread::yield_now();
+        }
+        true
+    }
+    pub(crate) fn resume_reader(session: &OperationalRxSession) {
+        session.reader_gate.resume(None);
+    }
+
     pub(crate) fn service(session: &mut OperationalRxSession) -> Result<(), XdmaError> {
         session.service_managed_feedback()?; // request pause
         session.reader_gate.service_pause(); // previously in-flight read is finished
@@ -435,6 +468,36 @@ pub(crate) mod tests {
         worker.join().unwrap();
         assert!(gate.pause(17));
         gate.resume(None);
+        assert!(!gate.service_pause());
+    }
+
+    #[test]
+    fn layout_resume_and_pause_notify_the_same_single_reader() {
+        use crate::tx_thread::feedback_owner::tests::scope;
+        let gate = Arc::new(ReaderGate::new());
+        gate.resume(Some(scope(1)));
+        assert!(gate.feedback_active());
+        let reader = gate.clone();
+        let (ready, waiting) = std::sync::mpsc::sync_channel(1);
+        let (complete, done) = std::sync::mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            reader.wake.register_current();
+            reader.wake.wait(Duration::from_secs(1)); // retained pre-registration resume
+            assert!(reader.feedback_active());
+            ready.send(()).unwrap();
+            reader.wake.wait(Duration::from_secs(1));
+            assert!(reader.service_pause());
+            complete.send(()).unwrap();
+        });
+        waiting.recv_timeout(Duration::from_millis(300)).unwrap();
+        assert!(!gate.pause(21));
+        let result = done.recv_timeout(Duration::from_millis(300));
+        gate.wake.notify(); // ensure join even if notification regresses
+        worker.join().unwrap();
+        assert!(result.is_ok());
+        assert!(gate.pause(21));
+        gate.resume(None);
+        assert!(!gate.feedback_active());
         assert!(!gate.service_pause());
     }
 

@@ -745,7 +745,7 @@ impl RuntimeIo for Io {
                             );
                             assert_eq!(perf.contains("\"shared_acquisition\":null"), !direct);
                             if direct {
-                                assert!(perf.contains("\"fifo_poll_us\":250"));
+                                assert!(perf.contains("\"fifo_poll_us\":500"));
                                 assert!(
                                     perf.contains("\"bucket_model\":\"ceil-us-pow2-last-open\"")
                                 );

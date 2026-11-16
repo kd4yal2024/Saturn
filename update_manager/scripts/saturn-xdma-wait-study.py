@@ -86,6 +86,14 @@ def summarize(samples):
     keys = ("frequency_hz", "sample_rate_hz", "adc", "ddc", "connections", "iq", "audio")
     states = [{k: s["owner"]["metrics"].get(k) for k in keys} for s in samples]
     stable = all(state == states[0] for state in states)
+    fifo_polls = None
+    if "fifo_polls" in a["counters"] and "fifo_polls" in b["counters"]:
+        delta = natural(b["counters"]["fifo_polls"]) - natural(a["counters"]["fifo_polls"])
+        if delta < 0:
+            raise ValueError("FIFO poll counter reset or regression")
+        fifo_polls = {"delta": delta, "perSecond": delta / elapsed,
+                      "perCompletedRead": delta / counters["dma_reads"]
+                      if counters["dma_reads"] else None}
     rates = {"dmaReadsPerSecond": counters["dma_reads"] / elapsed,
              "dmaBytesPerSecond": counters["dma_bytes"] / elapsed,
              "averageReadBytes": counters["dma_bytes"] / counters["dma_reads"]
@@ -104,7 +112,9 @@ def summarize(samples):
     return {"publishedWindowSeconds": elapsed, "observations": len(samples),
             "stableRadioAndClients": stable, "radioAtStart": states[0],
             "radioAtEnd": states[-1], "counterDeltas": counters, "rates": rates,
-            "latencies": latencies, "satpWindow": satp,
+            "latencies": latencies, "satpWindow": satp, "fifoPolls": fifo_polls,
+            "waitPolicyAtEnd": {k: b.get(k) for k in ("fifo_poll_us", "reader_wait_mode",
+                "rx_fifo_poll_cap_us", "feedback_fifo_poll_us", "paused_wait_cap_us")},
             "fifoSessionHighWaterWords": b["counters"]["fifo_depth_hwm"],
             "fifoSnapshotAtEnd": b["fifo_snapshot"],
             "limits": "FIFO high-water and latency maxima are session values. FPGA min/max/events are boot lifetime. No sub-second FIFO occupancy coverage, cancellation deadline, loss-free proof or longer-wait approval follows from this report."}
@@ -127,6 +137,14 @@ def collect(perf_path, satp_path, seconds, interval):
             if last_stamp is not None and stamp < last_stamp:
                 raise ValueError("owner publication clock regressed")
             if stamp != last_stamp:
+                if report["samples"]:
+                    previous = report["samples"][-1]["owner"]["shared_acquisition"]
+                    current_stats = owner["shared_acquisition"]
+                    keys = COUNTERS + (("fifo_polls",) if "fifo_polls" in previous["counters"] else ())
+                    if any(natural(current_stats["counters"][k]) < previous["counters"][k] for k in keys):
+                        raise ValueError("acquisition counter reset or regression between publications")
+                    for key in ("dma_read", "dma_completion_gap", "host_queue_age", "parser"):
+                        histogram_delta(previous["latencies"][key], current_stats["latencies"][key])
                 satp = None
                 try:
                     s = json.loads(satp_path.read_text())

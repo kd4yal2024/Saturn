@@ -20,6 +20,7 @@ mod satp_control;
 #[cfg(feature = "managed-puresignal")]
 mod shared_backend;
 mod sync_ext;
+mod thread_wake;
 mod tci;
 mod tx_audio;
 mod tx_codec;
