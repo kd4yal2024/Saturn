@@ -1972,14 +1972,19 @@ impl SharedIngress {
     pub(super) fn settings_epoch(&self) -> Arc<SettingsEpoch> {
         self.cancel.settings_epoch.clone()
     }
+    pub(super) fn owner_wake(&self) -> Arc<super::owner_mailbox::Wake> {
+        self.cancel.wake.clone()
+    }
     pub(crate) fn channels(
         operator: OperatorIngress,
         cancel: Cancel,
         model: Arc<Mutex<RadioModel>>,
     ) -> (Self, Receivers) {
-        let (commands, crx) = super::owner_mailbox::sync_channel(16);
-        let (audio, arx) = super::owner_mailbox::sync_channel(16);
-        let (feedback, frx) = super::owner_mailbox::sync_channel(FEEDBACK_QUEUE_BLOCKS);
+        let wake = cancel.wake.clone();
+        let (commands, crx) = super::owner_mailbox::sync_channel_with_wake(16, wake.clone());
+        let (audio, arx) = super::owner_mailbox::sync_channel_with_wake(16, wake.clone());
+        let (feedback, frx) =
+            super::owner_mailbox::sync_channel_with_wake(FEEDBACK_QUEUE_BLOCKS, wake);
         (
             Self {
                 performance: Arc::new(Mutex::new(Default::default())),
@@ -2295,6 +2300,7 @@ impl SharedIngress {
             .is_some_and(|s| self.cancel.release_generation(s))
         {
             self.fault.lock_unpoisoned().get_or_insert(fault);
+            self.cancel.wake.notify();
         }
     }
     pub(crate) fn stop_feedback(
@@ -2304,6 +2310,7 @@ impl SharedIngress {
     ) -> bool {
         if self.cancel.release_generation(output) {
             self.fault.lock_unpoisoned().get_or_insert(fault);
+            self.cancel.wake.notify();
             true
         } else {
             false
@@ -2369,6 +2376,8 @@ impl SharedIngress {
         self.release(); // closes the output fence BEFORE any mutex/queue work
         let mut pending = self.fault.lock_unpoisoned();
         pending.get_or_insert(fault);
+        drop(pending);
+        self.cancel.wake.notify();
     }
     pub(super) fn take_fault(&self) -> Option<Fault> {
         self.fault.try_lock().ok()?.take()

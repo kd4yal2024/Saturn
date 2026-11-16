@@ -9,27 +9,74 @@ use std::{
     collections::VecDeque,
     marker::PhantomData,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc::{TryRecvError, TrySendError},
-        Arc, Mutex, TryLockError, Weak,
+        Arc, Mutex, OnceLock, TryLockError, Weak,
     },
+    thread,
+    time::Duration,
 };
+
+const PENDING: u8 = 1;
+const PARKED: u8 = 2;
+
+/// Coalesced hints only: this never dequeues/reorders a message or grants output.
+/// One atomic word closes the notify-before-park race. The active consumer does
+/// not wait; idle waits use Rust's retained unpark token and a bounded timeout.
+#[derive(Default)]
+pub(crate) struct Wake {
+    state: AtomicU8,
+    owner: OnceLock<thread::Thread>,
+}
+impl Wake {
+    pub(crate) fn register_current(&self) {
+        let current = thread::current();
+        if let Err(current) = self.owner.set(current) {
+            assert_eq!(
+                self.owner.get().unwrap().id(),
+                current.id(),
+                "one parked owner"
+            );
+        }
+    }
+    pub(crate) fn notify(&self) {
+        let previous = self.state.fetch_or(PENDING, Ordering::AcqRel);
+        if previous & PARKED != 0 {
+            if let Some(owner) = self.owner.get() {
+                owner.unpark();
+            }
+        }
+    }
+    pub(crate) fn wait(&self, limit: Duration) {
+        self.wait_before_park(limit, || {});
+    }
+    fn wait_before_park(&self, limit: Duration, before_park: impl FnOnce()) {
+        let previous = self.state.swap(PARKED, Ordering::AcqRel);
+        if previous & PENDING == 0 {
+            before_park(); // empty in production; deterministic race seam in tests
+            thread::park_timeout(limit);
+        }
+        // A concurrent notification remains pending for the next consumer turn.
+        self.state.fetch_and(!PARKED, Ordering::AcqRel);
+    }
+}
 
 struct Inner<T> {
     queue: Mutex<VecDeque<T>>,
     capacity: usize,
     receiver_alive: AtomicBool,
     senders: Weak<()>,
+    wake: Arc<Wake>,
 }
 pub(crate) struct SyncSender<T> {
     inner: Arc<Inner<T>>,
-    live: Arc<()>,
+    live: Option<Arc<()>>,
 }
 impl<T> Clone for SyncSender<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
-            live: self.live.clone(),
+            live: Some(self.live.as_ref().unwrap().clone()),
         }
     }
 }
@@ -46,7 +93,14 @@ pub(crate) struct OwnedReceiver<T> {
     consumer: PhantomData<Cell<()>>,
 }
 
+#[cfg(test)]
 pub(crate) fn sync_channel<T>(capacity: usize) -> (SyncSender<T>, Receiver<T>) {
+    sync_channel_with_wake(capacity, Arc::new(Wake::default()))
+}
+pub(crate) fn sync_channel_with_wake<T>(
+    capacity: usize,
+    wake: Arc<Wake>,
+) -> (SyncSender<T>, Receiver<T>) {
     assert!(capacity > 0);
     let live = Arc::new(());
     let inner = Arc::new(Inner {
@@ -54,11 +108,12 @@ pub(crate) fn sync_channel<T>(capacity: usize) -> (SyncSender<T>, Receiver<T>) {
         capacity,
         receiver_alive: AtomicBool::new(true),
         senders: Arc::downgrade(&live),
+        wake,
     });
     (
         SyncSender {
             inner: inner.clone(),
-            live,
+            live: Some(live),
         },
         Receiver::Owned(OwnedReceiver {
             inner,
@@ -93,6 +148,7 @@ impl<T> SyncSender<T> {
         };
         queue.push_back(message);
         drop(queue);
+        self.inner.wake.notify();
         Ok(skipped)
     }
     pub(crate) fn try_send(&self, message: T) -> Result<(), TrySendError<T>> {
@@ -110,6 +166,8 @@ impl<T> SyncSender<T> {
             return Err(TrySendError::Full(message));
         }
         queue.push_back(message);
+        drop(queue);
+        self.inner.wake.notify();
         Ok(())
     }
     #[cfg(test)]
@@ -119,6 +177,16 @@ impl<T> SyncSender<T> {
         after_lock: impl FnOnce(),
     ) -> Result<(), TrySendError<T>> {
         self.send_inner(message, after_lock)
+    }
+}
+impl<T> Drop for SyncSender<T> {
+    fn drop(&mut self) {
+        let live = self.live.take().unwrap();
+        let last = Arc::strong_count(&live) == 1;
+        drop(live); // publish disconnection BEFORE waking the receiver
+        if last {
+            self.inner.wake.notify();
+        }
     }
 }
 impl<T> Receiver<T> {
@@ -163,6 +231,93 @@ impl<T> From<std::sync::mpsc::Receiver<T>> for Receiver<T> {
 mod tests {
     use super::*;
     use std::{sync::mpsc, thread, time::Duration};
+
+    #[test]
+    fn notification_before_registration_is_retained_without_creating_a_message() {
+        let wake = Arc::new(Wake::default());
+        let (tx, rx) = sync_channel_with_wake::<u64>(1, wake.clone());
+        wake.notify();
+        let worker_wake = wake.clone();
+        let (done, result) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            worker_wake.register_current();
+            worker_wake.wait(Duration::from_secs(1));
+            done.send(rx.try_recv()).unwrap();
+        });
+        let outcome = result.recv_timeout(Duration::from_millis(200));
+        wake.notify(); // always release/join even if the regression loses a wake
+        worker.join().unwrap();
+        assert_eq!(outcome.unwrap(), Err(TryRecvError::Empty));
+        drop(tx);
+    }
+
+    #[test]
+    fn each_shared_mailbox_wakes_between_arming_and_park_without_restamping() {
+        for source in 0..3 {
+            let wake = Arc::new(Wake::default());
+            let channels: Vec<_> = (0..3)
+                .map(|_| sync_channel_with_wake(2, wake.clone()))
+                .collect();
+            let (senders, mut receivers): (Vec<_>, Vec<_>) = channels.into_iter().unzip();
+            let receiver = receivers.remove(source);
+            let worker_wake = wake.clone();
+            let (armed, entering) = mpsc::channel();
+            let resume = Arc::new(AtomicBool::new(false));
+            let proceed = resume.clone();
+            let (done, result) = mpsc::channel();
+            let worker = thread::spawn(move || {
+                worker_wake.register_current();
+                worker_wake.wait_before_park(Duration::from_secs(1), || {
+                    armed.send(()).unwrap();
+                    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                    while !proceed.load(Ordering::Acquire) {
+                        assert!(std::time::Instant::now() < deadline);
+                        thread::yield_now();
+                    }
+                });
+                done.send(receiver.try_recv()).unwrap();
+            });
+            entering.recv_timeout(Duration::from_secs(1)).unwrap();
+            senders[source].try_send((source, 42u64, 123u64)).unwrap();
+            resume.store(true, Ordering::Release);
+            let outcome = result.recv_timeout(Duration::from_millis(200));
+            wake.notify();
+            worker.join().unwrap();
+            assert_eq!(outcome.unwrap(), Ok((source, 42, 123)));
+        }
+    }
+
+    #[test]
+    fn last_sender_disconnect_is_visible_before_the_idle_receiver_wakes() {
+        let wake = Arc::new(Wake::default());
+        let (sender, receiver) = sync_channel_with_wake::<u64>(1, wake.clone());
+        let clone = sender.clone();
+        drop(clone);
+        let worker_wake = wake.clone();
+        let (armed, entering) = mpsc::channel();
+        let resume = Arc::new(AtomicBool::new(false));
+        let proceed = resume.clone();
+        let (done, result) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            worker_wake.register_current();
+            worker_wake.wait_before_park(Duration::from_secs(1), || {
+                armed.send(()).unwrap();
+                let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                while !proceed.load(Ordering::Acquire) {
+                    assert!(std::time::Instant::now() < deadline);
+                    thread::yield_now();
+                }
+            });
+            done.send(receiver.try_recv()).unwrap();
+        });
+        entering.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(sender);
+        resume.store(true, Ordering::Release);
+        let outcome = result.recv_timeout(Duration::from_millis(200));
+        wake.notify();
+        worker.join().unwrap();
+        assert_eq!(outcome.unwrap(), Err(TryRecvError::Disconnected));
+    }
 
     #[test]
     fn latest_pcm_retains_bounds_original_ages_and_generation_barriers() {

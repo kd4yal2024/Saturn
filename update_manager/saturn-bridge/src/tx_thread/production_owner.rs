@@ -341,7 +341,7 @@ pub(crate) fn spawn(
                 let mut last_keepalive = origin;
                 #[cfg(feature = "managed-puresignal")]
                 let mut correction_poll = crate::correction_monitor::Poller::new();
-                owner.run(&thread_stop, |owner, _| {
+                owner.run_with_idle_period(&thread_stop, keepalive_period, |owner, _| {
                     admitted_configuration |= ingress.startup_ready();
                     if !admitted_configuration
                         && origin.elapsed().as_nanos() > u128::from(options.startup_timeout_ns)
@@ -442,6 +442,11 @@ impl Runtime {
     pub(crate) fn request_stop(&self) {
         self.ingress.release();
         self.stop.store(true, Ordering::Release);
+        // Store the external stop before waking: a release can race ahead of
+        // that store, and shutdown must not wait for the idle timer afterward.
+        if let Some(worker) = &self.worker {
+            worker.thread().unpark();
+        }
     }
 }
 impl Drop for Runtime {
@@ -478,7 +483,15 @@ mod tests {
     fn matched_production_generated_only_single_owner_and_shutdown_both_backends() {
         startup_fixture(true);
     }
+    #[test]
+    #[ignore = "serial real-WDSP owner idle CPU/shutdown profile; file/loopback backends, no RF"]
+    fn matched_production_idle_owner_profile_both_backends() {
+        startup_fixture_profile(false, true);
+    }
     fn startup_fixture(generated_only: bool) {
+        startup_fixture_profile(generated_only, false);
+    }
+    fn startup_fixture_profile(generated_only: bool, profile: bool) {
         struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
         impl Drop for Environment {
             fn drop(&mut self) {
@@ -607,6 +620,35 @@ mod tests {
                 "parallel legacy native owner"
             );
             front.admit_shared_clients().unwrap();
+            let idle_profile = profile.then(|| {
+                use std::os::unix::thread::JoinHandleExt;
+                let mut clock: libc::clockid_t = 0;
+                // SAFETY: this borrowed worker is live until joined below.
+                assert_eq!(
+                    unsafe {
+                        libc::pthread_getcpuclockid(
+                            runtime.worker.as_ref().unwrap().as_pthread_t(),
+                            &mut clock,
+                        )
+                    },
+                    0
+                );
+                let read_cpu = || {
+                    let mut value = libc::timespec {
+                        tv_sec: 0,
+                        tv_nsec: 0,
+                    };
+                    // SAFETY: value is writable timespec storage; worker is live.
+                    assert_eq!(unsafe { libc::clock_gettime(clock, &mut value) }, 0);
+                    value.tv_sec as u64 * 1_000_000_000 + value.tv_nsec as u64
+                };
+                let before = read_cpu();
+                let started = Instant::now();
+                thread::sleep(std::time::Duration::from_secs(3));
+                let used = read_cpu() - before;
+                (started.elapsed().as_nanos(), used)
+            });
+            let stop_started = Instant::now();
             runtime.request_stop();
             assert!(runtime
                 .done
@@ -615,6 +657,9 @@ mod tests {
                 .is_ok());
             runtime.worker.take().unwrap().join().unwrap();
             assert!(runtime.link.restored().unwrap());
+            if let Some((elapsed, cpu)) = idle_profile {
+                println!("OWNER_PROFILE backend={} idle_elapsed_ns={} idle_cpu_ns={} shutdown_us={} physical_rf=false scheduling=fixture-CFS", if direct {"DirectXdma"} else {"P2"}, elapsed, cpu, stop_started.elapsed().as_micros());
+            }
             println!("matched production constructor backend={} strict_policy={} generated_only={} topology_fixture_attestation=true rf_permission=false shutdown_complete=true legacy_native_rejected=true", if direct { "DirectXdma" } else { "P2" }, options.operational_policy.is_none(), generated_only);
         }
     }

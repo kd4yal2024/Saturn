@@ -28,6 +28,7 @@ use std::{
 const TCI_MIC_STAGING_SAMPLES: usize = 2048;
 // Ingress validates at most 1024 scalar samples; mono is the largest frame.
 const MAX_TCI_MONO_FRAME_SAMPLES: usize = 1024;
+const SHARED_IDLE_WAIT_MAX: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// process() admits pscc only (ZERO exchanges); render() performs one exchange.
 /// Feedback fitting, mic rendering, stop progress and cleanup own the SAME N.
@@ -201,6 +202,7 @@ impl Audio {
 pub(crate) struct Cancel {
     fence: Arc<OutputFence>,
     pub(super) settings_epoch: Arc<SettingsEpoch>,
+    pub(super) wake: Arc<super::owner_mailbox::Wake>,
 }
 /// Cancellation is read from the fence's atomic transition, never published
 /// afterward. Owner-local mutations are serialized by the scheduling loop.
@@ -238,10 +240,15 @@ impl Cancel {
         Self {
             settings_epoch: Arc::new(SettingsEpoch::new(fence.clone())),
             fence,
+            wake: Arc::new(super::owner_mailbox::Wake::default()),
         }
     }
     pub(super) fn release_generation(&self, stamp: OutputStamp) -> bool {
-        self.fence.cancel_generation(stamp)
+        let released = self.fence.cancel_generation(stamp);
+        if released {
+            self.wake.notify();
+        }
+        released
     }
     pub(super) fn output_open(&self) -> bool {
         !self.fence.is_closed()
@@ -249,6 +256,7 @@ impl Cancel {
     /// Works with full/disconnected channels and an in-flight DMA permit.
     pub(crate) fn release(&self) {
         self.fence.cancel();
+        self.wake.notify();
     }
     // Same atomic transition as release; pausing after it cannot reveal a
     // closed fence without its cancellation ticket.
@@ -334,6 +342,7 @@ pub(crate) struct OwnerLoop<'a, N: ScheduledNative> {
     commands: Receiver<TxCommand>,
     audio: Receiver<Audio>,
     feedback: Receiver<Box<PairBlock>>,
+    wake: Arc<super::owner_mailbox::Wake>,
     deferred_feedback: Option<Box<PairBlock>>,
     origin: Instant,
     timing: Timing,
@@ -385,6 +394,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         let cancel = Cancel {
             settings_epoch: Arc::new(SettingsEpoch::new(fence.clone())),
             fence,
+            wake: Arc::new(super::owner_mailbox::Wake::default()),
         };
         let (ingress, rx) = super::ps_ingress::SharedIngress::channels(operator, cancel, model);
         let mut owner = Self::new(life, rx.commands, rx.audio, rx.feedback, origin, timing)?;
@@ -411,6 +421,7 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
             commands: commands.into(),
             audio: audio.into(),
             feedback: feedback.into(),
+            wake: Arc::new(super::owner_mailbox::Wake::default()),
             deferred_feedback: None,
             origin,
             timing,
@@ -453,11 +464,13 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
         Cancel {
             fence: self.life.offline_owner().cancellation_fence(),
             settings_epoch: self.settings_epoch.clone(),
+            wake: self.wake.clone(),
         }
     }
     pub(crate) fn attach_ingress(&mut self, ingress: super::ps_ingress::SharedIngress) {
         assert!(self.ingress.is_none(), "one ingress route per TX owner");
         self.settings_epoch = ingress.settings_epoch();
+        self.wake = ingress.owner_wake();
         self.ingress = Some(ingress);
         self.publish_ingress();
     }
@@ -1794,37 +1807,64 @@ impl<'a, N: ScheduledNative> OwnerLoop<'a, N> {
     /// Offline harness hooks enqueue BEFORE the consumer turn. This runs the
     /// same driver as run(), not a hand-written sequence of lifecycle calls.
     pub(crate) fn run(&mut self, stop: &AtomicBool, mut ingress: impl FnMut(&mut Self, u64)) {
+        self.run_with_idle_period(stop, SHARED_IDLE_WAIT_MAX, &mut ingress);
+    }
+    pub(crate) fn run_with_idle_period(
+        &mut self,
+        stop: &AtomicBool,
+        idle_period: std::time::Duration,
+        mut ingress: impl FnMut(&mut Self, u64),
+    ) {
+        assert!(!idle_period.is_zero());
+        let idle_period = idle_period.min(SHARED_IDLE_WAIT_MAX);
+        // Older standard-channel fixtures have no notifying producers. Their
+        // established 1 ms fallback is retained, rather than silently sleeping
+        // longer on a channel that cannot wake us.
+        let wake = self.ingress.as_ref().map(|_| self.wake.clone());
+        if let Some(wake) = &wake {
+            wake.register_current();
+        }
         // The external flag requests shutdown, not immediate channel destruction
         // while RF/native stop is pending. Continue the driver until ReadyOff.
         let draining = AtomicBool::new(false);
-        scheduler::drive(&draining, || {
-            let now = self.origin.elapsed().as_nanos() as u64;
-            if stop.load(std::sync::atomic::Ordering::Relaxed) && !self.shutdown {
-                self.shutdown = true;
-                self.pending_config = None;
-                self.discard_local();
-                let _ = self.life.shutdown(now);
-            }
-            if self.shutdown && self.life.status().phase == Phase::Blocked {
-                // Stop/cleanup failure is NOT success. Production returns an
-                // error; the native wrapper retains uncertain native storage.
-                return scheduler::Turn::Exit;
-            }
-            let active = self.life.status().phase == Phase::Active;
-            let hook_started = Instant::now();
-            ingress(self, now);
-            if active {
-                self.counters.active_max_hook_ns = self
-                    .counters
-                    .active_max_hook_ns
-                    .max(hook_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
-            }
-            // Keepalive/observation hooks may take time. Deadlines use the
-            // consumer time after those hooks, never the earlier timestamp.
-            let current = self.origin.elapsed().as_nanos() as u64;
-            let result = self.turn_inner(current, |_| {}, true, |_| {});
-            self.publish_ingress();
-            result
-        });
+        scheduler::drive_with_idle_wait(
+            &draining,
+            || {
+                let now = self.origin.elapsed().as_nanos() as u64;
+                if stop.load(std::sync::atomic::Ordering::Relaxed) && !self.shutdown {
+                    self.shutdown = true;
+                    self.pending_config = None;
+                    self.discard_local();
+                    let _ = self.life.shutdown(now);
+                }
+                if self.shutdown && self.life.status().phase == Phase::Blocked {
+                    // Stop/cleanup failure is NOT success. Production returns an
+                    // error; the native wrapper retains uncertain native storage.
+                    return scheduler::Turn::Exit;
+                }
+                let active = self.life.status().phase == Phase::Active;
+                let hook_started = Instant::now();
+                ingress(self, now);
+                if active {
+                    self.counters.active_max_hook_ns = self
+                        .counters
+                        .active_max_hook_ns
+                        .max(hook_started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
+                }
+                // Keepalive/observation hooks may take time. Deadlines use the
+                // consumer time after those hooks, never the earlier timestamp.
+                let current = self.origin.elapsed().as_nanos() as u64;
+                let result = self.turn_inner(current, |_| {}, true, |_| {});
+                self.publish_ingress();
+                result
+            },
+            || {
+                if let Some(wake) = &wake {
+                    wake.wait(idle_period);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            },
+        );
     }
 }
