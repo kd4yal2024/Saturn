@@ -102,8 +102,7 @@ impl P2Session {
         // Normal receive setup used 31 dB while PS was off; restore that safe
         // value after the unkey barrier. ADC2 TX attenuation stays at 31 dB.
         let attenuation = desired.scope.map_or(31, |scope| scope.attenuation_db);
-        let sequence = self.duc_specific_sequence.fetch_add(1, Ordering::Relaxed);
-        let duc = build_duc_specific_packet(sequence, 31, attenuation);
+        let duc = build_duc_specific_packet(31, attenuation);
         if self
             .socket
             .send_to(&duc, self.target_addr(self.config.port_map.duc_specific))?

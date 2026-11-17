@@ -1,6 +1,6 @@
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -48,8 +48,9 @@ pub struct P2Session {
     config: BridgeConfig,
     socket: UdpSocket,
     kernel_ingress: Option<super::ingress::Clock>,
-    duc_iq_sequence: AtomicU32,
-    duc_specific_sequence: AtomicU32,
+    /// Serializes sequence assignment + completed UDP send with RUN-stop reset.
+    /// Fenced callers acquire their existing output permit before this lock.
+    duc_iq_sequence: Mutex<u32>,
     /// Serializes reads from the shared UDP socket. Discovery holds this for
     /// its complete request/reply exchange, so the RX thread cannot consume a
     /// discovery reply after observing a stale `discovery_exclusive` value.
@@ -86,8 +87,7 @@ impl P2Session {
             config,
             socket,
             kernel_ingress: None,
-            duc_iq_sequence: AtomicU32::new(0),
-            duc_specific_sequence: AtomicU32::new(0),
+            duc_iq_sequence: Mutex::new(0),
             receive_lock: Mutex::new(()),
             discovery_exclusive: AtomicBool::new(false),
             #[cfg(feature = "offline-puresignal-owner-adapters")]
@@ -152,15 +152,7 @@ impl P2Session {
         state.tx = false;
         state.tx_drive = 0;
         state.alex_tx_word &= !ALEX_TX_RELAY_BIT;
-        let packet = build_high_priority_to_sdr(&state);
-        let written = self.socket.send_to(
-            &packet,
-            self.target_addr(self.config.port_map.high_priority_to_sdr),
-        )?;
-        if written != packet.len() {
-            return Err(io::ErrorKind::WriteZero.into());
-        }
-        Ok(())
+        self.send_high_priority_permitted(&state)
     }
     #[cfg(feature = "managed-puresignal")]
     pub(crate) fn shared_keyed_keepalive(
@@ -180,18 +172,8 @@ impl P2Session {
         state.ddc_phase_words[0] = frequency_to_phase_word(model.desired.tx_frequency_hz);
         state.ddc_phase_words[1] = state.ddc_phase_words[0];
         select_managed_external_feedback(&mut state);
-        let packet = build_high_priority_to_sdr(&state);
-        let written = self
-            .socket
-            .send_to(
-                &packet,
-                self.target_addr(self.config.port_map.high_priority_to_sdr),
-            )
-            .map_err(|_| Fault::TxAuthority)?;
-        if written != packet.len() {
-            return Err(Fault::TxAuthority);
-        }
-        Ok(())
+        self.send_high_priority_permitted(&state)
+            .map_err(|_| Fault::TxAuthority)
     }
 
     pub fn configure_rx_ddc(
@@ -351,11 +333,30 @@ impl P2Session {
 
     pub fn send_high_priority(&self, model: &RadioModel) -> io::Result<()> {
         let state = build_high_priority_state(model, self.config.remote_tx_100w_drive_byte);
-        let packet = build_high_priority_to_sdr(&state);
-        self.send_packet(
-            self.target_addr(self.config.port_map.high_priority_to_sdr),
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let _permit = self
+            .offline_output_fence
+            .as_ref()
+            .map(|f| f.enter())
+            .transpose()?;
+        self.send_high_priority_permitted(&state)
+    }
+
+    /// Caller holds any required output permit. Only RUN=0 resets the stream;
+    /// a PTT-only release preserves sequence continuity across overs.
+    fn send_high_priority_permitted(&self, state: &HighPriorityToSdr) -> io::Result<()> {
+        let packet = build_high_priority_to_sdr(state);
+        let mut stopped_sequence = (!state.run).then(|| self.duc_iq_sequence.lock_unpoisoned());
+        let written = self.socket.send_to(
             &packet,
+            self.target_addr(self.config.port_map.high_priority_to_sdr),
         )?;
+        if written != packet.len() {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        if let Some(sequence) = stopped_sequence.as_mut() {
+            **sequence = 0;
+        }
         Ok(())
     }
 
@@ -447,7 +448,7 @@ impl P2Session {
     /// Call this when the last TCI client disconnects so the SDR goes idle immediately
     /// rather than waiting for its watchdog to expire.
     pub fn send_stop(&self) -> io::Result<()> {
-        let packet = build_high_priority_to_sdr(&HighPriorityToSdr {
+        let state = HighPriorityToSdr {
             run: false,
             tx: false,
             ddc_phase_words: [0u32; 10],
@@ -460,39 +461,43 @@ impl P2Session {
             alex_rx1_filter_word: 0,
             rx2_attenuation_db: 0,
             rx1_attenuation_db: 0,
-        });
-        self.send_packet(
-            self.target_addr(self.config.port_map.high_priority_to_sdr),
-            &packet,
-        )?;
-        Ok(())
+        };
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let _permit = self
+            .offline_output_fence
+            .as_ref()
+            .map(|f| f.enter())
+            .transpose()?;
+        self.send_high_priority_permitted(&state)
     }
 
     /// Send DUC IQ samples to the radio in 240-sample (1444-byte) packets.
     /// `iq_samples` is interleaved [I, Q, I, Q, …] f32 values; only complete
     /// 240-pair chunks are transmitted — any trailing partial chunk is dropped.
     pub fn send_duc_iq(&self, iq_samples: &[f32]) -> io::Result<()> {
-        let target = self.target_addr(self.config.port_map.duc_iq);
         for chunk in iq_samples.chunks(DUC_IQ_SAMPLES * 2) {
             if chunk.len() < DUC_IQ_SAMPLES * 2 {
                 break;
             }
-            let seq = self.duc_iq_sequence.fetch_add(1, Ordering::Relaxed);
-            let packet = build_duc_iq_packet(seq, chunk);
-            self.send_packet(target, &packet)?;
+            #[cfg(feature = "offline-puresignal-owner-adapters")]
+            let _permit = self
+                .offline_output_fence
+                .as_ref()
+                .map(|f| f.enter())
+                .transpose()?;
+            self.send_iq_packet_permitted(chunk)?;
         }
         Ok(())
     }
 
     pub fn send_duc_specific(&self, model: &RadioModel) -> io::Result<()> {
         let target = self.target_addr(self.config.port_map.duc_specific);
-        let seq = self.duc_specific_sequence.fetch_add(1, Ordering::Relaxed);
         let adc0_attenuation = if model.desired.pure_signal_enabled {
             model.desired.pure_signal_attenuation_db.min(31)
         } else {
             31
         };
-        let packet = build_duc_specific_packet(seq, 31, adc0_attenuation);
+        let packet = build_duc_specific_packet(31, adc0_attenuation);
         self.send_packet(target, &packet)?;
         Ok(())
     }
@@ -511,6 +516,25 @@ impl P2Session {
         self.socket.send_to(packet, target)
     }
 
+    /// One fixed-size data packet under the caller's existing output permit.
+    /// No allocation and no sequence reset can cross an in-flight UDP send.
+    fn send_iq_packet_permitted(&self, iq: &[f32]) -> io::Result<()> {
+        if iq.len() != DUC_IQ_SAMPLES * 2 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let mut sequence = self.duc_iq_sequence.lock_unpoisoned();
+        let packet = build_duc_iq_packet(*sequence, iq);
+        if self
+            .socket
+            .send_to(&packet, self.target_addr(self.config.port_map.duc_iq))?
+            != packet.len()
+        {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        *sequence = sequence.wrapping_add(1);
+        Ok(())
+    }
+
     #[cfg(feature = "offline-puresignal-owner-adapters")]
     pub(crate) fn offline_output_fence(&self) -> Option<Arc<crate::tx_owner_stop::OutputFence>> {
         self.offline_output_fence.clone()
@@ -526,24 +550,8 @@ impl P2Session {
         let Some(_permit) = fence.enter_generation(generation)? else {
             return Ok(false);
         };
-        self.offline_send_iq_permitted(iq)?;
+        self.send_iq_packet_permitted(iq)?;
         Ok(true)
-    }
-    #[cfg(feature = "offline-puresignal-owner-adapters")]
-    fn offline_send_iq_permitted(&self, iq: &[f32]) -> io::Result<()> {
-        if iq.len() != DUC_IQ_SAMPLES * 2 {
-            return Err(io::ErrorKind::InvalidInput.into());
-        }
-        let seq = self.duc_iq_sequence.fetch_add(1, Ordering::Relaxed);
-        let packet = build_duc_iq_packet(seq, iq);
-        if self
-            .socket
-            .send_to(&packet, self.target_addr(self.config.port_map.duc_iq))?
-            != packet.len()
-        {
-            return Err(io::ErrorKind::WriteZero.into());
-        }
-        Ok(())
     }
     #[cfg(feature = "offline-puresignal-owner-adapters")]
     pub(crate) fn offline_key_generation(
@@ -567,19 +575,9 @@ impl P2Session {
             state.ddc_phase_words[1] = state.ddc_phase_words[0];
             select_managed_external_feedback(&mut state);
         }
-        let packet = build_high_priority_to_sdr(&state);
-        if self
-            .socket
-            .send_to(
-                &packet,
-                self.target_addr(self.config.port_map.high_priority_to_sdr),
-            )
-            .map_err(|_| Fault::TxAuthority)?
-            != packet.len()
-        {
-            return Err(Fault::TxAuthority);
-        }
-        self.offline_send_iq_permitted(iq)
+        self.send_high_priority_permitted(&state)
+            .map_err(|_| Fault::TxAuthority)?;
+        self.send_iq_packet_permitted(iq)
             .map_err(|_| Fault::TxAuthority)?;
         Ok(true)
     }
@@ -599,15 +597,7 @@ impl P2Session {
         state.tx = false;
         state.tx_drive = 0;
         state.alex_tx_word &= !ALEX_TX_RELAY_BIT;
-        let packet = build_high_priority_to_sdr(&state);
-        let written = self.socket.send_to(
-            &packet,
-            self.target_addr(self.config.port_map.high_priority_to_sdr),
-        )?;
-        if written != packet.len() {
-            return Err(io::ErrorKind::WriteZero.into());
-        }
-        Ok(())
+        self.send_high_priority_permitted(&state)
     }
 
     /// Only tests may attach a fence; only loopback destinations are accepted.
@@ -804,6 +794,10 @@ fn alex_tx_filter_bits(frequency_hz: u32) -> u16 {
 fn _ports(_port_map: &P2PortMap) -> Duration {
     Duration::from_millis(0)
 }
+
+#[cfg(test)]
+#[path = "sequence_tests.rs"]
+mod sequence_tests;
 
 #[cfg(test)]
 mod tests {

@@ -702,6 +702,44 @@ fn direct_authenticated_generation_preserves_normal_mic_and_iq_gates() {
     d.assert_off();
     assert!(owner.enqueue_iq(stamp, 31, &[0.2; 480]).is_err());
 }
+#[cfg(feature = "managed-puresignal")]
+#[test]
+fn p2_fenced_release_keeps_sequence_and_shared_run_stop_resets() {
+    let (session, socket) = p2();
+    let model = model();
+    let fence = session.offline_output_fence().unwrap();
+    let sequence = |bytes: &[u8]| u32::from_be_bytes(bytes[..4].try_into().unwrap());
+    assert!(session
+        .offline_key_generation(0, &model, &[0.25; 480])
+        .unwrap());
+    assert_eq!(packet(&socket)[4] & 3, 3);
+    assert_eq!(sequence(&packet(&socket)), 0);
+    fence.close();
+    {
+        let _drained = fence.drained().unwrap().unwrap();
+        session.offline_unkey_command(&model).unwrap();
+        assert_eq!(packet(&socket)[4] & 3, 1);
+    }
+    fence.reopen(fence.revision(), 1).unwrap();
+    assert!(session
+        .offline_key_generation(1, &model, &[0.25; 480])
+        .unwrap());
+    assert_eq!(packet(&socket)[4] & 3, 3);
+    assert_eq!(sequence(&packet(&socket)), 1);
+    fence.close();
+    session.shared_stop_run(&model).unwrap();
+    assert_eq!(packet(&socket)[4] & 3, 0);
+    fence.reopen(fence.revision(), 2).unwrap();
+    assert!(session
+        .offline_key_generation(2, &model, &[0.25; 480])
+        .unwrap());
+    assert_eq!(packet(&socket)[4] & 3, 3);
+    assert_eq!(sequence(&packet(&socket)), 0);
+    assert!(session.offline_iq_generation(1, &[0.25; 480]).is_err());
+    socket.set_nonblocking(true).unwrap();
+    assert!(socket.recv(&mut [0; 2048]).is_err());
+}
+
 #[test]
 fn p2_actual_packets_fenced_and_receipt_waits_for_entire_zero_drive_burst() {
     let (session, socket) = p2();

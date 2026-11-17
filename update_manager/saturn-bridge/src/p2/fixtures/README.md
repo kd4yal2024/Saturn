@@ -13,6 +13,7 @@ expected values are asserted by the tests.
 | `discovery-generic-v44.hex` | 60 bytes | Busy (3), synthetic MAC `aa:bb:cc:dd:ee:ff`, board 5, protocol 44, firmware 20, eight DDCs, Hz format (0), format flags `0x1f`, generic beta 7. Generic beta is not identified as a Saturn app build. |
 | `ddc24-edge-values.hex` | 1,444 bytes | Sequence `0x01020304`, opaque timestamp bytes `01 23 45 67 89 ab cd ef`, width 24, 238 complex samples. First four pairs are `(-8388608,8388607)`, `(1,-1)`, `(4194304,-4194304)`, `(0,0)`. Next 233 pairs are zero. Last pair is `(6291456,-6291456)`. Integer-to-float scaling is exactly `1/8388608`. |
 | `high-priority-v44.hex` | 60 bytes | Sequence 42, PTT bits `0x13`, ADC flags 2. Exciter/forward/reverse `0x0102/0x0304/0x0506`; FIFO flags `0x0a`; depths `0x1112/0x2122/0x3132/0x4142`; ADC0/1 peaks 32767/32768; supply `0x5152`; user ADC1/0 `0x6162/0x7172`; I/O bits `0x12`. |
+| `duc-specific-v44.hex` | 60 bytes | Fixed zero control sequence, one DUC, byte 50 bit 2 set (Orion mic-PTT disabled), ADC1 attenuation 31 dB, ADC0 attenuation 12 dB. The complete builder output is compared with these literal bytes. |
 
 Discovery offsets: protocol 12, firmware 13, DDC count 20, frequency format 21,
 data-format flags 22, beta 23. Status offsets: FIFO flags 30, FIFO depths 31–38,
@@ -21,5 +22,6 @@ fixture's nonzero timestamp is opaque to this decoder and cannot establish an
 acquisition time.
 
 Negative tests alter declared widths, lengths or counts. Legacy discovery and
-unknown capability bytes remain metadata; this slice does not negotiate a new
-mode, revise the server advertisement, or change TX ownership and sequencing.
+unknown capability bytes remain metadata. These fixtures do not negotiate a new
+mode or revise the server advertisement. The later DUC sequence repair is
+documented in [P2_V44_SEQUENCE_LIFECYCLE.md](../../../../docs/P2_V44_SEQUENCE_LIFECYCLE.md).

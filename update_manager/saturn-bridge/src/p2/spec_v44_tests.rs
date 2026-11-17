@@ -196,3 +196,9 @@ fn high_priority_v44_fifo_and_adc_peak_fields_match_the_wire_specimen() {
     assert_eq!(status.user_analog2, 0x7172);
     assert_eq!(status.user_io_bits, 0x12);
 }
+
+#[test]
+fn duc_specific_zero_sequence_matches_independent_wire_specimen() {
+    let bytes = hex(include_str!("fixtures/duc-specific-v44.hex"));
+    assert_eq!(build_duc_specific_packet(31, 12).as_slice(), bytes);
+}

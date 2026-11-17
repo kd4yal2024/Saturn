@@ -144,12 +144,11 @@ pub fn build_general_packet(port_map: &P2PortMap) -> [u8; GENERAL_PACKET_SIZE] {
 }
 
 pub fn build_duc_specific_packet(
-    sequence: u32,
     adc1_tx_attenuation_db: u8,
     adc0_tx_attenuation_db: u8,
 ) -> [u8; DUC_SPECIFIC_PACKET_SIZE] {
     let mut packet = [0u8; DUC_SPECIFIC_PACKET_SIZE];
-    write_u32_be(&mut packet, 0, sequence);
+    // v4.4 specifies zero for this control sequence, unlike DUC IQ data.
     packet[4] = 1; // 1 DUC stream enabled
                    // Match piHPSDR's safe Saturn/P2 defaults for the TX-specific path.
                    // Byte 50 bit 2 must be set to keep Orion mic-PTT disabled.
@@ -496,8 +495,8 @@ mod tests {
 
     #[test]
     fn duc_specific_packet_uses_safe_tx_defaults() {
-        let packet = build_duc_specific_packet(7, 31, 12);
-        assert_eq!(read_u32_be(&packet, 0), 7);
+        let packet = build_duc_specific_packet(31, 12);
+        assert_eq!(read_u32_be(&packet, 0), 0);
         assert_eq!(packet[4], 1);
         assert_eq!(packet[50] & 0x04, 0x04);
         assert_eq!(packet[58], 31);
