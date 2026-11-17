@@ -810,6 +810,37 @@ mod tests {
     use super::*;
     use crate::radio_model::RadioModel;
 
+    #[test]
+    fn unsupported_ddc_format_is_consumed_and_next_valid_packet_still_decodes() {
+        let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut config = BridgeConfig {
+            client_bind_addr: "127.0.0.1:0".parse().unwrap(),
+            ..BridgeConfig::default()
+        };
+        config.port_map.ddc_iq_base = sender.local_addr().unwrap().port();
+        let session = P2Session::bind(config).unwrap();
+        let destination = session.socket.local_addr().unwrap();
+        let valid: Vec<u8> = include_str!("fixtures/ddc24-edge-values.hex")
+            .split_whitespace()
+            .map(|v| u8::from_str_radix(v, 16).unwrap())
+            .collect();
+        let mut invalid = valid.clone();
+        invalid[12..14].copy_from_slice(&16u16.to_be_bytes());
+        sender.send_to(&invalid, destination).unwrap();
+        sender.send_to(&valid, destination).unwrap();
+        let rejected = session.recv_outcome().unwrap();
+        assert!(rejected.consumed);
+        assert!(rejected.event.is_none());
+        let next = session.recv_outcome().unwrap();
+        assert!(next.consumed);
+        let Some(P2Event::DdcIq(frame)) = next.event else {
+            panic!("valid packet after rejection must still reach RX");
+        };
+        assert_eq!(frame.ddc_index, 0);
+        assert_eq!(frame.sequence, 0x01020304);
+        assert_eq!(frame.sample_count, 238);
+    }
+
     #[cfg(feature = "managed-puresignal")]
     #[test]
     fn undecoded_microphone_datagrams_are_work_and_only_timeout_is_idle() {
@@ -854,7 +885,11 @@ mod tests {
             mac_address: [0; 6],
             device_code: 10,
             protocol_version: 0,
-            p2app_version: 0,
+            firmware_version: 0,
+            ddc_count: 0,
+            frequency_format: 0,
+            data_format_flags: 0,
+            beta_version: 0,
         };
         assert!(discovery_allows_controller(&reply));
 

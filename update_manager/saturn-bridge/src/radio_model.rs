@@ -660,17 +660,22 @@ impl RadioModel {
             .as_ref()
             .map(|reply| {
                 format!(
-                    "disc=state:{} dev:{} proto:{} p2app:{} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    "disc=state:{} dev:{} proto:{} p2app:{} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} fw:{} ddcs:{} freq_format:{} data_formats:0x{:02x} beta:{}",
                     reply.state_code,
                     reply.device_code,
                     reply.protocol_version,
-                    reply.p2app_version,
+                    reply.saturn_app_version().map(|v| v.to_string()).unwrap_or_else(|| "n/a".into()),
                     reply.mac_address[0],
                     reply.mac_address[1],
                     reply.mac_address[2],
                     reply.mac_address[3],
                     reply.mac_address[4],
-                    reply.mac_address[5]
+                    reply.mac_address[5],
+                    reply.firmware_version,
+                    reply.ddc_count,
+                    reply.frequency_format,
+                    reply.data_format_flags,
+                    reply.beta_version,
                 )
             })
             .unwrap_or_else(|| "disc=pending".to_string());

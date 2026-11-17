@@ -41,7 +41,21 @@ pub struct DiscoveryReply {
     pub mac_address: [u8; 6],
     pub device_code: u8,
     pub protocol_version: u8,
-    pub p2app_version: u8,
+    pub firmware_version: u8,
+    pub ddc_count: u8,
+    /// Raw discovery byte 21: 0 = Hz, 1 = phase word.
+    pub frequency_format: u8,
+    /// Raw discovery byte 22; zero means big-endian three-byte IQ.
+    pub data_format_flags: u8,
+    pub beta_version: u8,
+}
+
+impl DiscoveryReply {
+    /// Saturn uses the standard beta-version byte for its p2app build number.
+    /// Preserve that convention without labeling every radio's beta as p2app.
+    pub fn saturn_app_version(&self) -> Option<u8> {
+        (self.device_code == 10).then_some(self.beta_version)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -221,8 +235,12 @@ pub fn parse_discovery_reply(packet: &[u8]) -> Option<DiscoveryReply> {
         state_code: packet[4],
         mac_address: mac,
         device_code: packet[11],
-        protocol_version: packet[13],
-        p2app_version: packet[23],
+        protocol_version: packet[12],
+        firmware_version: packet[13],
+        ddc_count: packet[20],
+        frequency_format: packet[21],
+        data_format_flags: packet[22],
+        beta_version: packet[23],
     })
 }
 
@@ -257,9 +275,15 @@ pub fn parse_ddc_iq_frame(packet: &[u8], ddc_index: u8) -> Option<DdcIqFrame> {
         return None;
     }
 
+    // The current Bridge General packet selects big-endian three-byte IQ.
+    // Reject other widths before interpreting payload or allocating storage.
+    let bits_per_sample = read_u16_be(packet, 12);
+    if bits_per_sample != 24 {
+        return None;
+    }
     let sample_count = read_u16_be(packet, 14) as usize;
     let payload = &packet[16..];
-    if payload.len() < sample_count.saturating_mul(6) {
+    if sample_count == 0 || sample_count > payload.len() / 6 {
         return None;
     }
 
@@ -277,17 +301,13 @@ pub fn parse_ddc_iq_frame(packet: &[u8], ddc_index: u8) -> Option<DdcIqFrame> {
         power_sum += ((i_float * i_float) + (q_float * q_float)) as f64 * 0.5f64;
     }
 
-    let avg_power = if sample_count == 0 {
-        1.0e-20f64
-    } else {
-        (power_sum / sample_count as f64).max(1.0e-20f64)
-    };
+    let avg_power = (power_sum / sample_count as f64).max(1.0e-20f64);
     let approx_meter_dbm = (10.0 * avg_power.log10() as f32) - 127.0;
 
     Some(DdcIqFrame {
         ddc_index,
         sequence: read_u32_be(packet, 0),
-        bits_per_sample: read_u16_be(packet, 12),
+        bits_per_sample,
         sample_count: sample_count as u16,
         payload_len: packet.len().saturating_sub(16),
         iq_samples,
@@ -342,6 +362,10 @@ fn write_signed_24_be(packet: &mut [u8], offset: usize, value: i32) {
     packet[offset + 1] = ((clamped >> 8) & 0xFF) as u8;
     packet[offset + 2] = (clamped & 0xFF) as u8;
 }
+
+#[cfg(test)]
+#[path = "spec_v44_tests.rs"]
+mod spec_v44_tests;
 
 #[cfg(test)]
 mod tests {
