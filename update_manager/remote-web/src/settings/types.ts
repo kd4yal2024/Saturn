@@ -117,6 +117,9 @@ export type DisplayPrefs = {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  showBandSegments?: boolean;
+  showSwlStations?: boolean;
+  swlScheduleNowOnly?: boolean;
   peakTuneAssistEnabled: boolean;
 };
 

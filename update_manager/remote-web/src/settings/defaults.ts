@@ -105,6 +105,9 @@ export const DEFAULT_DISPLAY_PREFS: DisplayPrefs = {
   showGrid: true,
   showCenterLine: true,
   showBandEdges: true,
+  showBandSegments: true,
+  showSwlStations: true,
+  swlScheduleNowOnly: true,
   peakTuneAssistEnabled: false,
 };
 

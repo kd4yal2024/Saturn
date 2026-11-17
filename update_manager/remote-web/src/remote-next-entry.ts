@@ -1,3 +1,4 @@
+import { PanadapterBandGuide } from './display/band-guide';
 import { PaCalibrationPanel, paCalibrationCommand } from './settings/pa-calibration';
 import { TxPowerDraft } from './settings/tx-power';
 import { DisplayFftProducer } from './display/fft-producer';
@@ -371,6 +372,7 @@ const api = {
   dequantizeSpectrumRow,
 
   // Radio
+  PanadapterBandGuide,
   SWL_BAND_EDGES_HZ,
   normalizeBandGroup,
   bandKeyForFrequency,

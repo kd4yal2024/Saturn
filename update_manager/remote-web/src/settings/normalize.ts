@@ -398,6 +398,9 @@ export function normalizeDisplayPrefs(input: DeepPartial<DisplayPrefs> | null | 
     showGrid: source.showGrid ?? DEFAULT_DISPLAY_PREFS.showGrid,
     showCenterLine: source.showCenterLine ?? DEFAULT_DISPLAY_PREFS.showCenterLine,
     showBandEdges: source.showBandEdges ?? DEFAULT_DISPLAY_PREFS.showBandEdges,
+    showBandSegments: source.showBandSegments !== false,
+    showSwlStations: source.showSwlStations !== false,
+    swlScheduleNowOnly: source.swlScheduleNowOnly !== false,
     peakTuneAssistEnabled: source.peakTuneAssistEnabled ?? DEFAULT_DISPLAY_PREFS.peakTuneAssistEnabled,
   };
 }

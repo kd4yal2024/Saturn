@@ -14,6 +14,7 @@ SATURN_GO_HTML_ASSETS=(
   "deskhpsdr.html"
   "tailscale.html"
   "settings.html"
+  "saturn-swl.csv"
   "saturn-remote-next.html"
   "saturn-remote-next.js"
   "saturn-remote-next.js.sha256"

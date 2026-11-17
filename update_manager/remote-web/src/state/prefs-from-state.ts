@@ -143,6 +143,9 @@ export interface DisplayPrefsSource {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  showBandSegments?: boolean;
+  showSwlStations?: boolean;
+  swlScheduleNowOnly?: boolean;
   peakTuneAssistEnabled: boolean;
 }
 
@@ -253,6 +256,9 @@ export function displayPrefsFromState(s: DisplayPrefsSource): DisplayPrefs {
     showGrid: Boolean(s.showGrid),
     showCenterLine: Boolean(s.showCenterLine),
     showBandEdges: Boolean(s.showBandEdges),
+    showBandSegments: s.showBandSegments !== false,
+    showSwlStations: s.showSwlStations !== false,
+    swlScheduleNowOnly: s.swlScheduleNowOnly !== false,
     peakTuneAssistEnabled: Boolean(s.peakTuneAssistEnabled),
   };
 }

@@ -1,0 +1,16 @@
+{
+  "sourceUrl": "http://www.eibispace.de/dx/sked-b26.csv",
+  "sourceIndexUrl": "http://www.eibispace.de/",
+  "sourceUpdated": "2026-10-31",
+  "retrievedDate": "2026-11-17",
+  "season": "B26",
+  "sourceBytes": 490500,
+  "sourceSha256": "f877bbd75e3c04dcd29dddfe2c4a08fe351e8c9b5a6eabf654d20c78e66f1bcb",
+  "sourceEncoding": "windows-1252",
+  "bundledEncoding": "utf-8",
+  "bundledSha256": "5d077b5a1d52764be373b4d03a1e8f779fbb72d7fa4a4a20da04f4469bbdcbf2",
+  "rawScheduleRows": 8971,
+  "conditionsUrl": "http://www.eibispace.de/dx/README.TXT",
+  "permission": "EiBi conditions explicitly permit downloading, use, copying, distribution and use within third-party software.",
+  "bundledLineEndings": "LF"
+}

@@ -648,6 +648,49 @@
     .shell-no-band-edges .band-edge-layer {
       display: none;
     }
+    /* Band guidance occupies two slim rails; station labels occupy two lanes.
+       Fixed bounds and clipping keep the plot available on small screens. */
+    .band-guide-layer {
+      position: absolute; top: 30px; left: 0; right: 0; height: 76px;
+      z-index: 6; pointer-events: none; overflow: hidden;
+      font: 10px/14px var(--mono); color: var(--display-foreground);
+    }
+    .band-guide-layer[hidden], .swl-station-layer[hidden] { display: none; }
+    .band-guide-rail { position: absolute; left: 0; right: 0; height: 15px; }
+    .band-guide-segment {
+      --band-use-color: #76bbfa;
+      position: absolute; height: 15px; padding: 0 5px; overflow: hidden;
+      box-sizing: border-box; white-space: nowrap; text-overflow: ellipsis;
+      border-top: 2px solid var(--band-use-color); border-left: 1px solid var(--band-use-color);
+      background: color-mix(in srgb, var(--band-use-color) 25%, var(--bg-display));
+      color: var(--display-foreground); pointer-events: auto;
+    }
+    .band-use-cw { --band-use-color: #76bbfa; }
+    .band-use-data { --band-use-color: #e8c45b; }
+    .band-use-phone { --band-use-color: #66d59b; }
+    .band-use-beacon { --band-use-color: #c69afa; }
+    .band-use-mixed { --band-use-color: #b8bfce; }
+    .band-use-fm { --band-use-color: #f4a279; }
+    .band-use-broadcast { --band-use-color: #62cedb; }
+    .swl-station-layer { position: absolute; top: 37px; left: 0; right: 0; height: 39px; }
+    .swl-station-tick {
+      position: absolute; top: 0; bottom: 0; width: 1px;
+      background: color-mix(in srgb, #e8c45b 45%, transparent);
+      pointer-events: auto;
+    }
+    .swl-station-label {
+      position: absolute; height: 17px; box-sizing: border-box; padding: 0 4px;
+      border-left: 2px solid #e8c45b; border-radius: 2px; white-space: nowrap;
+      overflow: hidden; text-overflow: ellipsis; pointer-events: auto;
+      background: color-mix(in srgb, var(--bg-display) 92%, transparent);
+      color: var(--display-foreground); line-height: 17px;
+    }
+    .band-guide-waterfall { top: 4px; height: 33px; }
+    .band-guide-no-segments .swl-station-layer { top: 0; }
+    .scope-has-band-guide .band-plan-region,
+    .scope-has-band-guide .band-edge-sticky,
+    .scope-has-band-guide .band-edge-marker::before { display: none; }
+    @media (max-width: 520px) { .band-guide-layer { font-size: 9px; } }
     .filter-window {
       position: absolute;
       top: 12px;
@@ -7282,6 +7325,10 @@
                           <label class="toggle-field"><span>Show Grid</span><input id="display-show-grid" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Center Line</span><input id="display-show-center-line" type="checkbox" /></label>
                           <label class="toggle-field"><span>Show Band Edges</span><input id="display-show-band-edges" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Ham / SWL Band Segments</span><input id="display-show-band-segments" type="checkbox" /></label>
+                          <label class="toggle-field"><span>SWL Station Labels</span><input id="display-show-swl-stations" type="checkbox" /></label>
+                          <label class="toggle-field"><span>Scheduled Now (UTC)</span><input id="display-swl-now-only" type="checkbox" /></label>
+                          <div class="small mono" id="swl-schedule-status" role="status">EiBi B26 · 2026-10-31</div>
                         </div>
                       </div>
                     </div>
@@ -11518,7 +11565,20 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       layer.appendChild(region);
     }
 
+    const panadapterBandGuide = new _next.PanadapterBandGuide(
+      $("spectrum-shell"), $("waterfall-shell"), $("swl-schedule-status"),
+    );
+    let bandEdgeGeometrySignature = "";
     function renderBandEdges() {
+      const range = displayRangeHz();
+      panadapterBandGuide.update({ low: range.low, high: range.high,
+        width: $("spectrum-shell").clientWidth,
+        segments: state.showBandSegments !== false,
+        stations: state.showSwlStations !== false && !txReceiveSuppressionActive(),
+        scheduledOnly: state.swlScheduleNowOnly !== false });
+      const signature = `${range.low}|${range.high}|${state.bandPanelGroup}`;
+      if (bandEdgeGeometrySignature === signature) return;
+      bandEdgeGeometrySignature = signature;
       const markers = bandEdgesInView();
       const bandSegments = visibleBandPlanSegments();
       const oobSegments = oobDisplaySegments(bandSegments);
@@ -14478,6 +14538,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       setChecked("display-show-grid", prefs.showGrid);
       setChecked("display-show-center-line", prefs.showCenterLine);
       setChecked("display-show-band-edges", prefs.showBandEdges);
+      setChecked("display-show-band-segments", prefs.showBandSegments);
+      setChecked("display-show-swl-stations", prefs.showSwlStations);
+      setChecked("display-swl-now-only", prefs.swlScheduleNowOnly);
       setValue("display-spectrum-floor", prefs.spectrumFloorDb);
       setValue("display-spectrum-ceiling", prefs.spectrumCeilingDb);
       setValue("display-waterfall-floor", prefs.waterfallFloorDb);
@@ -23301,6 +23364,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       bindDisplayToggle("display-show-grid", (value) => { state.showGrid = value; });
       bindDisplayToggle("display-show-center-line", (value) => { state.showCenterLine = value; });
       bindDisplayToggle("display-show-band-edges", (value) => { state.showBandEdges = value; });
+      bindDisplayToggle("display-show-band-segments", (value) => { state.showBandSegments = value; });
+      bindDisplayToggle("display-show-swl-stations", (value) => { state.showSwlStations = value; });
+      bindDisplayToggle("display-swl-now-only", (value) => { state.swlScheduleNowOnly = value; });
       // A manual floor/ceiling change is an explicit choice, so switch that
       // pane's auto range off. Otherwise the per-frame auto range in
       // updateDisplayRange() overwrites the value a moment later, saves the

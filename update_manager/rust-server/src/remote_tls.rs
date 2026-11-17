@@ -497,6 +497,7 @@ async fn remote_asset_handler(
             "application/javascript; charset=utf-8",
         ),
         "inter.woff2" => ("assets/fonts/inter-latin-var.woff2", "font/woff2"),
+        "swl.csv" => ("saturn-swl.csv", "text/csv; charset=utf-8"),
         _ => return (StatusCode::NOT_FOUND, "asset not found").into_response(),
     };
 
@@ -2023,6 +2024,41 @@ mod tests {
         );
         let body = to_bytes(res.into_body(), 4096).await.unwrap();
         assert_eq!(body, &b"window.testRemoteNext = true;"[..]);
+    }
+
+    #[tokio::test]
+    async fn remote_asset_route_serves_swl_csv_without_opening_other_files() {
+        let state = test_state("asset-swl-schedule");
+        tokio::fs::create_dir_all(&state.webroot).await.unwrap();
+        let csv = "6000;0000-2400;;USA;Station;E;NAm;;;;\n";
+        tokio::fs::write(state.webroot.join("saturn-swl.csv"), csv)
+            .await
+            .unwrap();
+        let app = remote_tls_router(state);
+        let request = Request::builder()
+            .uri("/remote-assets/swl.csv")
+            .body(Body::empty())
+            .unwrap();
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/csv; charset=utf-8"
+        );
+        assert_eq!(
+            to_bytes(response.into_body(), 4096).await.unwrap(),
+            csv.as_bytes()
+        );
+        for asset in ["saturn-swl.csv", "settings.json", "other.csv"] {
+            let request = Request::builder()
+                .uri(format!("/remote-assets/{asset}"))
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                app.clone().oneshot(request).await.unwrap().status(),
+                StatusCode::NOT_FOUND
+            );
+        }
     }
 
     #[tokio::test]

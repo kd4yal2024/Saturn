@@ -24,7 +24,8 @@
     "validate:bands": "node scripts/validate-band-groups.mjs",
     "validate:settings": "node scripts/validate-settings-workbench.mjs",
     "validate:display-worker": "node scripts/validate-display-worker.mjs",
-    "profile:display": "node scripts/profile-display.mjs"
+    "profile:display": "node scripts/profile-display.mjs",
+    "validate:band-guide": "node scripts/validate-band-guide.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

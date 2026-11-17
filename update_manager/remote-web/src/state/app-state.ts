@@ -268,6 +268,9 @@ export interface AppState {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  showBandSegments: boolean;
+  showSwlStations: boolean;
+  swlScheduleNowOnly: boolean;
   peakTuneAssistEnabled: boolean;
   peakTuneFrequencyHz: number | null;
   peakTuneLevelDb: number | null;
@@ -662,6 +665,9 @@ export function createAppState(): AppState {
     showGrid: true,
     showCenterLine: true,
     showBandEdges: true,
+    showBandSegments: true,
+    showSwlStations: true,
+    swlScheduleNowOnly: true,
     peakTuneAssistEnabled: false,
     peakTuneFrequencyHz: null,
     peakTuneLevelDb: null,

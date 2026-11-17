@@ -150,6 +150,9 @@ export interface DisplayPrefsTarget {
   showGrid: boolean;
   showCenterLine: boolean;
   showBandEdges: boolean;
+  showBandSegments?: boolean;
+  showSwlStations?: boolean;
+  swlScheduleNowOnly?: boolean;
   peakTuneAssistEnabled: boolean;
 }
 
@@ -332,6 +335,9 @@ export function applyDisplayPrefsToState(
   state.showGrid = Boolean(prefs.showGrid ?? state.showGrid);
   state.showCenterLine = Boolean(prefs.showCenterLine ?? state.showCenterLine);
   state.showBandEdges = Boolean(prefs.showBandEdges ?? state.showBandEdges);
+  state.showBandSegments = typeof prefs.showBandSegments === 'boolean' ? prefs.showBandSegments : state.showBandSegments ?? true;
+  state.showSwlStations = typeof prefs.showSwlStations === 'boolean' ? prefs.showSwlStations : state.showSwlStations ?? true;
+  state.swlScheduleNowOnly = typeof prefs.swlScheduleNowOnly === 'boolean' ? prefs.swlScheduleNowOnly : state.swlScheduleNowOnly ?? true;
   state.peakTuneAssistEnabled = Boolean(prefs.peakTuneAssistEnabled ?? state.peakTuneAssistEnabled);
 
   return { peakHoldCleared: wasPeakHold && !state.spectrumPeakHold };
