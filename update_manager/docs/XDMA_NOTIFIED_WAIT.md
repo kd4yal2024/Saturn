@@ -67,10 +67,15 @@ cleanup; physical RF/IMD and stalled-kernel-read cancellation remain separate
 claims. See the retained `Saturn_XDMA_Notified_Wait_20261116` evidence for actual
 ARM build, activation and comparison outcomes.
 
-The longer ignored Auto ATT runtime fixture remains an open baseline finding:
+At the reader-wait acceptance, the longer ignored Auto ATT runtime fixture was
+an open baseline finding:
 both unchanged `76c6dc1f` and this candidate reproduce AutoCorrection stage-3
 feedback-ingress QueueOverrun in the file/loopback harness. This harness does not
 run the hardware reader loop. Do not count it as passing or call the full Auto
-ATT suite clean. Its original failure and serial baseline/candidate comparison
+ATT suite clean for that revision. Its original failure and serial baseline/candidate comparison
 are retained alongside the passing reader, release/rearm, WAN RX, acquisition-error
 cleanup and rear-PTT tests. No RF was used to investigate it.
+
+The subsequent [fixture completion-clock repair](AUTO_ATT_FIXTURE_PACING.md)
+addresses the overfeeding file-backed Direct producer. Its separate serial
+real-WDSP results pass the full matrix; production queues and guards are unchanged.

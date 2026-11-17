@@ -407,10 +407,18 @@ pub(crate) mod tests {
         paired: &[u8],
         sequence: u64,
     ) {
+        reader_turn_at(session, normal, paired, sequence, Instant::now());
+    }
+    pub(crate) fn reader_turn_at(
+        session: &OperationalRxSession,
+        normal: &[u8],
+        paired: &[u8],
+        sequence: u64,
+        observed: Instant,
+    ) {
         if session.reader_gate.service_pause() {
             return;
         }
-        let observed = Instant::now();
         let scope = session.reader_gate.scope();
         publish(
             session,
@@ -421,8 +429,14 @@ pub(crate) mod tests {
             false,
         );
     }
-    pub(crate) fn reader_pause_only(session: &OperationalRxSession) {
-        session.reader_gate.service_pause();
+    /// Reader-side pause acknowledgment plus the committed layout identity.
+    /// Requested revisions must not start a new synthetic completion clock
+    /// before the real consumer has reset the FIFO and resumed the reader.
+    pub(crate) fn reader_ready(session: &OperationalRxSession) -> Option<Request> {
+        if session.reader_gate.service_pause() {
+            return None;
+        }
+        Some(session.managed_feedback.as_ref().unwrap().completed)
     }
     pub(crate) fn corrupt_next_layout_readback(session: &mut OperationalRxSession, path: &Path) {
         assert!(path.is_file() && !path.starts_with("/dev"));
@@ -535,18 +549,21 @@ pub(crate) mod tests {
         let origin = Instant::now();
         rx.attach_managed_feedback(link.clone(), ingress.clone(), origin)
             .unwrap();
+        assert_eq!(reader_ready(&rx), Some(link.desired()));
         let old = scope(1);
         let request = link.request(Some(old)).unwrap();
+        assert_eq!(reader_ready(&rx).unwrap().scope, None);
         // A queued old read cannot survive the acknowledged pause.
         publish(&rx, &direct_frames(1), 0, None, origin, false);
         rx.service_managed_feedback().unwrap();
         assert_eq!(files.read(DDC_RATE_REGISTER), direct_ddc_rate_word());
         assert_eq!(rx.pool.ready_len(), 1);
         assert!(!link.prepared(old.output).unwrap());
-        assert!(rx.reader_gate.service_pause());
+        assert_eq!(reader_ready(&rx), None);
         rx.service_managed_feedback().unwrap();
         assert_eq!(rx.pool.ready_len(), 0);
         assert!(link.prepared(old.output).unwrap());
+        assert_eq!(reader_ready(&rx), Some(request));
         assert_eq!(files.read(DDC_RATE_REGISTER), 0x10001f);
         assert_eq!(
             files.read(DDC_INPUT_SELECT_REGISTER),

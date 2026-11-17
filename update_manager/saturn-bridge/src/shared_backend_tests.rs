@@ -123,6 +123,7 @@ struct Io {
     state_model: Option<Arc<Mutex<RadioModel>>>,
     wave: Wave,
     sequence: u64,
+    direct_clock: CompletionClock,
     restore_hold: Option<Instant>,
     held_turns: usize,
     pending_stop_checks: usize,
@@ -136,6 +137,154 @@ struct Io {
     hardware_down: Arc<AtomicBool>,
     hardware_sent: Instant,
     auto_drop_feedback: Arc<AtomicBool>,
+}
+
+// Both Direct layouts produce 48,000 frames/s: eight DDC6 IQ words per
+// normal frame, or four feedback/reference pairs per 136-byte paired frame.
+// A loop turn services acquisition; it is NOT a DMA completion clock.
+const DIRECT_COMPLETION_FRAMES: usize = 128;
+#[derive(Default)]
+struct CompletionClock {
+    epoch: Option<(u64, Instant)>,
+    completed: u64,
+}
+impl CompletionClock {
+    fn take(&mut self, revision: u64, now: Instant) -> Option<Instant> {
+        if self.epoch.is_none_or(|(old, _)| old != revision) {
+            // Only an applied layout/FIFO reset discards old timing debt.
+            self.epoch = Some((revision, now));
+            self.completed = 0;
+        }
+        let elapsed_ns = now.duration_since(self.epoch.unwrap().1).as_nanos();
+        let frames_due = elapsed_ns * 48_000 / 1_000_000_000;
+        let next_frames = u128::from(self.completed + 1) * DIRECT_COMPLETION_FRAMES as u128;
+        if frames_due < next_frames {
+            return None;
+        }
+        // Retain overdue completions rather than moving the deadline to now.
+        self.completed += 1;
+        let due_ns = (next_frames * 1_000_000_000).div_ceil(48_000);
+        Some(self.epoch.unwrap().1 + Duration::from_nanos(due_ns.try_into().unwrap()))
+    }
+}
+
+#[test]
+fn direct_completion_clock_preserves_rate_debt_and_layout_boundaries() {
+    let origin = Instant::now();
+    let mut clock = CompletionClock::default();
+    assert!(clock.take(0, origin).is_none());
+    assert!(clock
+        .take(0, origin + Duration::from_nanos(2_666_666))
+        .is_none());
+    assert_eq!(
+        clock.take(0, origin + Duration::from_nanos(2_666_667)),
+        Some(origin + Duration::from_nanos(2_666_667))
+    );
+    assert!(clock
+        .take(0, origin + Duration::from_nanos(2_666_667))
+        .is_none());
+    // A late turn owes three further completions; none are silently skipped.
+    let late = origin + Duration::from_millis(11);
+    for n in 2..=4u64 {
+        assert_eq!(
+            clock.take(0, late),
+            Some(origin + Duration::from_nanos((n * 128 * 1_000_000_000).div_ceil(48_000)))
+        );
+    }
+    assert!(clock.take(0, late).is_none());
+    // Applied layout reset discards the old FIFO's pending completions.
+    assert!(clock.take(1, origin + Duration::from_secs(1)).is_none());
+    assert!(clock
+        .take(
+            1,
+            origin + Duration::from_secs(1) + Duration::from_millis(3)
+        )
+        .is_some());
+    assert!(clock
+        .take(
+            1,
+            origin + Duration::from_secs(1) + Duration::from_millis(3)
+        )
+        .is_none());
+}
+
+#[test]
+fn direct_completion_clock_has_no_poll_cadence_drift() {
+    for poll_us in [250, 1_000, 7_000] {
+        let origin = Instant::now();
+        let mut clock = CompletionClock::default();
+        assert!(clock.take(0, origin).is_none());
+        let mut completions = 0;
+        let mut poll = |ns| {
+            while clock.take(0, origin + Duration::from_nanos(ns)).is_some() {
+                completions += 1;
+            }
+        };
+        for us in (poll_us..1_000_000).step_by(poll_us as usize) {
+            poll(us * 1_000);
+        }
+        poll(1_000_000_000);
+        assert_eq!(completions * DIRECT_COMPLETION_FRAMES, 48_000);
+        assert_eq!(completions * DIRECT_COMPLETION_FRAMES * 4, 192_000);
+        assert_eq!(completions * DIRECT_COMPLETION_FRAMES * 8, 384_000);
+    }
+}
+
+#[test]
+fn direct_completion_clock_bounds_backlog_without_hiding_queue_exhaustion() {
+    use crate::tx_thread::{
+        feedback_owner::tests::{collector, scope},
+        feedback_stream::Stream,
+    };
+    use saturn_bridge::puresignal::Backend;
+
+    // Identical samples, production parser and bounded ingress. A 60 ms
+    // consumer stall fits the 85.33 ms queue at 192 kpair/s; one completion
+    // per 1 ms loop turn artificially exhausts that same queue at 34 ms.
+    for paced in [false, true] {
+        let origin = Instant::now();
+        let mut clock = CompletionClock::default();
+        assert!(clock.take(0, origin).is_none());
+        let (ingress, deliveries) = collector();
+        let scope = scope(1);
+        let mut stream = Stream::new(scope, Backend::DirectXdma, origin, ingress.clone()).unwrap();
+        let mut wave = Wave::new();
+        let mut iq = Vec::new();
+        let mut failure = None;
+        for ms in 1..=60 {
+            let now = origin + Duration::from_millis(ms);
+            let observed = if paced { clock.take(0, now) } else { Some(now) };
+            if let Some(observed) = observed {
+                if let Err(fault) = stream.direct(
+                    Some(scope),
+                    &wave.direct_frames(DIRECT_COMPLETION_FRAMES),
+                    observed,
+                    &mut iq,
+                ) {
+                    failure = Some((ms, fault));
+                    break;
+                }
+            }
+        }
+        assert_eq!(failure, (!paced).then_some((34, Fault::QueueOverrun)));
+        let mut blocks = 0u64;
+        while let Ok(block) = deliveries.feedback.try_recv() {
+            assert_eq!(block.meta.interval.first, blocks * 1024);
+            if paced {
+                for half in 0..2u64 {
+                    let expected = ((2 * blocks + half + 1) * 128 * 1_000_000_000).div_ceil(48_000);
+                    assert!(
+                        block.arrival_ns[half as usize * 512..(half as usize + 1) * 512]
+                            .iter()
+                            .all(|ns| *ns == expected)
+                    );
+                }
+            }
+            blocks += 1;
+            ingress.recycle_feedback_buffer(block);
+        }
+        assert_eq!(blocks, if paced { 11 } else { 16 });
+    }
 }
 fn options() -> Options {
     Options {
@@ -1438,16 +1587,26 @@ impl RuntimeIo for Io {
                     self.files.as_ref().unwrap().radio.snapshot().frames_written,
                     Ordering::Release,
                 );
+                let Some(applied) = direct_rx::reader_ready(rx) else {
+                    return Ok(true); // pause acknowledgment, no completion
+                };
+                let observed = if self.case.diagnostic() {
+                    Instant::now()
+                } else {
+                    let Some(observed) = self.direct_clock.take(applied.serial, Instant::now())
+                    else {
+                        // Keep the actual acquisition/layout/stop owners running
+                        // even when the modeled hardware has no new DMA data.
+                        return Ok(true);
+                    };
+                    observed
+                };
                 let mut frame = vec![0u8; 72]; // DDC6 x8 complex words @384k
                 frame[..4].copy_from_slice(&0x100000u32.to_le_bytes());
                 frame[7] = 0x80;
-                let normal = frame.repeat(128);
+                let normal = frame.repeat(DIRECT_COMPLETION_FRAMES);
                 if self.case.auto_attenuation() {
-                    if link.preparing() {
-                        direct_rx::reader_pause_only(rx);
-                        return Ok(true);
-                    }
-                    if let Some(scope) = request.scope {
+                    if let Some(scope) = applied.scope {
                         assert_eq!(
                             (self.files.as_ref().unwrap().read(0x2018) >> 5) & 31,
                             u32::from(scope.attenuation_db)
@@ -1462,8 +1621,8 @@ impl RuntimeIo for Io {
                         }
                     }
                 }
-                let paired = self.wave.direct();
-                direct_rx::reader_turn(rx, &normal, &paired[..136 * 128], self.sequence);
+                let paired = self.wave.direct_frames(DIRECT_COMPLETION_FRAMES);
+                direct_rx::reader_turn_at(rx, &normal, &paired, self.sequence, observed);
             }
         }
         self.sequence += 1;
@@ -1548,6 +1707,7 @@ fn exercise_with_state(direct: bool, case: Case, persistent: bool) {
         state_model: None,
         wave: Wave::new(),
         sequence: 0,
+        direct_clock: CompletionClock::default(),
         restore_hold: None,
         held_turns: 0,
         pending_stop_checks: 0,

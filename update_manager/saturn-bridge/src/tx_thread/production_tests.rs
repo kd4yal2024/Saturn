@@ -255,7 +255,10 @@ impl Wave {
         self.feedback_gain = 10f64.powf((9. - f64::from(db)) / 20.);
     }
     pub(crate) fn direct(&mut self) -> Vec<u8> {
-        let mut bytes = vec![0; 136 * 256];
+        self.direct_frames(256)
+    }
+    pub(crate) fn direct_frames(&mut self, frames: usize) -> Vec<u8> {
+        let mut bytes = vec![0; 136 * frames];
         for frame in bytes.chunks_exact_mut(136) {
             frame[..4].copy_from_slice(&0x10001fu32.to_le_bytes());
             frame[7] = 0x80;
@@ -267,6 +270,14 @@ impl Wave {
         }
         bytes
     }
+}
+#[test]
+fn direct_wave_partition_preserves_every_pair() {
+    let expected = Wave::new().direct();
+    let mut split = Wave::new();
+    let mut actual = split.direct_frames(128);
+    actual.extend(split.direct_frames(128));
+    assert_eq!(actual, expected);
 }
 #[test]
 #[ignore = "explicit serial real-native production fixture; no hardware"]
