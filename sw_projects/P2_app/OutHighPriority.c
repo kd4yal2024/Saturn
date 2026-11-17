@@ -39,6 +39,15 @@
 #include "../common/fpga_rx_counter_v31.h"
 #include "LDGATU.h"
 
+static bool StatusMonotonicNs(uint64_t *NowNs)
+{
+  struct timespec Now;
+  if(clock_gettime(CLOCK_MONOTONIC, &Now) != 0)
+    return false;
+  *NowNs = (uint64_t)Now.tv_sec * 1000000000ULL + (uint64_t)Now.tv_nsec;
+  return true;
+}
+
 static void UpdateFPGAFifoV29Telemetry(void)
 {
   TFPGAFifoV29Snapshot Snapshot;
@@ -180,6 +189,7 @@ void *OutgoingHighPriority(void *arg)
   uint16_t ADC2MaxAmpl = 0;                       // latest ADC2 peak amplitude sample
   uint16_t PeakADC1MaxAmpl = 0;                   // peak hold for current message period
   uint16_t PeakADC2MaxAmpl = 0;                   // peak hold for current message period
+  TP2StatusSchedule StatusSchedule = {0};
 
 //
 // initialise. Create memory buffers and open DMA file devices
@@ -229,6 +239,7 @@ void *OutgoingHighPriority(void *arg)
     memset(UDPBuffer, 0,sizeof(UDPBuffer));                      // clear the whole packet
     PeakADC1MaxAmpl = 0;
     PeakADC2MaxAmpl = 0;
+    P2StatusScheduleReset(&StatusSchedule);
     iovecinst.iov_base = UDPBuffer;
     iovecinst.iov_len = VHIGHPRIOTIYFROMSDRSIZE;
     datagram.msg_iov = &iovecinst;
@@ -246,7 +257,8 @@ void *OutgoingHighPriority(void *arg)
     //
     while(atomic_load(&SDRActive) && !InitError && !atomic_load(&ExitRequested))                // main loop
     {
-      uint16_t SleepCount;                                      // counter for sending next message
+      uint64_t SentNs;
+      bool SentInTX;
       uint8_t PTTBits;                                          // PTT bits - and change means a new message needed
       // create the packet
       *(uint32_t *)UDPBuffer = htonl(SequenceCounter++);        // add sequence count
@@ -330,6 +342,12 @@ void *OutgoingHighPriority(void *arg)
       PeakADC2MaxAmpl = 0;
       FIFOOverflows = 0;
       Socketfd = GetThreadSocketFD(ThreadData);
+      if(!StatusMonotonicNs(&SentNs))
+      {
+        InitError = true;
+        break;
+      }
+      SentInTX = atomic_load(&IsTXMode);
       Error = sendmsg(Socketfd, &datagram, 0);
 
 
@@ -349,6 +367,7 @@ void *OutgoingHighPriority(void *arg)
       }
       else
       {
+        P2StatusScheduleSent(&StatusSchedule, SentNs, SentInTX);
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityPackets, 1U);
         P23PerfTelemetryCounterAdd(eP23PerfCounterHighPriorityBytes, (uint64_t)Error);
       }
@@ -358,14 +377,15 @@ void *OutgoingHighPriority(void *arg)
       UpdateRXC1Telemetry();
       P23PerfTelemetryMaybeWrite();
       //
-      // now we need to sleep for 1ms (in TX) or 200ms (not in TX)
-      // BUT if any of the PTT or key inputs change, or ADC overflow detected, send a message immediately
-      // so break up the 200ms period with smaller sleeps
-      // thank you to Rick N1GP for recommending this approach
+      // v4.4: 50 ms RX / 1 ms TX periodic status, plus early input/ADC events.
+      // Preserve the existing <=500 us requested input-poll wait. Monotonic
+      // deadlines include work already spent on the packet/diagnostics; these
+      // are scheduling targets, not hard real-time guarantees.
       //
-      SleepCount = (MOXAsserted) ? 2 : 400;
-      while ((SleepCount-- > 0) && !atomic_load(&ExitRequested))
+      while (atomic_load(&SDRActive) && !InitError && !atomic_load(&ExitRequested))
       {
+        uint64_t NowNs;
+        uint32_t WaitUs;
         ReadStatusRegister();
         if ((uint8_t)GetP2PTTKeyInputs() != PTTBits)
           break;
@@ -374,7 +394,15 @@ void *OutgoingHighPriority(void *arg)
         PeakADC2MaxAmpl = (ADC2MaxAmpl > PeakADC2MaxAmpl) ? ADC2MaxAmpl : PeakADC2MaxAmpl;
         if(ADCOverflows != 0)
           break;
-        usleep(500);
+        if(!StatusMonotonicNs(&NowNs))
+        {
+          InitError = true;
+          break;
+        }
+        WaitUs = P2StatusScheduleWaitUs(&StatusSchedule, NowNs, atomic_load(&IsTXMode));
+        if(WaitUs == 0U)
+          break;
+        usleep((useconds_t)WaitUs);
       }
     }
   }

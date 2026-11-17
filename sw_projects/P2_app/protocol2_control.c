@@ -2,6 +2,55 @@
 
 #include <stddef.h>
 
+#define P2_STATUS_RX_PERIOD_NS 50000000ULL
+#define P2_STATUS_TX_PERIOD_NS 1000000ULL
+#define P2_STATUS_INPUT_POLL_US 500U
+
+void P2StatusScheduleReset(TP2StatusSchedule *Schedule)
+{
+    if(Schedule != NULL)
+        *Schedule = (TP2StatusSchedule){0};
+}
+
+static uint64_t StatusDeadline(uint64_t Origin, uint64_t Period)
+{
+    return Origin > UINT64_MAX - Period ? UINT64_MAX : Origin + Period;
+}
+
+void P2StatusScheduleSent(TP2StatusSchedule *Schedule, uint64_t NowNs, bool Transmit)
+{
+    const uint64_t Period = Transmit ? P2_STATUS_TX_PERIOD_NS : P2_STATUS_RX_PERIOD_NS;
+
+    if(Schedule == NULL)
+        return;
+    if(!Schedule->Valid || Schedule->Transmit != Transmit)
+        Schedule->NextPeriodicNs = StatusDeadline(NowNs, Period);
+    else if(NowNs >= Schedule->NextPeriodicNs)
+    {
+        /* Coalesce missed status periods; do not burst old snapshots or add
+         * the time spent gathering telemetry to every future deadline. */
+        const uint64_t Phase = (NowNs - Schedule->NextPeriodicNs) % Period;
+        Schedule->NextPeriodicNs = StatusDeadline(NowNs - Phase, Period);
+    }
+    /* An early PTT/ADC event does not postpone the periodic deadline. */
+    Schedule->Valid = true;
+    Schedule->Transmit = Transmit;
+}
+
+uint32_t P2StatusScheduleWaitUs(const TP2StatusSchedule *Schedule, uint64_t NowNs,
+                              bool Transmit)
+{
+    uint64_t RemainingNs;
+
+    if(Schedule == NULL || !Schedule->Valid || Schedule->Transmit != Transmit ||
+       NowNs >= Schedule->NextPeriodicNs)
+        return 0U;
+    RemainingNs = Schedule->NextPeriodicNs - NowNs;
+    if(RemainingNs >= (uint64_t)P2_STATUS_INPUT_POLL_US * 1000U)
+        return P2_STATUS_INPUT_POLL_US;
+    return (uint32_t)((RemainingNs + 999U) / 1000U);
+}
+
 bool P2FirmwareProtocolCompatible(unsigned int Major, unsigned int Minor)
 {
     // Minor 31 keeps the major-1 Protocol 2 and TX register interface.

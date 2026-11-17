@@ -102,6 +102,26 @@ static void test_fifo_sample_scaling(void)
     assert(P2ScaleFifoSamples(1U, 1U, 0U) == UINT16_MAX);
 }
 
+static void test_status_deadlines_preserve_phase_and_mode_changes(void)
+{
+    TP2StatusSchedule Schedule = {0};
+    assert(P2StatusScheduleWaitUs(&Schedule, 0, false) == 0);
+    P2StatusScheduleSent(&Schedule, 0, false);
+    assert(Schedule.NextPeriodicNs == 50000000ULL);
+    assert(P2StatusScheduleWaitUs(&Schedule, 49900000ULL, false) == 100U);
+    assert(P2StatusScheduleWaitUs(&Schedule, 50000000ULL, false) == 0);
+    P2StatusScheduleSent(&Schedule, 10000000ULL, false); /* early input */
+    assert(Schedule.NextPeriodicNs == 50000000ULL);
+    assert(P2StatusScheduleWaitUs(&Schedule, 10000000ULL, true) == 0);
+    P2StatusScheduleSent(&Schedule, 10000000ULL, true);
+    assert(Schedule.NextPeriodicNs == 11000000ULL);
+    P2StatusScheduleSent(&Schedule, 13750000ULL, true); /* late work, no burst */
+    assert(Schedule.NextPeriodicNs == 14000000ULL);
+    assert(P2StatusScheduleWaitUs(&Schedule, 13999999ULL, true) == 1U);
+    P2StatusScheduleReset(&Schedule);
+    assert(P2StatusScheduleWaitUs(&Schedule, 14000000ULL, true) == 0);
+}
+
 int main(void)
 {
     test_run_state_requires_run_for_transmit();
@@ -110,6 +130,7 @@ int main(void)
     test_sequence_wrap_and_reset();
     test_control_sequence_accepts_thetis_constant_zero();
     test_fifo_sample_scaling();
+    test_status_deadlines_preserve_phase_and_mode_changes();
     printf("protocol2 control tests passed\n");
     return 0;
 }

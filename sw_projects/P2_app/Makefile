@@ -10,7 +10,7 @@ DEPFLAGS = -MMD -MP
 LDFLAGS = -lm -lpthread
 .DEFAULT_GOAL := all
 .PHONY: all clean cppcheck cppcheck-ci test test-controller-lease \
-        test-controller-lease-asan test-protocol2-control \
+        test-controller-lease-asan test-protocol2-control test-protocol2-status-loop test-protocol2-status-loop-asan \
         test-protocol2-command test-protocol2-command-asan \
         test-protocol2-high-priority test-protocol2-high-priority-asan \
         test-fpga-fifo-v29 test-fpga-adc-v30 test-fpga-rx-counter-v31 test-speaker-pacing-diagnostics smoke-shutdown
@@ -113,10 +113,22 @@ test-controller-lease-asan:
 	ASAN_OPTIONS=detect_leaks=1 ./tests/controller_lease_test
 	rm -f tests/controller_lease_test
 
-test-protocol2-control:
+test-protocol2-control: test-protocol2-status-loop
 	$(CC) $(CFLAGS) -I. tests/protocol2_control_test.c protocol2_control.c -o tests/protocol2_control_test
 	./tests/protocol2_control_test
 	rm -f tests/protocol2_control_test
+
+test-protocol2-status-loop:
+	$(CC) $(CFLAGS) -I. -I../common tests/protocol2_status_loop_test.c \
+		protocol2_control.c -lpthread -o tests/protocol2_status_loop_test
+	./tests/protocol2_status_loop_test
+	rm -f tests/protocol2_status_loop_test
+
+test-protocol2-status-loop-asan:
+	$(CC) $(CFLAGS) -fsanitize=address,undefined -fno-omit-frame-pointer -I. -I../common \
+		tests/protocol2_status_loop_test.c protocol2_control.c -lpthread -o tests/protocol2_status_loop_test_asan
+	ASAN_OPTIONS=detect_leaks=1 ./tests/protocol2_status_loop_test_asan
+	rm -f tests/protocol2_status_loop_test_asan
 
 test-protocol2-command:
 	$(CC) $(CFLAGS) -I. tests/protocol2_command_test.c protocol2_command.c -o tests/protocol2_command_test
@@ -175,7 +187,7 @@ test: test-controller-lease test-protocol2-control test-protocol2-command \
 
 clean:
 	rm -rf $(TARGET) *.o *.d *.bin tests/controller_lease_test tests/protocol2_control_test \
-		tests/protocol2_command_test tests/protocol2_command_test_asan \
+		tests/protocol2_status_loop_test tests/protocol2_status_loop_test_asan tests/protocol2_command_test tests/protocol2_command_test_asan \
 		tests/protocol2_high_priority_test tests/protocol2_high_priority_test_asan \
 		tests/fpga_fifo_v29_test tests/fpga_adc_v30_test tests/fpga_rx_counter_v31_test tests/hwaccess_checked_test tests/speaker_pacing_diagnostics_test
 

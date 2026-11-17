@@ -79,5 +79,7 @@ RF performance, a CM4 CPU gain or complete v4.4 conformance.
 
 Evidence is retained in `Downloads/Saturn_P2_v44_Slice1_20261116`, including the
 two failing baseline regressions, repaired tests, serial native logs and source
-checksums. Status cadence, C identity advertisement, sequence lifecycle and
-performance work remain subsequent slices.
+checksums. The subsequent [DUC sequence repair](P2_V44_SEQUENCE_LIFECYCLE.md)
+and [status cadence repair](P2_V44_STATUS_CADENCE.md) document their own scope
+and verification. C identity advertisement and further performance work remain
+follow-ups.

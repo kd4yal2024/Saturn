@@ -18,6 +18,19 @@ typedef struct
     uint32_t LastAccepted;
 } TP2SequenceTracker;
 
+/* Monotonic periodic status schedule. Input changes may request earlier sends. */
+typedef struct
+{
+    bool Valid;
+    bool Transmit;
+    uint64_t NextPeriodicNs;
+} TP2StatusSchedule;
+
+void P2StatusScheduleReset(TP2StatusSchedule *Schedule);
+void P2StatusScheduleSent(TP2StatusSchedule *Schedule, uint64_t NowNs, bool Transmit);
+uint32_t P2StatusScheduleWaitUs(const TP2StatusSchedule *Schedule, uint64_t NowNs,
+                              bool Transmit);
+
 TP2RunState P2DecodeRunState(uint8_t Flags);
 bool P2FirmwareProtocolCompatible(unsigned int Major, unsigned int Minor);
 void P2SequenceReset(TP2SequenceTracker *Tracker);
