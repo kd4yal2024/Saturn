@@ -446,7 +446,10 @@ jobs:
         working-directory: sw_projects/P2_app
 
       - name: Test P2 command boundary
-        run: make test-protocol2-control test-protocol2-command-asan test-protocol2-high-priority-asan test-protocol2-status-loop-asan
+        run: |
+          make test-protocol2-control test-protocol2-command-asan \
+            test-protocol2-high-priority-asan test-protocol2-status-loop-asan \
+            test-protocol2-stream-restart test-protocol2-stream-restart-asan
         working-directory: sw_projects/P2_app
 
       - name: Test P2 FPGA and speaker telemetry
