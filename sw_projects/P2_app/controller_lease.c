@@ -6,6 +6,7 @@
 static pthread_mutex_t LeaseMutex = PTHREAD_MUTEX_INITIALIZER;
 static bool LeaseOwned = false;
 static struct in_addr LeaseAddress;
+static uint64_t LeaseEpoch;
 
 static bool valid_source(const struct sockaddr_in *source)
 {
@@ -24,6 +25,7 @@ bool ControllerLeaseClaim(const struct sockaddr_in *source)
     {
         LeaseAddress = source->sin_addr;
         LeaseOwned = true;
+        ++LeaseEpoch;
         accepted = true;
     }
     else
@@ -34,12 +36,19 @@ bool ControllerLeaseClaim(const struct sockaddr_in *source)
 
 bool ControllerLeaseMatches(const struct sockaddr_in *source)
 {
+    return ControllerLeaseMatchesEpoch(source, NULL);
+}
+
+bool ControllerLeaseMatchesEpoch(const struct sockaddr_in *source, uint64_t *epoch)
+{
     bool accepted;
     if(!valid_source(source))
         return false;
 
     pthread_mutex_lock(&LeaseMutex);
     accepted = LeaseOwned && LeaseAddress.s_addr == source->sin_addr.s_addr;
+    if(accepted && epoch != NULL)
+        *epoch = LeaseEpoch;
     pthread_mutex_unlock(&LeaseMutex);
     return accepted;
 }

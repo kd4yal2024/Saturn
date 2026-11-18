@@ -7,13 +7,25 @@ import { createAppState } from '../src/state/app-state';
 import { applyDisplayPrefsToState } from '../src/state/apply-prefs';
 import { displayPrefsFromState } from '../src/state/prefs-from-state';
 import { normalizeBandMemory, normalizeDisplayPrefs } from '../src/settings/normalize';
-import { bandKeyForFrequency } from '../src/radio/band';
+import { bandKeyForFrequency, bandEdgesForPanel, SWL_BAND_EDGES_HZ, HAM_BAND_EDGES_HZ } from '../src/radio/band';
 
 const noYield = async () => {};
 const csv = (frequency: string, time = '0000-2400', days = '', name = 'Test', persistence = '1', start = '', end = '') =>
   `${frequency};${time};${days};USA;${name};E;NAm;;${persistence};${start};${end}`;
 
 describe('display-only band guidance', () => {
+  it('provides 27 MHz and FM edges in the SWL panel without changing broadcast memories', () => {
+    const edges = bandEdgesForPanel('swl');
+    expect(edges.find(b => b.label === '11m')).toEqual(HAM_BAND_EDGES_HZ.find(b => b.label === '11m'));
+    expect(edges.find(b => b.label === 'FM')).toEqual(HAM_BAND_EDGES_HZ.find(b => b.label === 'FM'));
+    expect(edges.find(b => b.label === 'SWL 11m')).toEqual(SWL_BAND_EDGES_HZ.find(b => b.label === 'SWL 11m'));
+    expect(bandKeyForFrequency(27_385_000, 'swl')).toBe('11m');
+    expect(bandKeyForFrequency(25_900_000, 'swl')).toBe('SWL 11m');
+    expect(bandEdgesForPanel('ham')).toBe(HAM_BAND_EDGES_HZ);
+    const template = readFileSync(new URL('../../templates/saturn-remote-next.html', import.meta.url), 'utf8');
+    expect(template).toContain('const HAM_BAND_EDGES_HZ = _next.HAM_BAND_EDGES_HZ;');
+    expect(template.match(/_next.bandEdgesForPanel\(state.bandPanelGroup\)/g)).toHaveLength(2);
+  });
   it('shows the US 40m data/phone boundary and clips exactly to the viewport', () => {
     const segments = visibleBandSegments(HAM_SEGMENTS, 7_100_000, 7_150_000);
     expect(segments.map(s => [s.label, s.left, s.width])).toEqual([

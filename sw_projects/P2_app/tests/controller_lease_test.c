@@ -21,17 +21,27 @@ int main(void)
     struct sockaddr_in same_host = source("192.0.2.10", 22000);
     struct sockaddr_in other = source("192.0.2.11", 1024);
 
+    uint64_t first_epoch, repeated_epoch, restarted_epoch;
+
     ControllerLeaseClear();
     assert(!ControllerLeaseIsOwned());
     assert(!ControllerLeaseMatches(&first));
     assert(ControllerLeaseClaim(&first));
     assert(ControllerLeaseIsOwned());
+    assert(ControllerLeaseMatchesEpoch(&first, &first_epoch));
+    assert(ControllerLeaseClaim(&same_host));
+    assert(ControllerLeaseMatchesEpoch(&same_host, &repeated_epoch));
+    assert(first_epoch == repeated_epoch);
     assert(ControllerLeaseMatches(&same_host));
     assert(!ControllerLeaseClaim(&other));
     assert(!ControllerLeaseMatches(&other));
     assert(!ControllerLeaseRelease(&other));
     assert(ControllerLeaseRelease(&same_host));
     assert(!ControllerLeaseIsOwned());
+    assert(ControllerLeaseClaim(&first));
+    assert(ControllerLeaseMatchesEpoch(&first, &restarted_epoch));
+    assert(restarted_epoch != first_epoch);
+    assert(ControllerLeaseRelease(&first));
     assert(ControllerLeaseClaim(&other));
     ControllerLeaseClear();
     assert(!ControllerLeaseIsOwned());

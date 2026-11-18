@@ -521,6 +521,7 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
     uint8_t *DestPtr = NULL;
     bool PrevSDRActive = false;
     TP2SequenceTracker SequenceTracker = {0};
+    uint64_t StreamEpoch = 0;
 
     ThreadData = (struct ThreadSocketData *)arg;
     Context = calloc(1, sizeof(*Context));
@@ -604,13 +605,20 @@ void *IncomingDUCIQ(void *arg)                          // listener thread
                 uint32_t MissingFrames = 0;
                 uint32_t QueueDroppedFrames = 0;
                 uint64_t ArrivalNs = 0;
+                uint64_t PacketEpoch = 0;
 
                 if(DatagramList[MsgIndex].msg_len != VDUCIQSIZE)
                     continue;
                 if((DatagramList[MsgIndex].msg_hdr.msg_flags & MSG_TRUNC) != 0)
                     continue;
-                if(!ControllerLeaseMatches(&SourceAddresses[MsgIndex]))
+                if(!ControllerLeaseMatchesEpoch(&SourceAddresses[MsgIndex], &PacketEpoch))
                     continue;
+                if(PacketEpoch != StreamEpoch)
+                {
+                    DUCQueueReset(Context);
+                    P2SequenceReset(&SequenceTracker);
+                    StreamEpoch = PacketEpoch;
+                }
                 PacketSequence = rd_be_u32(UDPInBuffers[MsgIndex]);
                 if(!P2SequenceAccept(&SequenceTracker, PacketSequence, &MissingFrames))
                     continue;

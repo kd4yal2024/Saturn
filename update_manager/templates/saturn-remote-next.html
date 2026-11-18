@@ -9332,21 +9332,6 @@
     const ALLOWED_SAMPLE_RATES = Object.freeze([48000, 96000, 192000, 384000]);
     const ALLOWED_DEMOD_MODES = Object.freeze(["USB", "LSB", "AM", "SAM", "DSB", "FM", "WFM", "DIGU", "DIGL", "CWU", "CWL"]);
     const WATERFALL_PALETTES = Object.freeze(["classic", "ember", "ice", "forest", "enhanced", "reference"]);
-    const HAM_BAND_EDGES_HZ = Object.freeze([
-      { start: 1800000, end: 2000000, label: "160m" },
-      { start: 3500000, end: 4000000, label: "80m" },
-      { start: 5330500, end: 5403500, label: "60m" },
-      { start: 7000000, end: 7300000, label: "40m" },
-      { start: 10100000, end: 10150000, label: "30m" },
-      { start: 14000000, end: 14350000, label: "20m" },
-      { start: 18068000, end: 18168000, label: "17m" },
-      { start: 21000000, end: 21450000, label: "15m" },
-      { start: 24890000, end: 24990000, label: "12m" },
-      { start: 26495000, end: 27999999, label: "11m" },
-      { start: 28000000, end: 29700000, label: "10m" },
-      { start: 50000000, end: 54000000, label: "6m" },
-      { start: 88000000, end: 108000000, label: "FM" },
-    ]);
     const RX_AUDIO_START_PREROLL_SEC = 0.008;
     const RX_AUDIO_RECOVERY_PREROLL_SEC = 0.002;
     const RX_AUDIO_RESYNC_PREROLL_SEC = 0.004;
@@ -9779,6 +9764,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       return direct || bundle?.SaturnRemoteNext || bundle || {};
     }
     const _next = saturnRemoteNextApi();
+    const HAM_BAND_EDGES_HZ = _next.HAM_BAND_EDGES_HZ;
     const RX_AUDIO_ADAPTIVE_RATE = !["0", "false", "off", "no", "static"].includes(
       `${pageQueryValue("rx_audio_adaptive") || ""}`.trim().toLowerCase()
     );
@@ -11493,7 +11479,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     function bandEdgesInView() {
-      return _bandEdgesInView(state.dds, displaySpanHz(), state.bandPanelGroup === "swl" ? _next.SWL_BAND_EDGES_HZ : HAM_BAND_EDGES_HZ);
+      return _bandEdgesInView(state.dds, displaySpanHz(), _next.bandEdgesForPanel(state.bandPanelGroup));
     }
 
     function displayRangeHz() {
@@ -11516,7 +11502,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
 
     function visibleBandPlanSegments() {
       const range = displayRangeHz();
-      return (state.bandPanelGroup === "swl" ? _next.SWL_BAND_EDGES_HZ : HAM_BAND_EDGES_HZ)
+      return (_next.bandEdgesForPanel(state.bandPanelGroup))
         .filter((band) => band.end >= range.low && band.start <= range.high)
         .map((band) => {
           const start = Math.max(band.start, range.low);
@@ -18114,6 +18100,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
 
     let satpSourceRequestAt = 0;
+    let satpSourceRequestPreviousResult = "";
     let satpRequestedSource = null;
     let satpKeyReceivedAt = 0;
     function clearSatpKey() {
@@ -18676,7 +18663,9 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         logEvent(`Managed microphone startup: acquisition=${timing.acquisitionMs.toFixed(0)} ms graph=${timing.graphReadyMs.toFixed(0)} ms first-frame=${timing.firstFrameMs.toFixed(0)} ms base-latency=${timing.baseLatencyMs.toFixed(1)} ms (browser clock)`);
       }),
       changed: status => {
-        if (satpSourceRequestAt && status.lastTransaction.includes(": rejected")) {
+        if (satpSourceRequestAt && status.phase === "fault" && status.pendingSettings === 0
+          && status.lastTransaction !== satpSourceRequestPreviousResult
+          && status.lastTransaction.includes(": rejected")) {
           satpSourceRequestAt = 0;
           logEvent(`TX audio source request rejected: ${status.lastTransaction}`);
         }
@@ -23759,6 +23748,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       $("tx-audio-source").addEventListener("change", () => {
         if (!satpCanConfigure()) return;
         satpRequestedSource = $("tx-audio-source").value;
+        satpSourceRequestPreviousResult = managedPcm.status().lastTransaction;
         satpSourceRequestAt = performance.now();
         sendTci(`saturn_satp_control:${satpRequestedSource};`);
         logEvent(`TX audio source requested: ${satpRequestedSource === "satp" ? "Native SATP" : "Browser Microphone"}`);

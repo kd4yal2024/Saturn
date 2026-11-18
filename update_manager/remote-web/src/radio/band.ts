@@ -47,6 +47,16 @@ export const SWL_BANDS = Object.freeze([
 export const SWL_BAND_EDGES_HZ: readonly BandEdge[] = Object.freeze(
   SWL_BANDS.map(band => ({ start: band.start, end: band.end, label: `SWL ${band.label}` })),
 );
+// SWL navigation also offers the existing 27 MHz operating band and FM.
+// Include those display edges without changing SWL broadcast memory keys.
+const SWL_PANEL_BAND_EDGES_HZ: readonly BandEdge[] = Object.freeze([
+  ...SWL_BAND_EDGES_HZ,
+  ...HAM_BAND_EDGES_HZ.filter(band => band.label === '11m' || band.label === 'FM'),
+]);
+export function bandEdgesForPanel(group: BandGroup): readonly BandEdge[] {
+  return group === 'swl' ? SWL_PANEL_BAND_EDGES_HZ : HAM_BAND_EDGES_HZ;
+}
+
 export const BAND_MEMORY_LABELS = new Set([
   ...HAM_BAND_EDGES_HZ.map(band => band.label), ...SWL_BAND_EDGES_HZ.map(band => band.label),
 ]);

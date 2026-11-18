@@ -142,7 +142,8 @@ import {
   splitTransportEnabled,
 } from './transport/transport-mode';
 import {
-  SWL_BAND_EDGES_HZ,
+  HAM_BAND_EDGES_HZ,
+  bandEdgesForPanel,
   normalizeBandGroup,
   bandKeyForFrequency,
   effectiveIqSampleRate,
@@ -373,7 +374,8 @@ const api = {
 
   // Radio
   PanadapterBandGuide,
-  SWL_BAND_EDGES_HZ,
+  HAM_BAND_EDGES_HZ,
+  bandEdgesForPanel,
   normalizeBandGroup,
   bandKeyForFrequency,
   effectiveIqSampleRate,

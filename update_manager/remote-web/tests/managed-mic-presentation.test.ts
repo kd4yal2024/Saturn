@@ -50,3 +50,24 @@ describe('managed microphone meter presentation', () => {
     expect(f.state.micCapturing).toBe(true);
   });
 });
+
+
+describe('source-selection result isolation', () => {
+  it('ignores the previous rejected band result while a new source request is pending', () => {
+    const logs: string[] = [];
+    const old = 'Settings 7: rejected (InvalidConfig); before queueing';
+    const context = { state: {}, satpSourceRequestAt: 100, satpSourceRequestPreviousResult: old,
+      txPowerDraft: new TxPowerDraft(), $: () => null, logEvent: (line: string) => logs.push(line),
+      scheduleUiRefresh() {}, setPtt() {}, setTxMediaPriority() {}, recoverRxAfterMox() {} };
+    const changed = runInNewContext(`(${callback}\n})`, context);
+    changed({ selected: false, phase: 'releasing', pendingSettings: 1, lastTransaction: old });
+    changed({ selected: false, phase: 'fault', pendingSettings: 0, lastTransaction: old });
+    expect(context.satpSourceRequestAt).toBe(100);
+    expect(logs).toEqual([]);
+    changed({ selected: false, phase: 'fault', pendingSettings: 0,
+      lastTransaction: 'Settings 8: rejected (InvalidConfig); before queueing' });
+    expect(context.satpSourceRequestAt).toBe(0);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('Settings 8');
+  });
+});

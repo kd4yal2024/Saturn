@@ -108,6 +108,14 @@ try {
   check('SWL click moves the selected highlight and tab stop',await selectedGroup('swl'));
   check('Switching bank changes neither tuning nor operating settings',await evaluate(`window.__beforeBank===JSON.stringify([state.vfoA,state.vfoB,state.mode,state.rxAttenuationDb,state.txDrive,state.bandMemoryGroup])`));
   check('SWL offers fifteen broadcast presets plus separate 27 MHz and FM memories',await evaluate(`document.querySelectorAll('#band-grid .band-btn:not([hidden])').length===17 && [...document.querySelectorAll('#band-grid .band-btn:not([hidden])')].every(b=>b.dataset.bandGroup==='swl')`));
+  await evaluate(`state.rxWbfmSupported=true;updateUi()`);
+  await clickBand('swl','99500000');
+  check('SWL-panel FM has visible spectrum and waterfall operating edges', await evaluate(`
+    ['spectrum-band-edges','waterfall-band-edges'].every(id => {
+      const layer = document.getElementById(id);
+      return layer.querySelector('.band-plan-region[data-label="FM"]')
+        && layer.querySelector('.band-edge-sticky');
+    })`));
   await clickBand('swl','6000000');
   check('49m recalls AM at 6 MHz with the live highlight',await evaluate(`state.vfoA===6000000 && state.mode==='AM' && document.querySelector('#band-grid .band-btn.active').textContent==='49m' && document.querySelector('#band-grid .band-btn.active').getAttribute('aria-checked')==='true'`));
   await evaluate(`document.querySelector('#mode-grid [data-mode="SAM"]').click()`);await attenuation(20);
@@ -130,6 +138,12 @@ try {
   await clickBand('ham','7150000');
   await clickBand('swl','27385000');
   check('27 MHz 11m returns from 40m with its last frequency and operating settings',await evaluate(`state.vfoA===27435000 && state.mode==='LSB' && state.rxAttenuationDb===10 && state.txDrive===40 && state.txMicGainDb===3 && state.displayZoom===5 && document.querySelector('#band-grid .band-btn.active').dataset.band==='27385000' && frequencyEntryBandForHz(state.vfoA)?.label==='11m'`));
+  check('SWL-panel 27 MHz 11m has visible spectrum and waterfall operating edges', await evaluate(`
+    ['spectrum-band-edges','waterfall-band-edges'].every(id => {
+      const layer = document.getElementById(id);
+      return layer.querySelector('.band-plan-region[data-label="11m"]')
+        && layer.querySelector('.band-edge-sticky');
+    })`));
   await selectGroup('swl');await clickBand('swl','25900000');
   await evaluate(`setFrequency(25950000);document.querySelector('#mode-grid [data-mode="SAM"]').click()`);await attenuation(20);
   await selectGroup('ham');await clickBand('swl','27385000');

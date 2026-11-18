@@ -52,3 +52,26 @@ radio access. Evidence is retained in
 This repair changes neither sample scaling nor TX ownership, FPGA code, driver
 behavior, PS admission, accessory control or timestamp interpretation. It is
 not a complete v4.4 conformance or physical RF qualification claim.
+
+## p2app fast-restart reception
+
+DUC and speaker ingress now sample the controller lease's stream epoch together
+with the source-address match. A successful claim of an unowned lease creates a
+new epoch; repeated claims by the current controller leave it unchanged. RUN=0
+releases that lease and the inactivity watchdog clears it, so the next claim is
+observable even when neither data receiver polls the intermediate inactive flag.
+
+Before accepting the first datagram in a new epoch, each receiver clears its
+sequence tracker and queued software samples. Speaker ingress also restarts its
+startup/prefill bookkeeping. Duplicate/stale filtering within an epoch and
+controller-address isolation remain in place. This uses the existing lease
+mutex and changes no wire format or TX authorization.
+
+`make -C sw_projects/P2_app test-protocol2-stream-restart` includes each actual
+production ingress source with mocked receive/DMA boundaries. It starts at
+sequence 1000, releases/reclaims the same controller entirely within one receive
+wake, then delivers 0, 1, duplicate 1, stale 0, 2 and a packet from another host.
+Both old receivers fail this fixture; both repaired receivers accept the three
+new packets and discard stale/duplicate/foreign packets. The matching `-asan`
+target runs with address and undefined-behavior sanitizers. These are offline
+regressions, not a physical-radio timing or RF test.

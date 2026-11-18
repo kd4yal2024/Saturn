@@ -284,6 +284,7 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
     uint64_t NowNs = 0;
     bool GapMuteActive = false;
     TP2SequenceTracker SequenceTracker = {0};
+    uint64_t StreamEpoch = 0;
     struct timespec ReceiveTimeout;
     struct timespec *ReceiveTimeoutPtr = NULL;
     struct sched_param SchedulingParameters = {0};
@@ -508,8 +509,23 @@ void *IncomingSpkrAudio(void *arg)                      // listener thread
                     continue;
                 if((DatagramList[MsgIndex].msg_hdr.msg_flags & MSG_TRUNC) != 0)
                     continue;
-                if(!ControllerLeaseMatches(&SourceAddresses[MsgIndex]))
+                uint64_t PacketEpoch = 0;
+                if(!ControllerLeaseMatchesEpoch(&SourceAddresses[MsgIndex], &PacketEpoch))
                     continue;
+                if(PacketEpoch != StreamEpoch)
+                {
+                    QueueHead = QueueCount = 0;
+                    memset(QueueArrivalNs, 0, sizeof(QueueArrivalNs));
+                    StartupCount = VSTARTUPDELAY;
+                    StartupGraceCount = VSTARTUPGRACEFRAMES;
+                    UnderflowActive = false;
+                    PrefillActive = true;
+                    LastObservedFIFOFrames = 0;
+                    LastPacketNs = 0;
+                    GapMuteActive = false;
+                    P2SequenceReset(&SequenceTracker);
+                    StreamEpoch = PacketEpoch;
+                }
                 if(QueueCount >= VSPKSOFTQUEUEFRAMES)
                     break;
                 PacketSequence = rd_be_u32(UDPInBuffers[MsgIndex]);

@@ -334,11 +334,7 @@ impl P2Session {
     pub fn send_high_priority(&self, model: &RadioModel) -> io::Result<()> {
         let state = build_high_priority_state(model, self.config.remote_tx_100w_drive_byte);
         #[cfg(feature = "offline-puresignal-owner-adapters")]
-        let _permit = self
-            .offline_output_fence
-            .as_ref()
-            .map(|f| f.enter())
-            .transpose()?;
+        let _permit = self.enter_output()?;
         self.send_high_priority_permitted(&state)
     }
 
@@ -463,11 +459,7 @@ impl P2Session {
             rx1_attenuation_db: 0,
         };
         #[cfg(feature = "offline-puresignal-owner-adapters")]
-        let _permit = self
-            .offline_output_fence
-            .as_ref()
-            .map(|f| f.enter())
-            .transpose()?;
+        let _permit = self.enter_output()?;
         self.send_high_priority_permitted(&state)
     }
 
@@ -480,11 +472,7 @@ impl P2Session {
                 break;
             }
             #[cfg(feature = "offline-puresignal-owner-adapters")]
-            let _permit = self
-                .offline_output_fence
-                .as_ref()
-                .map(|f| f.enter())
-                .transpose()?;
+            let _permit = self.enter_output()?;
             self.send_iq_packet_permitted(chunk)?;
         }
         Ok(())
@@ -506,13 +494,17 @@ impl P2Session {
         SocketAddr::new(self.config.radio_command_addr.ip(), port)
     }
 
-    fn send_packet(&self, target: SocketAddr, packet: &[u8]) -> io::Result<usize> {
-        #[cfg(feature = "offline-puresignal-owner-adapters")]
-        let _permit = self
-            .offline_output_fence
+    #[cfg(feature = "offline-puresignal-owner-adapters")]
+    fn enter_output(&self) -> io::Result<Option<std::sync::MutexGuard<'_, ()>>> {
+        self.offline_output_fence
             .as_ref()
             .map(|f| f.enter())
-            .transpose()?;
+            .transpose()
+    }
+
+    fn send_packet(&self, target: SocketAddr, packet: &[u8]) -> io::Result<usize> {
+        #[cfg(feature = "offline-puresignal-owner-adapters")]
+        let _permit = self.enter_output()?;
         self.socket.send_to(packet, target)
     }
 

@@ -9,9 +9,9 @@ use std::{
     collections::VecDeque,
     marker::PhantomData,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{TryRecvError, TrySendError},
-        Arc, Mutex, TryLockError, Weak,
+        Arc, Mutex, TryLockError,
     },
 };
 
@@ -21,18 +21,17 @@ struct Inner<T> {
     queue: Mutex<VecDeque<T>>,
     capacity: usize,
     receiver_alive: AtomicBool,
-    senders: Weak<()>,
+    senders: AtomicUsize,
     wake: Arc<Wake>,
 }
 pub(crate) struct SyncSender<T> {
     inner: Arc<Inner<T>>,
-    live: Option<Arc<()>>,
 }
 impl<T> Clone for SyncSender<T> {
     fn clone(&self) -> Self {
+        self.inner.senders.fetch_add(1, Ordering::Relaxed);
         Self {
             inner: self.inner.clone(),
-            live: Some(self.live.as_ref().unwrap().clone()),
         }
     }
 }
@@ -58,18 +57,16 @@ pub(crate) fn sync_channel_with_wake<T>(
     wake: Arc<Wake>,
 ) -> (SyncSender<T>, Receiver<T>) {
     assert!(capacity > 0);
-    let live = Arc::new(());
     let inner = Arc::new(Inner {
         queue: Mutex::new(VecDeque::with_capacity(capacity)),
         capacity,
         receiver_alive: AtomicBool::new(true),
-        senders: Arc::downgrade(&live),
+        senders: AtomicUsize::new(1),
         wake,
     });
     (
         SyncSender {
             inner: inner.clone(),
-            live: Some(live),
         },
         Receiver::Owned(OwnedReceiver {
             inner,
@@ -137,10 +134,9 @@ impl<T> SyncSender<T> {
 }
 impl<T> Drop for SyncSender<T> {
     fn drop(&mut self) {
-        let live = self.live.take().unwrap();
-        let last = Arc::strong_count(&live) == 1;
-        drop(live); // publish disconnection BEFORE waking the receiver
-        if last {
+        // One atomic decrement chooses exactly one final sender, even when
+        // the final two handles close concurrently. Publish before the wake.
+        if self.inner.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.inner.wake.notify();
         }
     }
@@ -164,7 +160,7 @@ impl<T> Receiver<T> {
         if let Some(message) = queue.pop_front() {
             return Ok(message);
         }
-        if inner.senders.strong_count() == 0 {
+        if inner.senders.load(Ordering::Acquire) == 0 {
             Err(TryRecvError::Disconnected)
         } else {
             Err(TryRecvError::Empty)
@@ -186,7 +182,11 @@ impl<T> From<std::sync::mpsc::Receiver<T>> for Receiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{
+        sync::{mpsc, Weak},
+        thread,
+        time::Duration,
+    };
 
     #[test]
     fn notification_before_registration_is_retained_without_creating_a_message() {
@@ -273,6 +273,39 @@ mod tests {
         wake.notify();
         worker.join().unwrap();
         assert_eq!(outcome.unwrap(), Err(TryRecvError::Disconnected));
+    }
+
+    #[test]
+    fn concurrent_final_senders_publish_disconnect_and_wake_the_parked_owner() {
+        for _ in 0..64 {
+            let wake = Arc::new(Wake::default());
+            let (first, receiver) = sync_channel_with_wake::<u64>(1, wake.clone());
+            let second = first.clone();
+            let barrier = Arc::new(std::sync::Barrier::new(3));
+            let (entered, ready) = mpsc::channel();
+            let (done, result) = mpsc::channel();
+            let worker_wake = wake.clone();
+            let worker = thread::spawn(move || {
+                worker_wake.register_current();
+                worker_wake.wait_before_park(Duration::from_secs(1), || entered.send(()).unwrap());
+                done.send(receiver.try_recv()).unwrap();
+            });
+            ready.recv_timeout(Duration::from_secs(1)).unwrap();
+            thread::scope(|scope| {
+                for sender in [first, second] {
+                    let barrier = barrier.clone();
+                    scope.spawn(move || {
+                        barrier.wait();
+                        drop(sender);
+                    });
+                }
+                barrier.wait();
+            });
+            let outcome = result.recv_timeout(Duration::from_millis(200));
+            wake.notify(); // join even if a regression missed disconnection
+            worker.join().unwrap();
+            assert_eq!(outcome.unwrap(), Err(TryRecvError::Disconnected));
+        }
     }
 
     #[test]
