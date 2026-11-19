@@ -1,3 +1,4 @@
+import type { RxPlaybackBufferTelemetry } from '../audio/rx-telemetry';
 import { normalizeTerrain, type TerrainSettings } from '../settings/terrain';
 /**
  * Typed application state for Saturn Remote.
@@ -359,6 +360,7 @@ export interface AppState {
   rxCtrlF32: Float32Array | null;
   rxWorkletDrops: number;
   rxWorkletQueuedMs: number;
+  rxPlaybackBuffer: RxPlaybackBufferTelemetry | null;
   rxWorkletUnderruns: number;
   rxWorkletOverflows: number;
   rxWorkletTelemetryAt: number;
@@ -741,6 +743,7 @@ export function createAppState(): AppState {
     rxCtrlF32: null,
     rxWorkletDrops: 0,
     rxWorkletQueuedMs: 0,
+    rxPlaybackBuffer: null,
     rxWorkletUnderruns: 0,
     rxWorkletOverflows: 0,
     rxWorkletTelemetryAt: 0,

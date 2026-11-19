@@ -48,6 +48,8 @@ describe('RX audio telemetry', () => {
       audioQueueMs: 42.7,
       workletUnderruns: 3,
       workletOverflows: 1,
+      playbackBuffer: { enabled: true, phase: 'playing', targetMs: 64, maxQueueMs: 120,
+        primeEvents: 1, rebuffers: 1, bufferingMs: 42, trimmedFrames: 0 },
       adaptiveRateEnabled: true,
       adaptiveRateRatio: 1.000125,
       adaptiveRateCorrectionPpm: 125,
@@ -71,6 +73,7 @@ describe('RX audio telemetry', () => {
       reconnectReason: '',
     });
 
+    expect(text).toContain('RX playback buffer: bounded / playing / target 64.0 ms / local cap 120.0 ms');
     expect(text).toContain('Saturn Remote RX Latency');
     expect(text).toContain('Profiles: LAN / PCM F32 48 kHz stereo / Worklet');
     expect(text).toContain('Packet jitter p50/p95/p99: 1.2 / 8.4 / 21.3 ms (512 samples)');

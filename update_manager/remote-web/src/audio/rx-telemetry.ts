@@ -1,3 +1,9 @@
+export type RxPlaybackBufferTelemetry = {
+  enabled: boolean; phase: 'idle' | 'priming' | 'playing' | 'rebuffering';
+  targetMs: number; maxQueueMs: number; primeEvents: number; rebuffers: number;
+  bufferingMs: number; trimmedFrames: number;
+};
+
 export type RxJitterPercentiles = {
   p50Ms: number;
   p95Ms: number;
@@ -19,6 +25,7 @@ export type RxLatencyDiagnostic = {
   audioQueueMs: number | null;
   workletUnderruns: number;
   workletOverflows: number;
+  playbackBuffer?: RxPlaybackBufferTelemetry | null;
   adaptiveRateEnabled: boolean;
   adaptiveRateRatio: number;
   adaptiveRateCorrectionPpm: number;
@@ -129,6 +136,10 @@ export function formatRxLatencyDiagnostic(value: RxLatencyDiagnostic): string {
     `Audio sequence gaps: ${Math.max(0, Math.round(value.audioSequenceGaps || 0))}`,
     `Audio packets missing: ${Math.max(0, Math.round(value.audioSequenceMissingPackets || 0))}`,
   ];
+  if (value.playbackBuffer) {
+    const p = value.playbackBuffer;
+    lines.push(`RX playback buffer: ${p.enabled ? 'bounded' : 'immediate'} / ${p.phase} / target ${diagnosticNumber(p.targetMs)} ms / local cap ${diagnosticNumber(p.maxQueueMs)} ms / ${p.rebuffers} recovery(s) / intentional hold ${diagnosticNumber(p.bufferingMs)} ms / ${p.trimmedFrames} trimmed frame(s)`);
+  }
   if (value.reconnectPhase) {
     const reason = value.reconnectReason ? ` | ${value.reconnectReason}` : '';
     lines.push(`Reconnect: ${value.reconnectPhase} | attempt ${Math.max(0, Math.round(value.reconnectAttempt || 0))}${reason}`);

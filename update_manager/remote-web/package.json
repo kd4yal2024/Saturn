@@ -25,7 +25,8 @@
     "validate:settings": "node scripts/validate-settings-workbench.mjs",
     "validate:display-worker": "node scripts/validate-display-worker.mjs",
     "profile:display": "node scripts/profile-display.mjs",
-    "validate:band-guide": "node scripts/validate-band-guide.mjs"
+    "validate:band-guide": "node scripts/validate-band-guide.mjs",
+    "validate:rx-playback": "node scripts/validate-rx-playback.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

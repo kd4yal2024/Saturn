@@ -77,6 +77,17 @@ describe('ringBufferFreeFrames', () => {
 });
 
 describe('AdaptivePlaybackRateController', () => {
+  it('retargets the reserve without resetting slow clock correction', () => {
+    const controller = new AdaptivePlaybackRateController();
+    controller.observeQueue(0, 1000); controller.observeQueue(0, 2000);
+    const ratio = controller.telemetry().ratio;
+    controller.setTargetQueueMs(80);
+    expect(controller.telemetry().targetQueueMs).toBe(80);
+    expect(controller.telemetry().ratio).toBe(ratio);
+    controller.setTargetQueueMs(NaN); expect(controller.telemetry().targetQueueMs).toBe(80);
+    controller.setTargetQueueMs(10000); expect(controller.telemetry().targetQueueMs).toBe(120);
+  });
+
   it('slews toward more output frames when playback occupancy is low', () => {
     const controller = new AdaptivePlaybackRateController();
     controller.observeQueue(0, 1000);

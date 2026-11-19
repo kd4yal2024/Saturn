@@ -66,7 +66,7 @@ function clamp(value: number, low: number, high: number): number {
  * carried between packets so ppm-scale corrections are not lost to rounding.
  */
 export class AdaptivePlaybackRateController {
-  private readonly targetQueueMs: number;
+  private targetQueueMs: number;
   private readonly proportionalGainPerMs: number;
   private readonly maxCorrectionRatio: number;
   private readonly slewPerSecond: number;
@@ -97,6 +97,11 @@ export class AdaptivePlaybackRateController {
       0,
       0.02,
     );
+  }
+
+  /** Rebuffer reserve changes are independent of the slow clock correction. */
+  setTargetQueueMs(targetMs: number): void {
+    if (Number.isFinite(targetMs)) this.targetQueueMs = clamp(targetMs, 1, 120);
   }
 
   reset(): void {

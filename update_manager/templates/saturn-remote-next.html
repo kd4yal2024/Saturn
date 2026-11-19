@@ -7648,6 +7648,7 @@
                         <div class="setup-inline-fields">
                           <div class="setup-row"><span class="label">Connection</span><div class="setup-readout" id="setup-network-connection-status">Disconnected</div></div>
                           <div class="setup-row"><span class="label">Latency</span><div class="setup-readout" id="setup-network-latency-status">No bridge RTT</div></div>
+                          <div class="setup-row"><span class="label">RX playback buffer</span><div class="setup-readout" id="setup-network-playback-status">Waiting for RX audio</div></div>
                         </div>
                         <div class="setup-button-row" style="grid-template-columns: minmax(0, 1fr);">
                           <button class="btn ghost" id="setup-network-copy-diagnostics-btn" type="button">Copy Network Diagnostics</button>
@@ -9376,28 +9377,23 @@
 
     const WORKLET_SOURCE = `
 class SaturnRxProcessor extends AudioWorkletProcessor {
-  constructor(options) {
+  constructor(options = {}) {
     super();
-    this.ringF32   = null;   // Float32Array over SharedArrayBuffer
-    this.ctrlU32   = null;   // Uint32Array  over SharedArrayBuffer
-    this.ctrlF32   = null;   // Float32Array over SharedArrayBuffer
-    this.ringLen   = 0;      // total float slots (frames * 2)
-    this.msgQueue  = [];     // fallback postMessage queue
-    this.msgQueueMax = ${RX_MSG_QUEUE_MAX_PACKETS};
-    this.msgOffset = 0;
-    this.useSab    = false;
-    this.started = false;
-    this.inUnderrun = false;
-    this.underruns = 0;
-    this.overflows = 0;
-    this.telemetryFrames = 0;
-    // Metadata only: never retain PCM in the diagnostic recorder.
-    this.rxHistory = [];
-    this.rxEpisodes = [];
-    this.rxEpisode = null;
-    this.rxLastFlush = null;
-    this.rxMissingFrames = 0;
-    this.rxQueueMin = Infinity;
+    this.ringF32 = null; this.ctrlU32 = null; this.ctrlF32 = null; this.ringLen = 0;
+    this.useSab = false;
+    this.bufferEnabled = options.processorOptions?.boundedPlayback !== false;
+    this.targetMs = this.bufferEnabled ? 48 : 0;
+    this.maxQueueFrames = Math.ceil(sampleRate * 0.120);
+    // Fixed storage: packet size/count cannot grow the local playback queue.
+    this.msgLeft = new Float32Array(this.maxQueueFrames);
+    this.msgRight = new Float32Array(this.maxQueueFrames);
+    this.msgHead = 0; this.msgFrames = 0;
+    this.started = false; this.playing = false; this.inUnderrun = false;
+    this.phase = 'idle'; this.primeEvents = 0; this.rebuffers = 0;
+    this.bufferHoldFrames = 0; this.trimmedFrames = 0; this.nextDecayTime = 0;
+    this.underruns = 0; this.overflows = 0; this.telemetryFrames = 0;
+    this.rxHistory = []; this.rxEpisodes = []; this.rxEpisode = null;
+    this.rxLastFlush = null; this.rxMissingFrames = 0; this.rxQueueMin = Infinity;
     this.port.onmessage = (e) => this._onMessage(e.data);
   }
 
@@ -9406,52 +9402,95 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       this.ringF32 = new Float32Array(msg.ringBuf);
       this.ctrlU32 = new Uint32Array(msg.ctrlBuf);
       this.ctrlF32 = new Float32Array(msg.ctrlBuf);
-      this.ringLen = this.ringF32.length;
-      this.useSab  = true;
+      this.ringLen = this.ringF32.length; this.useSab = true;
     } else if (msg.type === 'audio') {
       this.rxHistory.push({ ...msg.diagnostic, receivedContextMs: currentTime * 1000,
         deliveryContextDelayMs: msg.diagnostic ? currentTime * 1000 - msg.diagnostic.sentContextMs : null,
         queuedBeforeFrames: this._queuedFrames(), frames: msg.left.length });
       if (this.rxHistory.length > 96) this.rxHistory.shift();
-      this.started = true;
-      this.msgQueue.push({ left: msg.left, right: msg.right, offset: 0 });
-      while (this.msgQueue.length > this.msgQueueMax) {
-        this.msgQueue.shift();
+      const count = Math.min(msg.left.length, msg.right.length);
+      const keep = Math.min(count, this.maxQueueFrames);
+      const drop = Math.max(0, this.msgFrames + keep - this.maxQueueFrames);
+      if (drop || count > keep) {
+        this.msgHead = (this.msgHead + drop) % this.maxQueueFrames;
+        this.msgFrames -= drop; this.trimmedFrames += drop + count - keep;
         this.overflows += 1;
       }
+      for (let i = count - keep; i < count; i++) {
+        const at = (this.msgHead + this.msgFrames) % this.maxQueueFrames;
+        this.msgLeft[at] = msg.left[i]; this.msgRight[at] = msg.right[i];
+        this.msgFrames += 1;
+      }
+      this._beginStream();
     } else if (msg.type === 'stream-start') {
-      this.started = true;
+      this._beginStream();
     } else if (msg.type === 'gain') {
       this._msgGain = msg.value;
     } else if (msg.type === 'mute') {
       this._msgMuted = msg.value;
     } else if (msg.type === 'flush') {
+      if (this.rxEpisode) {
+        this.rxEpisodes.push({ ...this.rxEpisode, endReason: 'flush', endedContextMs: currentTime * 1000 });
+        if (this.rxEpisodes.length > 8) this.rxEpisodes.shift();
+        this.rxEpisode = null;
+      }
       this.rxLastFlush = { reason: msg.reason || 'unspecified', contextMs: currentTime * 1000 };
-      this.msgQueue.length = 0;
-      this.msgOffset = 0;
+      this.msgHead = 0; this.msgFrames = 0;
+      if (this.useSab && msg.clearSab !== false) Atomics.store(this.ctrlU32, ${CTRL_READ_IDX}, Atomics.load(this.ctrlU32, ${CTRL_WRITE_IDX}));
+      this.started = false; this.playing = false; this.inUnderrun = false;
+      this.phase = 'idle'; this.targetMs = this.bufferEnabled ? 48 : 0;
+      this.rxHistory.length = 0;
     }
+  }
+
+  _beginStream() {
+    if (this.started) return;
+    this.started = true; this.primeEvents += 1;
+    this.phase = this.bufferEnabled ? 'priming' : 'playing';
+    this.nextDecayTime = currentTime + 30;
   }
 
   process(inputs, outputs) {
     const out = outputs[0];
     if (!out || out.length < 2) return true;
-    const outL = out[0];
-    const outR = out[1];
-    const len  = outL.length; // 128
-
-    if (this.useSab) {
-      this._processSab(outL, outR, len);
-    } else {
-      this._processMsg(outL, outR, len);
+    const outL = out[0], outR = out[1], len = outL.length;
+    outL.fill(0); outR.fill(0);
+    const available = this._queuedFrames();
+    // SAB start notification is a once-per-node hint; flush does not require
+    // another producer notification before newly published samples can prime.
+    if (!this.started && available > 0) this._beginStream();
+    if (this.started) {
+      const target = Math.min(Math.ceil(this.targetMs * sampleRate / 1000), this._capacityFrames());
+      if (this.bufferEnabled && !this.playing && available < target) {
+        // Waiting with queued data is intentional buffering, not missing PCM.
+        if (this.phase === 'rebuffering' && available === 0) this._recordShortfall(len);
+        else {
+          this.bufferHoldFrames += len;
+          if (this.rxEpisode) this.rxEpisode.bufferingFrames += len;
+        }
+      } else {
+        this.playing = true; this.phase = 'playing';
+        const written = this.useSab ? this._processSab(outL, outR, len) : this._processMsg(outL, outR, len);
+        const missing = len - written;
+        this._setUnderrun(missing > 0); this._recordShortfall(missing);
+        if (missing > 0 && this.bufferEnabled) {
+          this.playing = false; this.phase = 'rebuffering'; this.rebuffers += 1;
+          this.targetMs = Math.min(80, this.targetMs + 16);
+          this.nextDecayTime = currentTime + 30;
+        } else if (this.targetMs > 48 && currentTime >= this.nextDecayTime) {
+          this.targetMs = Math.max(48, this.targetMs - 4);
+          this.nextDecayTime = currentTime + 10;
+        }
+      }
     }
     this._publishTelemetry(len);
     return true;
   }
 
+  _capacityFrames() { return this.useSab ? (this.ringLen >>> 1) - 1 : this.maxQueueFrames; }
+
   _setUnderrun(active) {
-    if (active && this.started && !this.inUnderrun) {
-      this.underruns += 1;
-    }
+    if (active && this.started && !this.inUnderrun) this.underruns += 1;
     this.inUnderrun = active;
   }
 
@@ -9460,17 +9499,15 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
     const now = currentTime * 1000;
     if (missingFrames > 0) {
       this.rxMissingFrames += missingFrames;
-      if (!this.rxEpisode) {
-        this.rxEpisode = { startContextMs: now, missingFrames: 0,
-          lastFlush: this.rxLastFlush, before: this.rxHistory.slice(-48) };
-      }
+      if (!this.rxEpisode) this.rxEpisode = { startContextMs: now, missingFrames: 0,
+        bufferingFrames: 0, lastFlush: this.rxLastFlush, before: this.rxHistory.slice(-48) };
       this.rxEpisode.missingFrames += missingFrames;
       this.rxEpisode.lastContextMs = now;
     } else if (this.rxEpisode) {
-      const event = { ...this.rxEpisode, recoveredContextMs: now,
+      this.rxEpisodes.push({ ...this.rxEpisode, recoveredContextMs: now,
         missingMs: this.rxEpisode.missingFrames / sampleRate * 1000,
-        recovery: this.rxHistory.slice(-8) };
-      this.rxEpisodes.push(event);
+        bufferingMs: this.rxEpisode.bufferingFrames / sampleRate * 1000,
+        recovery: this.rxHistory.slice(-8) });
       if (this.rxEpisodes.length > 8) this.rxEpisodes.shift();
       this.rxEpisode = null;
     }
@@ -9483,11 +9520,7 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
       const wr = Atomics.load(this.ctrlU32, ${CTRL_WRITE_IDX});
       return wr >= rd ? wr - rd : cap - rd + wr;
     }
-    let frames = 0;
-    for (const pkt of this.msgQueue) {
-      frames += Math.max(0, pkt.left.length - pkt.offset);
-    }
-    return frames;
+    return this.msgFrames;
   }
 
   _publishTelemetry(renderedFrames) {
@@ -9496,85 +9529,41 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
     if (this.telemetryFrames < sampleRate / 4) return;
     this.telemetryFrames = 0;
     const queuedFrames = this._queuedFrames();
-    this.port.postMessage({
-      type: 'telemetry',
-      queuedFrames,
-      queuedMs: (queuedFrames / sampleRate) * 1000,
-      underruns: this.underruns,
-      overflows: this.overflows,
+    this.port.postMessage({ type: 'telemetry', queuedFrames,
+      queuedMs: queuedFrames / sampleRate * 1000, underruns: this.underruns, overflows: this.overflows,
+      playout: { enabled: this.bufferEnabled, phase: this.phase, targetMs: this.targetMs,
+        maxQueueMs: this._capacityFrames() / sampleRate * 1000,
+        primeEvents: this.primeEvents, rebuffers: this.rebuffers,
+        bufferingMs: this.bufferHoldFrames / sampleRate * 1000,
+        trimmedFrames: this.trimmedFrames },
       diagnostic: { contextMs: currentTime * 1000, queueMinFrames: this.rxQueueMin,
-        missingFrames: this.rxMissingFrames, activeEpisode: this.rxEpisode,
-        episodes: this.rxEpisodes }
+        missingFrames: this.rxMissingFrames, activeEpisode: this.rxEpisode, episodes: this.rxEpisodes }
     });
-    this.rxQueueMin = Infinity;
-    this.rxEpisodes = [];
+    this.rxQueueMin = Infinity; this.rxEpisodes = [];
   }
 
   _processSab(outL, outR, len) {
-    const ctrl  = this.ctrlU32;
-    const ctrlF = this.ctrlF32;
-    const ring  = this.ringF32;
-    const cap   = this.ringLen >>> 1; // frames capacity
-    const muted = Atomics.load(ctrl, ${CTRL_MUTED_IDX});
-    const gain  = muted ? 0.0 : ctrlF[${CTRL_GAIN_IDX}];
-
+    const ctrl = this.ctrlU32, ring = this.ringF32, cap = this.ringLen >>> 1;
+    const gain = Atomics.load(ctrl, ${CTRL_MUTED_IDX}) ? 0 : this.ctrlF32[${CTRL_GAIN_IDX}];
     let rd = Atomics.load(ctrl, ${CTRL_READ_IDX});
-    const wr = Atomics.load(ctrl, ${CTRL_WRITE_IDX});
-
-    // available frames in ring
-    let avail = wr >= rd ? wr - rd : cap - rd + wr;
-
-    if (avail < len) {
-      // underrun: output silence
-      outL.fill(0);
-      outR.fill(0);
-      this._setUnderrun(true);
-      this._recordShortfall(len);
-      return;
-    }
-
-    this._setUnderrun(false);
-    this._recordShortfall(0);
-
-    for (let i = 0; i < len; i++) {
-      const idx = rd * 2;
-      outL[i] = ring[idx]     * gain;
-      outR[i] = ring[idx + 1] * gain;
+    const written = Math.min(len, this._queuedFrames());
+    for (let i = 0; i < written; i++) {
+      outL[i] = ring[rd * 2] * gain; outR[i] = ring[rd * 2 + 1] * gain;
       rd = (rd + 1) % cap;
     }
     Atomics.store(ctrl, ${CTRL_READ_IDX}, rd);
+    return written;
   }
 
   _processMsg(outL, outR, len) {
-    const gain  = (this._msgMuted) ? 0.0 : (this._msgGain ?? 1.0);
-    let written = 0;
-
-    while (written < len && this.msgQueue.length > 0) {
-      const pkt = this.msgQueue[0];
-      const left  = pkt.left;
-      const right = pkt.right;
-      const pktLen = left.length;
-      const remain = pktLen - pkt.offset;
-      const take   = Math.min(remain, len - written);
-
-      for (let i = 0; i < take; i++) {
-        outL[written + i] = left[pkt.offset + i]  * gain;
-        outR[written + i] = right[pkt.offset + i] * gain;
-      }
-      pkt.offset += take;
-      written += take;
-
-      if (pkt.offset >= pktLen) {
-        this.msgQueue.shift();
-      }
+    const gain = this._msgMuted ? 0 : (this._msgGain ?? 1);
+    const written = Math.min(len, this.msgFrames);
+    for (let i = 0; i < written; i++) {
+      outL[i] = this.msgLeft[this.msgHead] * gain; outR[i] = this.msgRight[this.msgHead] * gain;
+      this.msgHead = (this.msgHead + 1) % this.maxQueueFrames;
     }
-    // fill remainder with silence
-    for (let i = written; i < len; i++) {
-      outL[i] = 0;
-      outR[i] = 0;
-    }
-    this._setUnderrun(written < len);
-    this._recordShortfall(len - written);
+    this.msgFrames -= written;
+    return written;
   }
 }
 registerProcessor('saturn-rx-player', SaturnRxProcessor);
@@ -9765,6 +9754,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
     }
     const _next = saturnRemoteNextApi();
     const HAM_BAND_EDGES_HZ = _next.HAM_BAND_EDGES_HZ;
+    const RX_BOUNDED_PLAYBACK = pageQueryValue("rx_playback_buffer") !== "off";
     const RX_AUDIO_ADAPTIVE_RATE = !["0", "false", "off", "no", "static"].includes(
       `${pageQueryValue("rx_audio_adaptive") || ""}`.trim().toLowerCase()
     );
@@ -14551,6 +14541,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       if ($("setup-network-connection-status")) {
         $("setup-network-connection-status").textContent = `${setupConnection.label} · ${networkProfileLabel()}`;
       }
+      updateRxPlaybackBufferReadout();
       if ($("setup-network-latency-status")) {
         $("setup-network-latency-status").textContent = latencyStripState().label;
       }
@@ -17520,6 +17511,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         audioQueueMs,
         workletUnderruns: state.rxWorkletUnderruns,
         workletOverflows: state.rxWorkletOverflows,
+        playbackBuffer: state.rxPlaybackBuffer,
         adaptiveRateEnabled: state.rxAdaptiveRateEnabled,
         adaptiveRateRatio: state.rxAdaptiveRateRatio,
         adaptiveRateCorrectionPpm: state.rxAdaptiveRateCorrectionPpm,
@@ -19328,6 +19320,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       state.rxWorkletUnderruns = 0;
       state.rxWorkletOverflows = 0;
       state.rxWorkletTelemetryAt = 0;
+      state.rxPlaybackBuffer = null;
       updateRxAdaptiveRateTelemetry(rxAdaptiveRateController.telemetry());
     }
 
@@ -19471,6 +19464,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       };
     }
 
+    function updateRxPlaybackBufferReadout() {
+      const el = $("setup-network-playback-status"), p = state.rxPlaybackBuffer;
+      if (!el) return;
+      el.textContent = p
+        ? `${p.phase} · target ${p.targetMs} ms · queue ${state.rxWorkletQueuedMs.toFixed(1)} ms · cap ${p.maxQueueMs.toFixed(0)} ms · ${p.rebuffers} recovery(s)`
+        : "Waiting for RX AudioWorklet telemetry";
+    }
+
     function updateRxAdaptiveRateTelemetry(telemetry) {
       state.rxAdaptiveRateEnabled = Boolean(telemetry.enabled);
       state.rxAdaptiveRateRatio = Number(telemetry.ratio) || 1;
@@ -19553,6 +19554,7 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
           numberOfInputs: 0,
           numberOfOutputs: 1,
           outputChannelCount: [2],
+          processorOptions: { boundedPlayback: RX_BOUNDED_PLAYBACK },
         });
         node.connect(rxAudioOutputTarget(ctx));
         state.rxWorkletNode = node;
@@ -19575,7 +19577,12 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
             }
             while (rxAudioRecorder.events.length > 8) rxAudioRecorder.events.shift();
           }
-          observeRxPlaybackQueue(state.rxWorkletQueuedMs, state.rxWorkletTelemetryAt);
+          state.rxPlaybackBuffer = data.playout || null;
+          updateRxPlaybackBufferReadout();
+          rxAdaptiveRateController.setTargetQueueMs(data.playout?.enabled ? data.playout.targetMs : 42);
+          if (!data.playout?.enabled || data.playout.phase === "playing") {
+            observeRxPlaybackQueue(state.rxWorkletQueuedMs, state.rxWorkletTelemetryAt);
+          } else updateRxAdaptiveRateTelemetry(rxAdaptiveRateController.telemetry());
         };
 
         // Try SharedArrayBuffer ring buffer (disabled by default — postMessage is more stable)
@@ -19681,6 +19688,8 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
       }
       flushRxAudioQueue("audio-stop");
       state.audioStreaming = false;
+      state.rxPlaybackBuffer = null;
+      updateRxPlaybackBufferReadout();
       state.audioFramesPlayed = 0;
       state.audioNextTime = 0;
       state.lastAudioSequence = null;
@@ -19731,12 +19740,14 @@ registerProcessor('saturn-tx-capture', SaturnTxProcessor);
         }
       }
       state.audioSources.clear();
-      if (state.rxWorkletNode && state.audioWorkletMode === "msg") {
-        state.rxWorkletNode.port.postMessage({ type: "flush", reason });
-      }
       if (state.audioWorkletMode === "sab" && state.rxCtrlU32) {
         const wr = Atomics.load(state.rxCtrlU32, CTRL_WRITE_IDX);
         Atomics.store(state.rxCtrlU32, CTRL_READ_IDX, wr);
+      }
+      if (state.rxWorkletNode) {
+        // SAB was cleared synchronously above. Do not discard newer samples
+        // that arrive before the processor receives its re-prime notification.
+        state.rxWorkletNode.port.postMessage({ type: "flush", reason, clearSab: state.audioWorkletMode !== "sab" });
       }
       if (state.audioCtx) {
         state.audioNextTime = state.audioCtx.currentTime;

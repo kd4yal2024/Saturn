@@ -1,43 +1,6 @@
-import { readFileSync } from 'node:fs';
-import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
-
-// Execute the shipped processor, not a second implementation of its queue.
-const template = readFileSync(new URL('../../templates/saturn-remote-next.html', import.meta.url), 'utf8');
-const constants: Record<string, number> = {
-  RX_MSG_QUEUE_MAX_PACKETS: 8, CTRL_READ_IDX: 0, CTRL_WRITE_IDX: 1,
-  CTRL_GAIN_IDX: 4, CTRL_MUTED_IDX: 5, TX_MIC_BLOCK_SAMPLES: 1024,
-};
-const source = template.split('const WORKLET_SOURCE = `')[1]!.split('`;')[0]!
-  .replace(/\$\{([^}]+)\}/g, (_, key: string) => String(constants[key]));
-
-function harness() {
-  const messages: any[] = [];
-  let Processor: any;
-  const context = {
-    sampleRate: 48000, currentTime: 0,
-    AudioWorkletProcessor: class {
-      port = { postMessage: (message: any) => messages.push(structuredClone(message)) };
-    },
-    registerProcessor: (name: string, ctor: any) => {
-      if (name === 'saturn-rx-player') Processor = ctor;
-    },
-  };
-  runInNewContext(source, context);
-  const processor = new Processor();
-  const tick = () => {
-    const out = [new Float32Array(128), new Float32Array(128)];
-    processor.process([], [out]);
-    context.currentTime += 128 / 48000;
-    return out;
-  };
-  const packet = (frames = 1024, id = 1) => processor._onMessage({
-    type: 'audio', left: new Float32Array(frames).fill(0.5),
-    right: new Float32Array(frames).fill(-0.5),
-    diagnostic: { id, sentContextMs: context.currentTime * 1000 - 7 },
-  });
-  return { processor, messages, tick, packet, context };
-}
+import { rxWorkletHarness } from './helpers/rx-worklet';
+const harness = () => rxWorkletHarness(false);
 
 describe('RX underrun recorder', () => {
   it('does not report pre-stream silence and preserves stereo output', () => {
@@ -64,13 +27,15 @@ describe('RX underrun recorder', () => {
     expect(event.before[0].left).toBeUndefined();
   });
 
-  it('retains explicit flush context without changing underrun counting', () => {
+  it('treats explicit flush as an idle boundary instead of a network underrun', () => {
     const h = harness();
     h.packet(); h.tick();
     h.processor._onMessage({ type: 'flush', reason: 'tx-mute' });
     h.tick(); h.tick();
-    expect(h.processor.underruns).toBe(1);
-    expect(h.processor.rxEpisode.missingFrames).toBe(256);
+    expect(h.processor.underruns).toBe(0);
+    expect(h.processor.rxEpisode).toBeNull();
+    expect(h.processor.phase).toBe('idle');
+    h.packet(128); h.tick(); h.tick();
     expect(h.processor.rxEpisode.lastFlush.reason).toBe('tx-mute');
   });
 
@@ -78,7 +43,7 @@ describe('RX underrun recorder', () => {
     const h = harness();
     for (let i = 0; i < 150; i++) h.packet(128, i);
     expect(h.processor.rxHistory).toHaveLength(96);
-    expect(h.processor.msgQueue).toHaveLength(8);
+    expect(h.processor._queuedFrames()).toBeLessThanOrEqual(5760);
     for (let i = 0; i < 100; i++) h.tick();
     const diagnostic = h.messages[0].diagnostic;
     expect(diagnostic.queueMinFrames).toBe(0);

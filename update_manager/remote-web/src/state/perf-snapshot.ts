@@ -1,3 +1,5 @@
+import type { RxPlaybackBufferTelemetry } from '../audio/rx-telemetry';
+
 export interface PerfSnapshotSource {
   connected: boolean;
   connectPending: boolean;
@@ -17,6 +19,7 @@ export interface PerfSnapshotSource {
   audioBackpressureDrops: number;
   rxWorkletDrops: number;
   rxWorkletQueuedMs: number;
+  rxPlaybackBuffer?: RxPlaybackBufferTelemetry | null;
   rxWorkletUnderruns: number;
   rxWorkletOverflows: number;
   rxAdaptiveRateEnabled: boolean;
@@ -100,6 +103,7 @@ export interface PerfSnapshot {
   audioBackpressureDrops: number;
   rxWorkletDrops: number;
   rxWorkletQueuedMs: number;
+  rxPlaybackBuffer?: RxPlaybackBufferTelemetry | null;
   rxWorkletUnderruns: number;
   rxWorkletOverflows: number;
   rxAdaptiveRateEnabled: boolean;
@@ -245,6 +249,7 @@ export function buildPerfSnapshot(s: PerfSnapshotSource, nowMs: number): PerfSna
     audioBackpressureDrops: Math.round(Number(s.audioBackpressureDrops) || 0),
     rxWorkletDrops: Math.round(Number(s.rxWorkletDrops) || 0),
     rxWorkletQueuedMs: nonNegativeDecimal(s.rxWorkletQueuedMs),
+    rxPlaybackBuffer: s.rxPlaybackBuffer ? { ...s.rxPlaybackBuffer } : null,
     rxWorkletUnderruns: nonNegativeInteger(s.rxWorkletUnderruns),
     rxWorkletOverflows: nonNegativeInteger(s.rxWorkletOverflows),
     rxAdaptiveRateEnabled: Boolean(s.rxAdaptiveRateEnabled),
