@@ -9469,6 +9469,7 @@ class SaturnRxProcessor extends AudioWorkletProcessor {
           if (this.rxEpisode) this.rxEpisode.bufferingFrames += len;
         }
       } else {
+        if (!this.playing) this.nextDecayTime = currentTime + 30;
         this.playing = true; this.phase = 'playing';
         const written = this.useSab ? this._processSab(outL, outR, len) : this._processMsg(outL, outR, len);
         const missing = len - written;

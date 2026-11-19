@@ -78,6 +78,17 @@ describe('bounded RX playback of actual shipped worklet', () => {
     expect(h.processor._queuedFrames()).toBeLessThanOrEqual(5760);
   });
 
+  it('starts the quiet-period decay timer after recovery from a long outage', () => {
+    const h = rxWorkletHarness(); h.packet(3000);
+    for (let i = 0; i < 30; i++) h.tick();
+    expect(h.processor.targetMs).toBe(64);
+    for (let i = 0; i < 12000; i++) h.tick(); // >30 seconds without new audio
+    h.packet(4000); h.tick();
+    expect(h.processor.phase).toBe('playing');
+    expect(h.processor.targetMs).toBe(64);
+    expect(h.processor.nextDecayTime - h.context.currentTime).toBeGreaterThan(29);
+  });
+
   it('uses browser sample rate for bounded capacity and priming', () => {
     const h = rxWorkletHarness(true, 44100); h.packet(2117); const out = h.tick();
     expect(out[0]![0]).toBe(0.5); expect(h.processor.maxQueueFrames).toBe(5292);
